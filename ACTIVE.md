@@ -91,12 +91,39 @@ Welle-3-Notizen (E3, Test-Moratorium — KEINE Builds, Review-only):
   Doc-Kommentare; forbid(unsafe_code) in allen 41 Crate-Roots.
 - Build/Test-Verifikation offen (Test-Rig der Haupt-Session).
 
+E3-Integration (10.10.2026, Integrator — KEINE Builds, nur Merges):
+9 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer), Branches +
+Worktrees geloescht: Lane 62, 63, 64, 65, 66, 67, 69, 70, 58 (selektiv).
+Uebersprungen + Grund:
+- lane/structs-enums-unions (Lane 30): Branch existiert nicht — nichts zu mergen.
+- lane/41-lang-delta, lane/42-shared-mem, lane/43-scheduler-replay,
+  lane/44-el3-psci-boot: gesperrt (Gate: Port-durch+lauft+RAM-opt) — NICHT angefasst.
+- lane/68-ramopt-impl: nicht im Auftrag — NICHT angefasst.
+- lane/58-ram-opt: selektiv (nur RAM_ANALYSIS.md, fehlte auf Main); Rest des
+  Branches veraltet (Basis b079704, haette Main-Arbeit zurueckgesetzt).
+Merge-Notizen:
+- Lane 63 (Konflikt AST_NEEDED.md): Lane-61-Statusblock (HEAD) + Lane-63-
+  Bridge-Stand behalten (disjunkte Doku-Abschnitte).
+- Lane 64 (Konflikt sail-regs lib.rs-Dok): bridge-Modul (echt) + Lane-61-
+  Retain-Kontext vereint.
+- Lane 65 (Konflikte sail-ty Cargo.toml/env.rs/kind.rs): Union — sail-ast-Dep
+  (HEAD) + serde-Pins (Branch); Retain-Docs (HEAD) + Serialize/Deserialize-
+  Derives (Branch).
+- Lane 70 (sail-parse/Cargo.toml): von Hand vereint — Auto-Merge hatte
+  [lib]/[dependencies] gedoppelt (invalides TOML, aus Lane-63-Merge
+  verschleppt); alle 42 Manifeste per TOML-Parse validiert.
+- lanes/-Notizen 64/65/66/67/70 (uncommitted in Worktrees) nach lanes/
+  uebernommen (62/63/69 kamen per Branch-Commit).
+- Checks je Merge: kein Cargo.lock getrackt, kein unsafe-Token ausser
+  forbid-Zeilen, keine Konfliktmarker. Build-Verifikation offen (Rig).
+
 Aktiv (noch in Arbeit, NICHT anfassen):
 - Lane 41–44 (Branches lane/41-lang-delta, lane/42-shared-mem,
   lane/43-scheduler-replay, lane/44-el3-psci-boot, Worktrees lane-41..44 —
   BLOCKED bis Gate: Port durch + laeuft + RAM-opt, siehe WAVE3.md)
-- Lane 58 (Branch lane/58-ram-opt, Worktree lane-58 — BLOCKED, startet erst
-  nach Unify, selber Gate) sowie lane/59-grammar-gen (ausserhalb Welle 3)
+- Lane 58: RAM_ANALYSIS.md per Selektiv-Merge auf Main (Branch + Worktree
+  geloescht); weiterfuehrende RAM-Opt erst nach Unify (selber Gate wie oben)
+  sowie lane/59-grammar-gen (ausserhalb Welle 3)
 
 Rotation: Lane fertig → mergen → Worktree löschen → nächsten Queued-Branch aktivieren:
 
