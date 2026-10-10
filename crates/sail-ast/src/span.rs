@@ -3,10 +3,17 @@
 //! file-table ownership stays with a later lane (parser/driver).
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Handle into a file table owned elsewhere (later lane).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FileId(pub u32);
+
+impl fmt::Display for FileId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "file{}", self.0)
+    }
+}
 
 /// Half-open byte range `[start, end)` inside [`FileId`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -60,6 +67,16 @@ impl Span {
     }
 }
 
+impl fmt::Display for Span {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_dummy() {
+            write!(f, "<synthetic>")
+        } else {
+            write!(f, "{}:{}-{}", self.file, self.start, self.end)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,5 +94,12 @@ mod tests {
         let b = Span::new(FileId(2), 0, 1);
         assert!(a.merge(b).is_dummy());
         assert!(Span::dummy().merge(a) == a);
+    }
+
+    #[test]
+    fn display_matches_lex_bitvec_convention() {
+        assert_eq!(FileId(0).to_string(), "file0");
+        assert_eq!(Span::new(FileId(0), 4, 9).to_string(), "file0:4-9");
+        assert_eq!(Span::DUMMY.to_string(), "<synthetic>");
     }
 }

@@ -1,5 +1,10 @@
 # LEXER_NEEDED.md — swap contract for `sail-lex` (Lane 16)
 
+> Lane 61 status (MIGRATION.md #1/#2, §6.1a): **CLOSED — Option (a)**.
+> `src/span.rs` deleted; `sail-ast` dependency added;
+> `pub use sail_ast::{FileId, Span};`. File table still owned by a
+> later (driver) lane, as before.
+
 What Lane 17 (parser) and later lanes may assume, and what must be swapped
 or finished when the workspace is merged.
 

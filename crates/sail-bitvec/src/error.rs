@@ -5,7 +5,7 @@
 //! `pretty_print_lean.ml` (`doc_vector_concat`, `doc_pat`), turned into
 //! recoverable [`BitvecError`] values that always carry the offending [`Span`].
 
-use crate::span::Span;
+use crate::Span;
 use core::fmt;
 
 /// Machine-checkable reason for a bitvector error.
@@ -103,7 +103,7 @@ impl std::error::Error for BitvecError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::span::FileId;
+    use crate::FileId;
 
     #[test]
     fn display_carries_span_and_widths() {

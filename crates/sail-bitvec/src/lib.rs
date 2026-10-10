@@ -14,16 +14,16 @@
 //! * [`ops`]: every `bitvec_operation.sail` primitive with its Lean body.
 //!
 //! Width agreement is always checked ([`error`]); mismatches are reported
-//! with the offending [`span`](span::Span) instead of being silently
+//! with the offending [`Span`] instead of being silently
 //! truncated or padded.
 
 pub mod bitfield;
+pub mod conv;
 pub mod error;
 pub mod expr;
 pub mod lit;
 pub mod ops;
 pub mod pat;
-pub mod span;
 
 pub use bitfield::{BitfieldDecl, Field, cr_type_fixture};
 pub use error::{BitvecError, ErrorKind};
@@ -33,4 +33,7 @@ pub use ops::BitvecOp;
 pub use pat::{
     Pat, check_concat_width, is_bitvector_pat, match_keyword, render_pat, render_vector_concat,
 };
-pub use span::{FileId, Span};
+/// Canonical source spans (Lane 61 unification of MIGRATION.md #44/#45:
+/// previously a dependency-free copy of the `sail-ast` shape in
+/// `src/span.rs`, removed).
+pub use sail_ast::{FileId, Span};

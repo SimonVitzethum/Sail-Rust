@@ -1,5 +1,11 @@
 # `RESOLVE_NEEDED.md` — what `sail-resolve` needs from `sail-ast` (Lane 01)
 
+> Lane 61 status (MIGRATION.md #8–#16): **CLOSED**.
+> `src/mini_ast.rs` deleted; `Resolver`/`resolve` take `sail_ast::Ast`
+> + `&impl Interner`; spans are `sail_ast::Span` (#8). Semantics
+> contract unchanged (namespaces, order-independence, ctor warnings,
+> `compute_ctor_renames` frozen).
+
 `sail-ast` has not landed yet, so `sail-resolve` currently resolves the
 local stand-ins in `src/mini_ast.rs`. This file pins the exact mapping
 so Lane 01 (or a later porting PR) can swap the stand-ins for the real
@@ -36,10 +42,12 @@ AST without changing resolution semantics.
    determinism (sorted iteration), `_ctor`/`_ctor{N}` scheme. Do not
    change its output without coordinating with Lane 10.
 
-## Swap checklist
+## Swap checklist (Lane 61: done except JSON roundtrip)
 
-- [ ] Replace `mini_ast::*` imports with `sail_ast::*` (add
+- [x] Replace `mini_ast::*` imports with `sail_ast::*` (add
       `sail-ast = { path = "../sail-ast" }` dependency).
-- [ ] Delete `src/mini_ast.rs`, keep this file updated (mark done).
+- [x] Delete `src/mini_ast.rs`, keep this file updated (mark done).
 - [ ] Add a JSON-roundtrip test if `sail-ast` offers one (Lane 01 Done).
-- [ ] Keep `#![forbid(unsafe_code)]` and `cargo test -p sail-resolve` green.
+      Deferred: needs `serde` derives on `Env`/`ResolvedProgram`
+      (follow-up, serde already available via `sail-ast`).
+- [x] Keep `#![forbid(unsafe_code)]` and `cargo test -p sail-resolve` green.

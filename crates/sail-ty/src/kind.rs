@@ -48,6 +48,10 @@ impl std::fmt::Display for Kind {
 }
 
 /// Kind environment: maps level variables to their kinds.
+///
+/// Retained (MIGRATION.md #23): a pure binding map, not an AST node;
+/// `sail-ast` has no kind-context type yet (future `Env.t` Ausschnitt).
+/// [`Kind`] itself erases onto `sail_ast::Kind` (see [`crate::conv`]).
 #[derive(Clone, Debug, Default)]
 pub struct KindEnv {
     vars: HashMap<String, Kind>,

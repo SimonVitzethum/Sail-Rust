@@ -15,6 +15,7 @@
 //!   `Ord_dec` -> `foreach_Z_down`, bracket `[from:to:step]i` with a
 //!   negated step for `Ord_dec`, `Id.run` prefix for pure bodies.
 
+pub mod conv;
 pub mod loops;
 pub mod nexp;
 pub mod ops;

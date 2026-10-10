@@ -1,5 +1,14 @@
 # AST_NEEDED.md — erwartete `sail-ast`-Schnittstelle (Lane 01)
 
+> Lane 61 status (MIGRATION.md #3–#7): **SPAN CLOSED, SKELETON BRIDGED**.
+> `src/span.rs` replaced by `sail_ast::{FileId, Span}` (#3, §6.1c;
+> `FileId(0)` per file until the driver-lane file table lands).
+> `src/mini_ast.rs` (`Def`/`ParsedFile`/`SpannedDef`/`PragmaArg`,
+> #4–#7) is retained: bodies are raw text and only a real
+> expression/type grammar (Lane 02) can lower them onto `DefKind`
+> with genuine `Exp`/`Typ` nodes; `sail-cli` consumes the skeleton.
+> Follow-up owned by Lane 02, seam wired (`sail-ast` dependency).
+
 Stand: Lane 01 (`sail-ast`) ist noch nicht gelandet (Branch `lane/01-ast-core`
 ohne Commits). `sail-parse` definiert deshalb lokale Minimal-Typen in
 `src/mini_ast.rs`. Dieses Dokument beschreibt, was Lane 01 liefern muss,

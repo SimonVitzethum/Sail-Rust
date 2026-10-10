@@ -5,7 +5,7 @@
 //! [`crate::parser`] only needs identifiers, punctuation depth and line
 //! structure; full expression lexing is a later-lane concern.
 
-use crate::span::{Span, Spanned};
+use crate::span::{FileId, Span, Spanned};
 
 /// Token kinds needed for definition-level splitting.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,33 +26,19 @@ pub enum Tok {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Cursor {
     byte: usize,
-    line: u32,
-    col: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LexError {
     pub start_byte: usize,
     pub end_byte: usize,
-    pub start_line: u32,
-    pub start_col: u32,
-    pub end_line: u32,
-    pub end_col: u32,
     pub message: String,
 }
 
 impl LexError {
-    pub fn into_parse_error(self, file: &str) -> crate::span::ParseError {
+    pub fn into_parse_error(self, file_id: FileId) -> crate::span::ParseError {
         crate::span::ParseError::new(
-            Span::new(
-                file,
-                self.start_byte,
-                self.end_byte,
-                self.start_line,
-                self.start_col,
-                self.end_line,
-                self.end_col,
-            ),
+            Span::new(file_id, self.start_byte as u32, self.end_byte as u32),
             self.message,
         )
     }
@@ -62,37 +48,32 @@ fn lex_error(from: Cursor, to: Cursor, message: String) -> LexError {
     LexError {
         start_byte: from.byte,
         end_byte: to.byte,
-        start_line: from.line,
-        start_col: from.col,
-        end_line: to.line,
-        end_col: to.col,
         message,
     }
 }
 
 /// Streaming lexer. Yields `Result<Spanned<Tok>, LexError>`; the parser
-/// converts [`LexError`] into [`crate::span::ParseError`] with the file name.
+/// converts [`LexError`] into [`crate::span::ParseError`] with the file id.
 pub struct Lexer<'a> {
-    file: &'a str,
+    file_id: FileId,
     src: &'a str,
     bytes: &'a [u8],
     pos: usize,
-    line: u32,
-    col: u32,
     done: bool,
 }
 
 impl<'a> Lexer<'a> {
-    pub fn new(file: &'a str, src: &'a str) -> Self {
-        Lexer { file, src, bytes: src.as_bytes(), pos: 0, line: 1, col: 1, done: false }
+    pub fn new(file_id: FileId, src: &'a str) -> Self {
+        Lexer { file_id, src, bytes: src.as_bytes(), pos: 0, done: false }
     }
 
     fn cursor(&self) -> Cursor {
-        Cursor { byte: self.pos, line: self.line, col: self.col }
+        Cursor { byte: self.pos }
     }
 
     fn span(&self, from: Cursor, to: Cursor) -> Span {
-        Span::new(self.file, from.byte, to.byte, from.line, from.col, to.line, to.col)
+        debug_assert!(from.byte <= to.byte);
+        Span::new(self.file_id, from.byte as u32, to.byte as u32)
     }
 
     fn peek(&self) -> Option<u8> {
@@ -112,16 +93,10 @@ impl<'a> Lexer<'a> {
             if self.pos >= self.bytes.len() {
                 return;
             }
-            if self.bytes[self.pos] == b'\n' {
-                self.line += 1;
-                self.col = 1;
-            } else {
-                self.col += 1;
-            }
             // Advance by one byte; Sail sources are UTF-8 and all structural
             // chars are ASCII, so byte/char sync holds at token boundaries.
-            // Non-ASCII bytes inside idents/strings only shift `col` by bytes,
-            // which is documented and acceptable for a skeleton.
+            // Non-ASCII bytes inside idents/strings only shift columns by
+            // bytes, which is documented and acceptable for a skeleton.
             self.pos += 1;
         }
     }

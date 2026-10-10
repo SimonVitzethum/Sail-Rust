@@ -12,11 +12,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use sail_ast::{Ast, Def, DefKind, Interner, Symbol, TypeDefKind};
+
 use crate::env::{
     CtorEntry, Env, MappingEntry, RegisterEntry, ResolveError, ResolveErrorKind, TypeEntry,
     ValSpecEntry,
 };
-use crate::mini_ast::{Ast, Def};
 use crate::renames::compute_ctor_renames;
 
 /// Resolution output: success flag, symbol tables, diagnostics, renames.
@@ -62,9 +63,9 @@ impl Resolver {
 
     /// Resolve a whole program (both passes).
     #[must_use]
-    pub fn resolve_program(mut self, ast: &Ast) -> ResolvedProgram {
+    pub fn resolve_program(mut self, ast: &Ast, it: &impl Interner) -> ResolvedProgram {
         for def in &ast.defs {
-            self.bind_def(def);
+            self.bind_def(def, it);
         }
         let warnings = self.collision_warnings();
         let ctor_renames = self.renames();
@@ -80,9 +81,9 @@ impl Resolver {
     /// Resolve and return only the environment, dropping diagnostics.
     /// Prefer [`Self::resolve_program`] when diagnostics matter.
     #[must_use]
-    pub fn resolve_env(mut self, ast: &Ast) -> Env {
+    pub fn resolve_env(mut self, ast: &Ast, it: &impl Interner) -> Env {
         for def in &ast.defs {
-            self.bind_def(def);
+            self.bind_def(def, it);
         }
         self.env
     }
@@ -91,55 +92,94 @@ impl Resolver {
         self.errors.push(e);
     }
 
-    fn bind_def(&mut self, def: &Def) {
-        match def {
-            Def::Type(t) => {
+    fn name_text(it: &impl Interner, sym: Symbol) -> Option<String> {
+        it.resolve(sym).map(str::to_owned)
+    }
+
+    fn bind_def(&mut self, def: &Def, it: &impl Interner) {
+        let span = def.span;
+        match &def.kind {
+            DefKind::Type(t) => {
+                let Some(type_name) = Self::typedef_name(&t.kind, it) else {
+                    return;
+                };
+                let is_union = matches!(t.kind, TypeDefKind::Variant { .. });
                 if let Err(e) = self.env.insert_type(TypeEntry {
-                    name: t.name.clone(),
+                    name: type_name.clone(),
                     span: t.span,
-                    is_union: t.is_union(),
+                    is_union,
                 }) {
                     self.push_err(e);
                 }
-                for c in t.ctors() {
-                    self.seen_ctors.push((t.name.clone(), c.name.clone()));
+                for (ctor_name, ctor_span) in Self::typedef_ctors(&t.kind, it) {
+                    self.seen_ctors.push((type_name.clone(), ctor_name.clone()));
                     if let Err(e) = self.env.insert_ctor(CtorEntry {
-                        name: c.name.clone(),
-                        owner: t.name.clone(),
-                        span: c.span,
+                        name: ctor_name,
+                        owner: type_name.clone(),
+                        span: ctor_span,
                     }) {
                         self.push_err(e);
                     }
                 }
             }
-            Def::ValSpec(v) => {
-                if let Err(e) = self.env.insert_valspec(ValSpecEntry {
-                    name: v.name.clone(),
-                    span: v.span,
-                }) {
+            DefKind::Val(v) => {
+                let Some(name) = Self::name_text(it, v.name.symbol) else {
+                    return;
+                };
+                if let Err(e) = self.env.insert_valspec(ValSpecEntry { name, span: v.span }) {
                     self.push_err(e);
                 }
             }
-            Def::Register(r) => {
-                if let Err(e) = self.env.insert_register(RegisterEntry {
-                    name: r.name.clone(),
-                    span: r.span,
-                }) {
+            DefKind::Register(r) => {
+                let Some(name) = Self::name_text(it, r.name.symbol) else {
+                    return;
+                };
+                if let Err(e) = self.env.insert_register(RegisterEntry { name, span: r.span }) {
                     self.push_err(e);
                 }
             }
-            Def::Mapping(m) => {
-                if let Err(e) = self.env.insert_mapping(MappingEntry {
-                    name: m.name.clone(),
-                    span: m.span,
-                }) {
+            DefKind::Mapdef { name, .. } => {
+                let Some(name) = Self::name_text(it, name.symbol) else {
+                    return;
+                };
+                if let Err(e) = self.env.insert_mapping(MappingEntry { name, span }) {
                     self.push_err(e);
                 }
             }
-            Def::Other { .. } => {
-                // No table yet; real `sail-ast` nodes (functions,
-                // overloads, scattered defs) will extend this arm.
-            }
+            // Functions, scattered defs, pragmas, constraints, … carry no
+            // resolution-table entry (same as the former `Def::Other`).
+            _ => {}
+        }
+    }
+
+    /// Owning type name of a typedef, if resolvable.
+    fn typedef_name(kind: &TypeDefKind, it: &impl Interner) -> Option<String> {
+        match kind {
+            TypeDefKind::Abbrev { name, .. }
+            | TypeDefKind::Record { name, .. }
+            | TypeDefKind::Variant { name, .. }
+            | TypeDefKind::Enum { name, .. }
+            | TypeDefKind::Abstract { name, .. }
+            | TypeDefKind::Bitfield { name, .. } => Self::name_text(it, name.symbol),
+        }
+    }
+
+    /// `(ctor_name, span)` pairs carried by a typedef (empty for
+    /// records/abbrevs/abstract/bitfield).
+    fn typedef_ctors(kind: &TypeDefKind, it: &impl Interner) -> Vec<(String, sail_ast::Span)> {
+        match kind {
+            TypeDefKind::Enum { members, .. } => members
+                .iter()
+                .filter_map(|m| Some((Self::name_text(it, m.symbol)?, m.span)))
+                .collect(),
+            TypeDefKind::Variant { ctors, .. } => ctors
+                .iter()
+                .filter_map(|u| Some((Self::name_text(it, u.ctor.symbol)?, u.span)))
+                .collect(),
+            TypeDefKind::Abbrev { .. }
+            | TypeDefKind::Record { .. }
+            | TypeDefKind::Abstract { .. }
+            | TypeDefKind::Bitfield { .. } => Vec::new(),
         }
     }
 
@@ -183,40 +223,95 @@ impl Resolver {
 
 /// Convenience wrapper: [`Resolver::resolve_program`] in one call.
 #[must_use]
-pub fn resolve(ast: &Ast) -> ResolvedProgram {
-    Resolver::new().resolve_program(ast)
+pub fn resolve(ast: &Ast, it: &impl Interner) -> ResolvedProgram {
+    Resolver::new().resolve_program(ast, it)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mini_ast::{CtorDecl, MappingDef, RegisterDef, Span, TypeDef, TypeDefKind, ValSpec};
+    use sail_ast::{
+        DecSpec, Mapcl, Name, Node, NodeId, Span, TAnnotOpt, Typ, TypKind, TypSchm, TypeUnion,
+        ValSpec,
+    };
 
-    const S: Span = Span::new(1, 1);
+    fn interner() -> sail_ast::SimpleInterner {
+        sail_ast::SimpleInterner::new()
+    }
 
-    fn union_def(owner: &str, ctors: &[&str]) -> Def {
-        Def::Type(TypeDef::new(
-            owner,
-            TypeDefKind::Union(
-                ctors
-                    .iter()
-                    .map(|c| CtorDecl::new((*c).to_owned(), S))
-                    .collect(),
-            ),
-            S,
-        ))
+    fn nm(it: &mut sail_ast::SimpleInterner, text: &str) -> Name {
+        Name::dummy(it.intern(text))
+    }
+
+    fn unknown_typ() -> Typ {
+        Node::dummy(TypKind::Unknown)
+    }
+
+    fn struct_def(it: &mut sail_ast::SimpleInterner, name: &str) -> Def {
+        Node::dummy(DefKind::Type(Node::dummy(TypeDefKind::Record {
+            name: nm(it, name),
+            quant: Vec::new(),
+            fields: Vec::new(),
+            wf: false,
+        })))
+    }
+
+    fn union_def(it: &mut sail_ast::SimpleInterner, owner: &str, ctors: &[&str]) -> Def {
+        Node::dummy(DefKind::Type(Node::dummy(TypeDefKind::Variant {
+            name: nm(it, owner),
+            quant: Vec::new(),
+            ctors: ctors
+                .iter()
+                .map(|c| TypeUnion {
+                    id: NodeId::DUMMY,
+                    span: Span::DUMMY,
+                    typ: unknown_typ(),
+                    ctor: nm(it, c),
+                })
+                .collect(),
+            wf: false,
+        })))
+    }
+
+    fn valspec_def(it: &mut sail_ast::SimpleInterner, name: &str) -> Def {
+        Node::dummy(DefKind::Val(ValSpec {
+            id: NodeId::DUMMY,
+            span: Span::DUMMY,
+            name: nm(it, name),
+            typschm: TypSchm { quant: Vec::new(), typ: unknown_typ() },
+            extern_opt: None,
+        }))
+    }
+
+    fn register_def(it: &mut sail_ast::SimpleInterner, name: &str) -> Def {
+        Node::dummy(DefKind::Register(DecSpec {
+            id: NodeId::DUMMY,
+            span: Span::DUMMY,
+            typ: unknown_typ(),
+            name: nm(it, name),
+            init: None,
+        }))
+    }
+
+    fn mapping_def(it: &mut sail_ast::SimpleInterner, name: &str) -> Def {
+        Node::dummy(DefKind::Mapdef {
+            name: nm(it, name),
+            annot: TAnnotOpt::None,
+            clauses: Vec::<Mapcl>::new(),
+        })
     }
 
     #[test]
     fn happy_path_tables_fill() {
+        let mut it = interner();
         let ast = Ast::new(vec![
-            Def::Type(TypeDef::new("U", TypeDefKind::Struct, S)),
-            union_def("V", &["A", "B"]),
-            Def::ValSpec(ValSpec::new("f", S)),
-            Def::Register(RegisterDef::new("x1", S)),
-            Def::Mapping(MappingDef::new("enc", S)),
+            struct_def(&mut it, "U"),
+            union_def(&mut it, "V", &["A", "B"]),
+            valspec_def(&mut it, "f"),
+            register_def(&mut it, "x1"),
+            mapping_def(&mut it, "enc"),
         ]);
-        let r = resolve(&ast);
+        let r = resolve(&ast, &it);
         assert!(r.is_ok(), "errors: {:?}", r.errors);
         assert!(r.warnings.is_empty());
         assert!(r.ctor_renames.is_empty());
@@ -230,11 +325,9 @@ mod tests {
     #[test]
     fn union_ctor_vs_typename_collision() {
         // `union V { U }` + `struct U`: ctor `U` collides with type `U`.
-        let ast = Ast::new(vec![
-            Def::Type(TypeDef::new("U", TypeDefKind::Struct, S)),
-            union_def("V", &["U", "W"]),
-        ]);
-        let r = resolve(&ast);
+        let mut it = interner();
+        let ast = Ast::new(vec![struct_def(&mut it, "U"), union_def(&mut it, "V", &["U", "W"])]);
+        let r = resolve(&ast, &it);
         assert!(r.is_ok(), "collision is non-fatal: {:?}", r.errors);
         assert_eq!(r.warnings.len(), 1);
         assert_eq!(r.warnings[0].kind, ResolveErrorKind::CtorTypeCollision);

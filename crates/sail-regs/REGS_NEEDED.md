@@ -1,5 +1,12 @@
 # REGS_NEEDED.md — what `sail-regs` needs from the frontend lanes
 
+> Lane 61 status (MIGRATION.md #26/#27): **BRIDGED**.
+> `MinimalDef`/`SailTyp` retained: lowering onto
+> `DecSpec{typ: Typ, init: Option<Exp>}` needs the Lane-10 `TypKind`
+> pretty-printer plus a real expression grammar for initializers, and
+> `sail-cli` consumes this input API. Follow-up owned by Lane 10/02,
+> seam wired (`sail-ast` dependency).
+
 `crates/sail-regs` is standalone: it takes [`MinimalDef`] (see
 `src/lib.rs`) instead of depending on another worktree's crate.
 The mapping to real frontend types is 1:1:

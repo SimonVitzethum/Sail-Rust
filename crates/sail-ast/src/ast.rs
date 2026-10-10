@@ -58,6 +58,18 @@ impl Name {
             is_operator,
         }
     }
+
+    /// Synthesized name for conversions and desugaring (dummy id/span,
+    /// non-operator). Prefer a real span when one is available.
+    #[must_use]
+    pub fn dummy(symbol: Symbol) -> Self {
+        Name {
+            id: NodeId::DUMMY,
+            span: Span::DUMMY,
+            symbol,
+            is_operator: false,
+        }
+    }
 }
 
 /// Sail kinds: `Type`, `Int`, `Bool`.

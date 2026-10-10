@@ -1,26 +1,12 @@
 #![forbid(unsafe_code)]
 //! Error type with spans.
+//!
+//! Spans are the canonical `sail-ast` type (Lane 61 unification of
+//! MIGRATION.md #25; previously a divergent local copy with `file: u32`
+//! and a `0/0/0` DUMMY sentinel, removed).
 
-/// Byte span in the source file. `Span::DUMMY` for synthesized nodes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub struct Span {
-    pub file: u32,
-    pub start: u32,
-    pub end: u32,
-}
-
-impl Span {
-    pub const DUMMY: Self = Self {
-        file: 0,
-        start: 0,
-        end: 0,
-    };
-
-    #[must_use]
-    pub fn new(file: u32, start: u32, end: u32) -> Self {
-        Self { file, start, end }
-    }
-}
+/// Canonical source span (re-exported from `sail-ast`).
+pub use sail_ast::Span;
 
 /// Typechecker error.
 #[derive(Clone, Debug, PartialEq, Eq)]

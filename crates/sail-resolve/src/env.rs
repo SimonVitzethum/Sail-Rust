@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::mini_ast::Span;
+use sail_ast::Span;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeEntry {
@@ -79,8 +79,8 @@ impl std::fmt::Display for ResolveError {
         };
         write!(
             f,
-            "{what} '{}' (first at {}:{}, again at {}:{})",
-            self.name, self.first.line, self.first.col, self.second.line, self.second.col
+            "{what} '{}' (first at {}, again at {})",
+            self.name, self.first, self.second
         )
     }
 }

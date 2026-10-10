@@ -13,6 +13,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod conv;
+
 /// Minimal value-pattern, mirroring `sail-ast::PatKind` (Lane 01).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pat {

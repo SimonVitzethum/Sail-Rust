@@ -5,6 +5,13 @@
 //! trivially parallelisable with `rayon`. It will grow / be replaced by the
 //! real `sail-ast` once that lane lands; pass logic must only rely on what is
 //! defined here.
+//!
+//! Lane 61 status (MIGRATION.md #42/#43): [`Def`]/[`DefKind`] and [`Stmt`]
+//! are retained — their `String` payloads (raw statement/expression text)
+//! need a real expression grammar (Lane 02) before they can lower onto
+//! `sail_ast::DefKind` / `ExpKind` / `LExpKind`. The crate depends on
+//! `sail-ast` so the swap seam is wired; [`Shard`] chunking (§3) is not
+//! an AST duplicate and stays as is.
 
 #![forbid(unsafe_code)]
 
