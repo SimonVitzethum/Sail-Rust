@@ -1,0 +1,17 @@
+[package]
+name = "sail-par-pipe"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Shard-parallele Pipeline-Orchestrierung Parse→Check→Emit (Lane 69, Skizze)"
+license.workspace = true
+
+[dependencies]
+crossbeam-channel = "0.5"
+rayon = "1"
+sail-shard = { path = "../sail-shard" }
+
+[dev-dependencies]
+
+[lints]
+workspace = true
