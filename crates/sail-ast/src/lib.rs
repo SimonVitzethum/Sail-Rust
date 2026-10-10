@@ -5,6 +5,8 @@
 //! - Every major node is [`Node<K>`] carrying a generational [`NodeId`]
 //!   plus a [`Span`]. No pointers, no arenas inside the AST itself.
 //! - Names are interned [`Symbol`]s; see [`Interner`] / [`SimpleInterner`].
+//!   Literal payloads ([`LitKind`]) are interned too (Lane 71);
+//!   resolve them through the caller's interner.
 //! - [`Ast`] is the snapshot root with a JSON roundtrip
 //!   ([`Ast::to_json`] / [`Ast::from_json`]).
 //! - All types are `Clone + Send + Sync` and `serde`-serializable.

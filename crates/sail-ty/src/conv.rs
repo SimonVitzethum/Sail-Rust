@@ -404,7 +404,10 @@ fn var_pat(it: &mut impl Interner, var: &str, annot: Option<&MiniTyp>) -> Option
 /// non-variables (currying needs Lane 02 elaboration).
 pub fn miniexp_to_ast(e: &MiniExp, it: &mut impl Interner) -> Option<Exp> {
     match e {
-        MiniExp::IntLit(i) => Some(mk_exp(ExpKind::Lit(mk_lit(LitKind::Num(i.to_string()))))),
+        MiniExp::IntLit(i) => {
+            let sym = it.intern(&i.to_string());
+            Some(mk_exp(ExpKind::Lit(mk_lit(LitKind::Num(sym)))))
+        }
         MiniExp::BoolLit(true) => Some(mk_exp(ExpKind::Lit(mk_lit(LitKind::True)))),
         MiniExp::BoolLit(false) => Some(mk_exp(ExpKind::Lit(mk_lit(LitKind::False)))),
         MiniExp::Var(v) => Some(mk_exp(ExpKind::Id(ast_name(it, v)))),
@@ -455,7 +458,7 @@ fn let_pat(p: &Pat, it: &impl Interner) -> Option<(String, Option<MiniTyp>)> {
 pub fn miniexp_from_ast(e: &Exp, it: &impl Interner) -> Option<MiniExp> {
     match &e.kind {
         ExpKind::Lit(l) => match &l.kind {
-            LitKind::Num(s) => s.parse::<i128>().ok().map(MiniExp::IntLit),
+            LitKind::Num(s) => it.resolve(*s)?.parse::<i128>().ok().map(MiniExp::IntLit),
             LitKind::True => Some(MiniExp::BoolLit(true)),
             LitKind::False => Some(MiniExp::BoolLit(false)),
             _ => None,

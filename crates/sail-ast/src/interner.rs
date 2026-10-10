@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Interned string handle. `Copy + Send + Sync`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct Symbol(pub u32);
 
 impl Symbol {

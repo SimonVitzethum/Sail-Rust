@@ -58,7 +58,7 @@ fn mk_pexp(kind: PExpKind) -> PExp {
 /// Lower a local arm pattern onto a canonical node.
 pub fn pat_to_ast(p: &Pat, it: &mut impl Interner) -> AstPat {
     match p {
-        Pat::Lit(s) => mk_pat(PatKind::Lit(Node::dummy(LitKind::String(s.clone())))),
+        Pat::Lit(s) => mk_pat(PatKind::Lit(Node::dummy(LitKind::String(it.intern(s))))),
         Pat::Var(_) => mk_pat(PatKind::Var {
             pat: Box::new(mk_pat(PatKind::Wild)),
             typ_pat: Node::dummy(sail_ast::TypPatKind::Wild),
@@ -85,7 +85,7 @@ pub fn pat_to_ast(p: &Pat, it: &mut impl Interner) -> AstPat {
 pub fn pat_from_ast(p: &AstPat, it: &impl Interner) -> Option<Pat> {
     match &p.kind {
         PatKind::Lit(l) => match &l.kind {
-            LitKind::String(s) => Some(Pat::Lit(s.clone())),
+            LitKind::String(s) => it.resolve(*s).map(|t| Pat::Lit(t.to_owned())),
             _ => None,
         },
         PatKind::Wild => Some(Pat::Wild),
@@ -129,7 +129,7 @@ pub fn pat_from_ast(p: &AstPat, it: &impl Interner) -> Option<Pat> {
 pub fn exp_to_ast(e: &Exp, it: &mut impl Interner) -> Option<AstExp> {
     match e {
         Exp::Id(v) => Some(mk_exp(ExpKind::Id(ast_name(it, v)))),
-        Exp::Lit(s) => Some(mk_exp(ExpKind::Lit(Node::dummy(LitKind::String(s.clone()))))),
+        Exp::Lit(s) => Some(mk_exp(ExpKind::Lit(Node::dummy(LitKind::String(it.intern(s)))))),
         Exp::Bool(true) => Some(mk_exp(ExpKind::Lit(Node::dummy(LitKind::True)))),
         Exp::Bool(false) => Some(mk_exp(ExpKind::Lit(Node::dummy(LitKind::False)))),
         Exp::App(f, args) => {

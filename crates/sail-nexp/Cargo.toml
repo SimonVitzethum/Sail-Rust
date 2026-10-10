@@ -5,6 +5,9 @@ edition = "2021"
 description = "Pure NExp/nconstraint algebra for the sail-rs compiler: simplification, provability predicates, Nat-vs-Int mapping"
 license = "MIT OR Apache-2.0"
 
+[dependencies]
+sail-ast = { path = "../sail-ast" }
+
 [dev-dependencies]
 proptest = "1"
 

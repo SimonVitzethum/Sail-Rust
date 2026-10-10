@@ -6,6 +6,7 @@
 //! checkout layout (`<sail-rs>/../../sail/test/lean`). Missing directory →
 //! loud skip (exit ok) so `cargo test` stays portable.
 
+use sail_ast::{Interner as _, SimpleInterner};
 use sail_lex::{lex, FileId, TokenKind};
 use std::path::PathBuf;
 
@@ -51,8 +52,17 @@ fn lean_corpus_lexes_without_errors() {
                 s.spawn(move || {
                     let src = std::fs::read_to_string(path)
                         .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-                    let out = lex(FileId(i.min(u32::MAX as usize) as u32), &src);
+                    // Lane 71: every thread owns its interner (payload symbols
+                    // are per-table; only token counts/errors cross threads).
+                    let mut it = SimpleInterner::new();
+                    let out = lex(FileId(i.min(u32::MAX as usize) as u32), &src, &mut it);
                     let problems: Vec<String> = out.errors.iter().map(|e| e.to_string()).collect();
+                    // Payloads stay resolvable inside the owning table.
+                    for t in &out.tokens {
+                        if let TokenKind::Id(s) = t.kind {
+                            assert!(it.resolve(s).is_some());
+                        }
+                    }
                     (path.clone(), out.tokens.len(), problems)
                 })
                 .join()
@@ -94,7 +104,8 @@ fn lean_corpus_streams_end_with_eof() {
         let path = entry.path();
         if path.extension().is_some_and(|e| e == "sail") {
             let src = std::fs::read_to_string(&path).expect("read file");
-            let out = lex(FileId(0), &src);
+            let mut it = SimpleInterner::new();
+            let out = lex(FileId(0), &src, &mut it);
             assert!(
                 out.tokens
                     .last()

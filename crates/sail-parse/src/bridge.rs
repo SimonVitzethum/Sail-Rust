@@ -109,17 +109,21 @@ fn is_op_name(name: &str) -> bool {
 
 /// Tokenarten eines Header-Schnipsels aus dem Branch-Stand-Lexer.
 /// `LexFileId(0)` ist Scratch: Head-Offsets sind relativ, Spans ungenutzt.
-fn lex_kinds(head: &str) -> Vec<TokenKind> {
-    let res = lex(LexFileId(0), head);
+/// Payloads landen im übergebenen Interner (Lane 71: `lex` interniert);
+/// die Bridge nutzt dafür ihren eigenen AST-Interner, sodass die
+/// `Symbol`s direkt auflösbar bleiben.
+fn lex_kinds(head: &str, interner: &mut SimpleInterner) -> Vec<TokenKind> {
+    let res = lex(LexFileId(0), head, interner);
     res.code_tokens().into_iter().map(|t| t.kind.clone()).collect()
 }
 
 /// Operator-Flag aus dem Lexer: `Id(name)` vs `Op(name)`; `None` ohne Treffer.
-fn op_by_lex(head: &str, name: &str) -> Option<bool> {
-    for k in lex_kinds(head) {
+/// Symbole werden über `interner` auf den Namen zurück abgebildet.
+fn op_by_lex(head: &str, name: &str, interner: &mut SimpleInterner) -> Option<bool> {
+    for k in lex_kinds(head, interner) {
         match k {
-            TokenKind::Id(n) if n == name => return Some(false),
-            TokenKind::Op(n) if n == name => return Some(true),
+            TokenKind::Id(n) if interner.resolve(n) == Some(name) => return Some(false),
+            TokenKind::Op(n) if interner.resolve(n) == Some(name) => return Some(true),
             _ => {}
         }
     }
@@ -128,12 +132,12 @@ fn op_by_lex(head: &str, name: &str) -> Option<bool> {
 
 /// `rec`-Flag aus dem Lexer: erstes Token `rec` + Namens-Token dahinter
 /// (`function rec f(...)`; ein `rec(...)`-Kopf ohne Folgenamen zählt nicht).
-fn has_rec(head: &str) -> bool {
-    let ks: Vec<TokenKind> = lex_kinds(head)
+fn has_rec(head: &str, interner: &mut SimpleInterner) -> bool {
+    let ks: Vec<TokenKind> = lex_kinds(head, interner)
         .into_iter()
         .filter(|k| !matches!(k, TokenKind::Eof | TokenKind::Error(_)))
         .collect();
-    if !matches!(ks.first(), Some(TokenKind::Id(s)) if s.as_str() == "rec") {
+    if !matches!(ks.first(), Some(TokenKind::Id(s)) if interner.resolve(*s) == Some("rec")) {
         return false;
     }
     matches!(ks.get(1), Some(TokenKind::Id(_) | TokenKind::Op(_)))
@@ -163,19 +167,23 @@ fn kw_of(k: &TokenKind) -> Option<&'static str> {
 }
 
 /// Ident/Operator/TyVar-Wort an Position `i` (mit `operator`-Präfix-Skip).
-fn name_word(toks: &[&TokenKind], mut i: usize) -> Option<String> {
+/// Symbole werden über `interner` aufgelöst (Lane 71: keine `String`-Payloads).
+fn name_word(toks: &[&TokenKind], mut i: usize, interner: &impl Interner) -> Option<String> {
     if matches!(toks.get(i), Some(TokenKind::OpKw)) {
         i += 1;
     }
     match toks.get(i) {
-        Some(TokenKind::Id(s) | TokenKind::Op(s) | TokenKind::TyVar(s)) => Some(s.clone()),
+        Some(TokenKind::Id(s) | TokenKind::Op(s) | TokenKind::TyVar(s)) => {
+            interner.resolve(*s).map(str::to_owned)
+        }
         _ => None,
     }
 }
 
 impl Bridge {
     fn name(&mut self, span: AstSpan, text: &str, head: &str) -> Name {
-        let is_operator = op_by_lex(head, text).unwrap_or_else(|| is_op_name(text));
+        let is_operator =
+            op_by_lex(head, text, &mut self.interner).unwrap_or_else(|| is_op_name(text));
         let sym: Symbol = self.interner.intern(text);
         Name::new(self.ids.fresh(), span, sym, is_operator)
     }
@@ -232,7 +240,7 @@ impl Bridge {
                 body_src,
             } => {
                 let funcl = self.skeleton_funcl(span, name, head_src);
-                let rec = if has_rec(head_src) {
+                let rec = if has_rec(head_src, &mut self.interner) {
                     RecOpt::Rec
                 } else {
                     RecOpt::NonRec
@@ -360,7 +368,7 @@ impl Bridge {
     /// `scattered union` fällt auf `Variant` (Ctor-Köpfe folgen als `Unioncl`,
     /// Header-Form identisch). Ohne Namen → `None` (Aufrufer stellt zurück).
     fn scattered(&mut self, span: AstSpan, head: &str, body: &str) -> Option<Def> {
-        let kinds = lex_kinds(head);
+        let kinds = lex_kinds(head, &mut self.interner);
         let toks: Vec<&TokenKind> = kinds
             .iter()
             .filter(|k| {
@@ -378,7 +386,7 @@ impl Bridge {
         }
         // `end NAME`-Köpfe aus dem `end`-Zweig des Skelett-Parsers.
         if kw_of(toks[0]) == Some("end") {
-            let nm = name_word(&toks, 1)?;
+            let nm = name_word(&toks, 1, &self.interner)?;
             let name = self.name(span, &nm, head);
             let id = self.push_unparsed("scattered", head.to_owned());
             return Some(Node::new(id, span, DefKind::Scattered(ScatteredDef::End(name))));
@@ -390,8 +398,10 @@ impl Bridge {
         let sub = toks.get(i).and_then(|k| kw_of(k));
         // Bare `clause ...` (Eltern-Keyword im Skelett verloren): Heuristik.
         if toks.get(i).and_then(|k| kw_of(k)) == Some("clause") {
-            let nm = name_word(&toks, i + 1)?;
-            let is_map = lex_kinds(body).iter().any(|k| matches!(k, TokenKind::Bidir));
+            let nm = name_word(&toks, i + 1, &self.interner)?;
+            let is_map = lex_kinds(body, &mut self.interner)
+                .iter()
+                .any(|k| matches!(k, TokenKind::Bidir));
             let id = self.push_unparsed("scattered", join_body(head, body));
             let kind = if is_map {
                 let clause = Mapcl {
@@ -410,7 +420,7 @@ impl Bridge {
         }
         match sub {
             Some("function") => {
-                let nm = name_word(&toks, i + 1)?;
+                let nm = name_word(&toks, i + 1, &self.interner)?;
                 let name = self.name(span, &nm, head);
                 let id = self.push_unparsed("scattered", join_body(head, body));
                 Some(Node::new(
@@ -423,7 +433,7 @@ impl Bridge {
                 ))
             }
             Some("mapping") => {
-                let nm = name_word(&toks, i + 1)?;
+                let nm = name_word(&toks, i + 1, &self.interner)?;
                 let name = self.name(span, &nm, head);
                 let id = self.push_unparsed("scattered", join_body(head, body));
                 Some(Node::new(
@@ -436,7 +446,7 @@ impl Bridge {
                 ))
             }
             Some("enum") => {
-                let nm = name_word(&toks, i + 1)?;
+                let nm = name_word(&toks, i + 1, &self.interner)?;
                 let name = self.name(span, &nm, head);
                 let id = self.push_unparsed("scattered", join_body(head, body));
                 Some(Node::new(id, span, DefKind::Scattered(ScatteredDef::Enum(name))))
@@ -445,11 +455,12 @@ impl Bridge {
             // identisch, Ctor-Klauseln folgen separat.
             _ => {
                 let is_union = sub == Some("union")
-                    || matches!(toks.get(i), Some(TokenKind::Id(s)) if s.as_str() == "variant");
+                    || matches!(toks.get(i), Some(TokenKind::Id(s))
+                        if self.interner.resolve(*s) == Some("variant"));
                 if !is_union {
                     return None;
                 }
-                let nm = name_word(&toks, i + 1)?;
+                let nm = name_word(&toks, i + 1, &self.interner)?;
                 let name = self.name(span, &nm, head);
                 let id = self.push_unparsed("scattered", join_body(head, body));
                 Some(Node::new(

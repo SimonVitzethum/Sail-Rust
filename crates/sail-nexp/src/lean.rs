@@ -57,6 +57,17 @@ pub fn lean_type_name(e: &NExp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expr::Kid;
+    use sail_ast::{Interner as _, SimpleInterner};
+
+    /// Fresh table with `n` pre-interned. The table is dropped on return:
+    /// [`Kid`]s are plain `Copy` handles.
+    fn n() -> Kid {
+        SimpleInterner::new().intern("n")
+    }
+    fn table() -> SimpleInterner {
+        SimpleInterner::new()
+    }
 
     #[test]
     fn constants_map() {
@@ -67,17 +78,21 @@ mod tests {
 
     #[test]
     fn var_needs_facts_for_nat() {
-        let n = NExp::var("n");
-        assert_eq!(int_kind(&n), IntKind::Int);
-        let f = Facts::new().with_lower("n", 0);
-        assert_eq!(int_kind_in(&n, &f), IntKind::Nat);
-        assert_eq!(lean_type_name_in(&n, &f), "Nat");
+        let mut ix = table();
+        let kid = ix.intern("n");
+        assert_eq!(kid, n());
+        let v = NExp::Var(kid);
+        assert_eq!(int_kind(&v), IntKind::Int);
+        let f = Facts::new().with_lower(kid, 0);
+        assert_eq!(int_kind_in(&v, &f), IntKind::Nat);
+        assert_eq!(lean_type_name_in(&v, &f), "Nat");
     }
 
     #[test]
     fn shapes_map() {
-        assert_eq!(lean_type_name(&NExp::Exp(Box::new(NExp::var("n")))), "Nat");
-        assert_eq!(lean_type_name(&NExp::abs(NExp::var("n"))), "Nat");
+        let kid = n();
+        assert_eq!(lean_type_name(&NExp::Exp(Box::new(NExp::Var(kid)))), "Nat");
+        assert_eq!(lean_type_name(&NExp::abs(NExp::Var(kid))), "Nat");
         assert_eq!(
             lean_type_name(&NExp::Neg(Box::new(NExp::Constant(1)))),
             "Int"

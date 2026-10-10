@@ -214,6 +214,47 @@ fn json_roundtrip_preserves_ast() {
     assert_eq!(ast, back);
 }
 
+/// Lane 71: every payload-carrying [`LitKind`] roundtrips through JSON as a
+/// numeric [`sail_ast::Symbol`], resolved through the builder interner.
+#[test]
+fn json_roundtrip_covers_interned_lit_payloads() {
+    use sail_ast::Symbol;
+    let mut ctx = Ctx::new();
+    let lits = [
+        LitKind::Num(ctx.interner.intern("42")),
+        LitKind::Hex(ctx.interner.intern("FF")),
+        LitKind::Bin(ctx.interner.intern("101")),
+        LitKind::String(ctx.interner.intern("hi")),
+        LitKind::Real(ctx.interner.intern("1.5")),
+    ];
+    let texts = ["42", "FF", "101", "hi", "1.5"];
+    for (kind, want) in lits.iter().zip(texts) {
+        let lit: sail_ast::Lit = Node::new(ctx.ids.fresh(), Span::dummy(), *kind);
+        let exp: Exp = Node::new(ctx.ids.fresh(), Span::dummy(), ExpKind::Lit(lit));
+        let ast = Ast::new(vec![Node::new(
+            ctx.ids.fresh(),
+            Span::dummy(),
+            DefKind::Let {
+                pat: Node::new(ctx.ids.fresh(), Span::dummy(), PatKind::Wild),
+                exp,
+            },
+        )]);
+        let text = ast.to_json().expect("serialize");
+        let back = Ast::from_json(&text).expect("deserialize");
+        assert_eq!(ast, back);
+        // Payloads resolve back through the same table that built them.
+        let sym = match kind {
+            LitKind::Num(s)
+            | LitKind::Hex(s)
+            | LitKind::Bin(s)
+            | LitKind::String(s)
+            | LitKind::Real(s) => *s,
+            LitKind::Unit | LitKind::True | LitKind::False => Symbol::DUMMY,
+        };
+        assert_eq!(ctx.interner.resolve(sym), Some(want));
+    }
+}
+
 #[test]
 fn compact_json_roundtrips_too() {
     let ast = sample_ast();

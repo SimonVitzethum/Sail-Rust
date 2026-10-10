@@ -12,6 +12,7 @@
 //! stream with [`TokenKind::Eof`].
 
 use crate::{FileId, Fixity, Span, Token, TokenKind};
+use sail_ast::Interner;
 
 /// One recoverable lexing problem with its span and 1-based line/column.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -66,10 +67,16 @@ impl LexResult {
     }
 }
 
-/// Lex `src` as Sail2 source for file `file`.
+/// Lex `src` as Sail2 source for file `file`, interning every payload
+/// ([`TokenKind`] text) into `interner`.
+///
+/// The same table should flow into the parser/AST interner (Lane 71
+/// payload-intern): payload [`Symbol`][sail_ast::Symbol]s stay valid as
+/// long as `interner` lives. [`TokenKind::Error`] messages are the only
+/// payloads that stay `String` (they duplicate [`LexError::message`]).
 #[must_use]
-pub fn lex(file: FileId, src: &str) -> LexResult {
-    Lexer::new(file, src).run()
+pub fn lex(file: FileId, src: &str, interner: &mut impl Interner) -> LexResult {
+    Lexer::new(file, src, interner).run()
 }
 
 // ---------------------------------------------------------------------------
@@ -124,7 +131,7 @@ fn is_wsc(b: u8) -> bool {
 // Lexer
 // ---------------------------------------------------------------------------
 
-struct Lexer<'a> {
+struct Lexer<'a, 'i> {
     file: FileId,
     src: &'a [u8],
     text: &'a str,
@@ -133,10 +140,11 @@ struct Lexer<'a> {
     line_start: usize,
     tokens: Vec<Token>,
     errors: Vec<LexError>,
+    interner: &'i mut dyn Interner,
 }
 
-impl<'a> Lexer<'a> {
-    fn new(file: FileId, src: &'a str) -> Self {
+impl<'a, 'i> Lexer<'a, 'i> {
+    fn new(file: FileId, src: &'a str, interner: &'i mut impl Interner) -> Self {
         Lexer {
             file,
             src: src.as_bytes(),
@@ -146,7 +154,13 @@ impl<'a> Lexer<'a> {
             line_start: 0,
             tokens: Vec::new(),
             errors: Vec::new(),
+            interner,
         }
+    }
+
+    /// Intern `text` into the caller's table.
+    fn sym(&mut self, text: &str) -> sail_ast::Symbol {
+        self.interner.intern(text)
     }
 
     fn run(mut self) -> LexResult {
@@ -192,7 +206,8 @@ impl<'a> Lexer<'a> {
                 b'\'' => self.lex_tyvar_or_error(start),
                 b'~' => {
                     self.bump();
-                    self.push(TokenKind::Id("~".to_string()), start);
+                    let tilde = self.sym("~");
+                    self.push(TokenKind::Id(tilde), start);
                 }
                 b if b.is_ascii_digit() => self.lex_number(start),
                 b if is_ident_start(b) => self.lex_word(start),
@@ -360,7 +375,8 @@ impl<'a> Lexer<'a> {
                 self.pos += 2;
                 if depth == 0 {
                     let inner = self.text[inner_start..self.pos - 2].to_string();
-                    self.push(TokenKind::DocBlock(inner), start);
+                    let sym = self.sym(&inner);
+                    self.push(TokenKind::DocBlock(sym), start);
                     return;
                 }
             } else if b == b'\n' {
@@ -370,7 +386,8 @@ impl<'a> Lexer<'a> {
             }
         }
         let inner = self.text[inner_start..self.pos].to_string();
-        self.push(TokenKind::DocBlock(inner), start);
+        let sym = self.sym(&inner);
+        self.push(TokenKind::DocBlock(sym), start);
         self.push_error(start, self.pos, "Unbalanced documentation comment");
     }
 
@@ -393,7 +410,8 @@ impl<'a> Lexer<'a> {
             content.push_str(&self.text[line_start..self.pos]);
             if self.pos >= self.src.len() {
                 // EOF ends the comment leniently (the OCaml lexer raises).
-                self.push(TokenKind::DocLine(content), start);
+                let sym = self.sym(&content);
+                self.push(TokenKind::DocLine(sym), start);
                 self.push_error(start, self.pos, "File ended in documentation comment");
                 return;
             }
@@ -409,7 +427,8 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
             } else {
-                self.push(TokenKind::DocLine(content), start);
+                let sym = self.sym(&content);
+                self.push(TokenKind::DocLine(sym), start);
                 return;
             }
         }
@@ -453,7 +472,8 @@ impl<'a> Lexer<'a> {
                     }
                 }
             }
-            self.push(TokenKind::Str(buf), start);
+            let sym = self.sym(&buf);
+            self.push(TokenKind::Str(sym), start);
             if !terminated {
                 self.push_error(start, self.pos, "String literal not terminated");
             }
@@ -476,7 +496,8 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
         }
         if self.pos >= self.src.len() {
-            self.push(TokenKind::MultiLineStr(String::new()), start);
+            let sym = self.sym("");
+            self.push(TokenKind::MultiLineStr(sym), start);
             self.push_error(start, self.pos, "Multiline string literal not terminated");
             return;
         }
@@ -522,7 +543,8 @@ impl<'a> Lexer<'a> {
         if !terminated {
             // Fault tolerance: emit what we have plus an error.
             let (partial, _) = strip_lines(&buf, "");
-            self.push(TokenKind::MultiLineStr(partial), start);
+            let sym = self.sym(&partial);
+            self.push(TokenKind::MultiLineStr(sym), start);
             self.push_error(start, self.pos, "Multiline string literal not terminated");
             return;
         }
@@ -535,7 +557,8 @@ impl<'a> Lexer<'a> {
         };
         if !prefix.chars().all(|c| c == ' ' || c == '\t') {
             let (partial, _) = strip_lines(body, &prefix);
-            self.push(TokenKind::MultiLineStr(partial), start);
+            let sym = self.sym(&partial);
+            self.push(TokenKind::MultiLineStr(sym), start);
             self.push_error(
                 start,
                 self.pos,
@@ -544,7 +567,8 @@ impl<'a> Lexer<'a> {
             return;
         }
         let (stripped, bad_line) = strip_lines(body, &prefix);
-        self.push(TokenKind::MultiLineStr(stripped), start);
+        let sym = self.sym(&stripped);
+        self.push(TokenKind::MultiLineStr(sym), start);
         if bad_line {
             self.push_error(
                 start,
@@ -662,7 +686,8 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
             if self.src.get(self.pos).is_some_and(|&b| is_ident_start(b)) {
                 let name = self.scan_ident().to_string();
-                self.push(TokenKind::Attribute(name), start);
+                let sym = self.sym(&name);
+                self.push(TokenKind::Attribute(sym), start);
             } else {
                 self.push_error(start, self.pos, "Expected attribute name after `$[`");
             }
@@ -690,18 +715,21 @@ impl<'a> Lexer<'a> {
         }
         if self.src.get(ahead) == Some(&b'{') {
             self.pos = ahead + 1;
-            self.push(TokenKind::StructuredPragma(name), start);
+            let sym = self.sym(&name);
+            self.push(TokenKind::StructuredPragma(sym), start);
             return;
         }
         // `$name value…` up to the end of the line.
+        let name_sym = self.sym(&name);
         let mut value = String::new();
         loop {
             match self.src.get(self.pos) {
                 None => {
+                    let value_sym = self.sym(&unescape_pragma(&value));
                     self.push(
                         TokenKind::Pragma {
-                            name,
-                            value: unescape_pragma(&value),
+                            name: name_sym,
+                            value: value_sym,
                         },
                         start,
                     );
@@ -709,10 +737,11 @@ impl<'a> Lexer<'a> {
                     return;
                 }
                 Some(b'\n') => {
+                    let value_sym = self.sym(&unescape_pragma(&value));
                     self.push(
                         TokenKind::Pragma {
-                            name,
-                            value: unescape_pragma(&value),
+                            name: name_sym,
+                            value: value_sym,
                         },
                         start,
                     );
@@ -720,10 +749,11 @@ impl<'a> Lexer<'a> {
                 }
                 Some(b'/') if self.at(1) == Some(b'/') => {
                     self.skip_line_comment();
+                    let value_sym = self.sym(&unescape_pragma(&value));
                     self.push(
                         TokenKind::Pragma {
-                            name,
-                            value: unescape_pragma(&value),
+                            name: name_sym,
+                            value: value_sym,
                         },
                         start,
                     );
@@ -753,10 +783,11 @@ impl<'a> Lexer<'a> {
                             "Directive continued after block comment",
                         );
                     }
+                    let value_sym = self.sym(&unescape_pragma(&value));
                     self.push(
                         TokenKind::Pragma {
-                            name,
-                            value: unescape_pragma(&value),
+                            name: name_sym,
+                            value: value_sym,
                         },
                         start,
                     );
@@ -810,7 +841,8 @@ impl<'a> Lexer<'a> {
                 self.push(fix, start);
                 return;
             }
-            self.push(TokenKind::Id(word), start);
+            let sym = self.sym(&word);
+            self.push(TokenKind::Id(sym), start);
             return;
         }
         if word == "import" || word == "module" || word == "where" {
@@ -819,7 +851,10 @@ impl<'a> Lexer<'a> {
         }
         match TokenKind::keyword(&word) {
             Some(kind) => self.push(kind, start),
-            None => self.push(TokenKind::Id(word), start),
+            None => {
+                let sym = self.sym(&word);
+                self.push(TokenKind::Id(sym), start);
+            }
         }
     }
 
@@ -847,6 +882,7 @@ impl<'a> Lexer<'a> {
         // Commit: scan the operator with the usual rules.
         self.pos = p;
         let op = self.scan_operator_text();
+        let op_sym = self.sym(&op);
         let fixity = match word {
             "infix" => Fixity::Infix,
             "infixl" => Fixity::InfixL,
@@ -855,7 +891,7 @@ impl<'a> Lexer<'a> {
         Some(TokenKind::Fixity {
             fixity,
             level: level - b'0',
-            op,
+            op: op_sym,
         })
     }
 
@@ -864,7 +900,8 @@ impl<'a> Lexer<'a> {
         match self.at(1) {
             Some(b) if is_ident_start(b) => {
                 let text = self.scan_ident().to_string();
-                self.push(TokenKind::TyVar(text), start);
+                let sym = self.sym(&text);
+                self.push(TokenKind::TyVar(sym), start);
             }
             _ => {
                 self.pos += 1;
@@ -901,11 +938,12 @@ impl<'a> Lexer<'a> {
             if d > end + 1 {
                 let lit = self.text[end + 1..d].to_string();
                 self.pos = d;
+                let sym = self.sym(&lit);
                 self.push(
                     if is_hex {
-                        TokenKind::Hex(lit)
+                        TokenKind::Hex(sym)
                     } else {
-                        TokenKind::Bin(lit)
+                        TokenKind::Bin(sym)
                     },
                     start,
                 );
@@ -938,10 +976,12 @@ impl<'a> Lexer<'a> {
                 self.pos += 1;
             }
             let text = self.text[start..self.pos].to_string();
-            self.push(TokenKind::Real(text), start);
+            let sym = self.sym(&text);
+            self.push(TokenKind::Real(sym), start);
             return;
         }
-        self.push(TokenKind::Num(digits.to_string()), start);
+        let sym = self.sym(digits);
+        self.push(TokenKind::Num(sym), start);
     }
 
     /// Operator entry: `Bidir`/`MinusGt`/`EqGt` take precedence over a longer
@@ -1009,7 +1049,7 @@ impl<'a> Lexer<'a> {
             ":" => TokenKind::Colon,
             "@" => TokenKind::At,
             "^" => TokenKind::Caret,
-            _ => TokenKind::Op(op),
+            _ => TokenKind::Op(self.sym(&op)),
         };
         self.push(kind, start);
     }

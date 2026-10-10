@@ -5,8 +5,17 @@
 //! keyword, literal, operator and piece of punctuation the parser lane needs.
 //! Payload conventions (`Hex`/`Bin` without prefix, `Num` as decimal text)
 //! match the OCaml lexer; see `LEXER_NEEDED.md` for the swap contract.
+//!
+//! Payloads are interned [`Symbol`]s (Lane 71 payload-intern):
+//! [`lex`][crate::lex] takes
+//! the caller's interner, so repeated identifiers/literals share one table
+//! entry instead of one `String` per occurrence. Resolve a payload with
+//! [`Interner::resolve`]. The only `String` payload left is
+//! [`TokenKind::Error`] (recovery messages duplicate [`LexError`]`::message`
+//! and must not pollute the table).
 
 use crate::Span;
+use sail_ast::{Interner, Symbol};
 
 /// `infix`/`infixl`/`infixr` associativity attached to [`TokenKind::Fixity`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -17,30 +26,31 @@ pub enum Fixity {
 }
 
 /// One lexical token kind. Keywords are unit variants; identifiers, literals,
-/// operators and directives carry their text.
+/// operators and directives carry interned [`Symbol`] payloads (resolve via
+/// the [`lex`][crate::lex] caller's interner).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TokenKind {
     // -- identifiers, type variables, operators -----------------------------
     /// Plain identifier, incl. the special `~` (as in the OCaml lexer).
-    Id(String),
+    Id(Symbol),
     /// Type-level variable incl. leading `'`, e.g. `'a`.
-    TyVar(String),
+    TyVar(Symbol),
     /// Symbolic operator, e.g. `++`, `>=`.
-    Op(String),
+    Op(Symbol),
 
     // -- literals ------------------------------------------------------------
     /// Decimal integer literal, e.g. `"42"` (arbitrary width, kept as text).
-    Num(String),
+    Num(Symbol),
     /// Hex digits without `0x` prefix, e.g. `"FF"` (`_` preserved as written).
-    Hex(String),
+    Hex(Symbol),
     /// Binary digits without `0b` prefix, e.g. `"101"`.
-    Bin(String),
+    Bin(Symbol),
     /// Real literal in decimal notation, e.g. `"1.5"`.
-    Real(String),
+    Real(Symbol),
     /// String literal, escape sequences resolved.
-    Str(String),
+    Str(Symbol),
     /// `"""` multi-line string, indentation prefix stripped, lines joined.
-    MultiLineStr(String),
+    MultiLineStr(Symbol),
 
     // -- keywords ------------------------------------------------------------
     And,
@@ -162,29 +172,30 @@ pub enum TokenKind {
 
     // -- directives, attributes, docs ----------------------------------------
     /// `$[name` attribute opener (rest lexes as normal tokens).
-    Attribute(String),
+    Attribute(Symbol),
     /// `$name {` structured pragma opener.
-    StructuredPragma(String),
+    StructuredPragma(Symbol),
     /// `$name value…` up to end of line.
     Pragma {
-        name: String,
-        value: String,
+        name: Symbol,
+        value: Symbol,
     },
     /// `infix[l|r] N op` fixity declaration.
     Fixity {
         fixity: Fixity,
         level: u8,
-        op: String,
+        op: Symbol,
     },
     /// `/*! … */` documentation block.
-    DocBlock(String),
+    DocBlock(Symbol),
     /// `/// …` documentation line(s).
-    DocLine(String),
+    DocLine(Symbol),
 
     /// End of input (always the last token).
     Eof,
     /// Recovery token: the lexer skipped bad input and continued.
-    /// The message duplicates the matching [`crate::LexError`].
+    /// The message duplicates the matching [`crate::LexError`] and stays a
+    /// `String` on purpose (error text must not pollute the interner table).
     Error(String),
 }
 

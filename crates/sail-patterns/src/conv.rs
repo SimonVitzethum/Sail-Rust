@@ -5,7 +5,8 @@
 //! Mapping: `Wild/Var/Lit/App/Tuple/Vector/VectorConcat/Or/As/Typ/VarTyp/
 //! Struct/List/Cons/StringAppend` map onto the same-named `PatKind`
 //! variants. Payload notes:
-//! - `Lit(String)` (opaque payload) becomes `LitKind::String`; the
+//! - `Lit(String)` (opaque payload) becomes `LitKind::String` (interned
+//!   through the caller's interner); the
 //!   coverage logic only needs literal-vs-wildcard distinction plus the
 //!   `"true"`/`"false"` spellings, which survive the round trip.
 //! - `Var(name)` (binding wildcard) becomes `Var { pat: Wild, typ_pat:
@@ -54,7 +55,7 @@ pub fn pat_to_ast(p: &Pat, it: &mut impl Interner) -> AstPat {
             pat: Box::new(mk_pat(PatKind::Wild)),
             typ_pat: mk_typpat(TypPatKind::Wild),
         }),
-        Pat::Lit(s) => mk_pat(PatKind::Lit(mk_lit(LitKind::String(s.clone())))),
+        Pat::Lit(s) => mk_pat(PatKind::Lit(mk_lit(LitKind::String(it.intern(s))))),
         Pat::App { name, args } => mk_pat(PatKind::App {
             func: ast_name(it, name),
             args: args.iter().map(|a| pat_to_ast(a, it)).collect(),
@@ -109,16 +110,16 @@ pub fn pat_to_ast(p: &Pat, it: &mut impl Interner) -> AstPat {
     }
 }
 
-fn lit_payload(lit: &Lit) -> String {
+fn lit_payload(lit: &Lit, it: &impl Interner) -> Option<String> {
     match &lit.kind {
-        LitKind::Unit => "()".to_owned(),
-        LitKind::True => "true".to_owned(),
-        LitKind::False => "false".to_owned(),
+        LitKind::Unit => Some("()".to_owned()),
+        LitKind::True => Some("true".to_owned()),
+        LitKind::False => Some("false".to_owned()),
         LitKind::Num(s)
         | LitKind::Hex(s)
         | LitKind::Bin(s)
         | LitKind::String(s)
-        | LitKind::Real(s) => s.clone(),
+        | LitKind::Real(s) => it.resolve(*s).map(str::to_owned),
     }
 }
 
@@ -127,7 +128,7 @@ fn lit_payload(lit: &Lit) -> String {
 /// without a canonical slot map to `"_"`.
 pub fn pat_from_ast(p: &AstPat, it: &impl Interner) -> Option<Pat> {
     match &p.kind {
-        PatKind::Lit(l) => Some(Pat::Lit(lit_payload(l))),
+        PatKind::Lit(l) => Some(Pat::Lit(lit_payload(l, it)?)),
         PatKind::Wild => Some(Pat::Wild),
         PatKind::Or(a, b) => Some(Pat::Or(
             Box::new(pat_from_ast(a, it)?),

@@ -22,7 +22,7 @@ pub mod lean;
 pub mod pred;
 pub mod simplify;
 
-pub use expr::{NConstraint, NExp};
+pub use expr::{Kid, NConstraint, NExp};
 pub use lean::{int_kind, int_kind_in, lean_type_name, IntKind};
 pub use pred::{
     provably_neg, provably_neg_in, provably_nneg, provably_nneg_in, provably_nonpos,
