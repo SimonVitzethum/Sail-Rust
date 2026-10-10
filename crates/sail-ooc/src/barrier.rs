@@ -21,6 +21,7 @@
 //! ```
 
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use sail_shard::ShardId;
 
@@ -80,12 +81,49 @@ impl fmt::Display for BarrierError {
 
 impl std::error::Error for BarrierError {}
 
+/// Geteilter heisser Slot der Barriere (nur in diesem Modul).
+///
+/// `HotToken` haelt eine Referenz auf denselben Zustand: Faellt das Token
+/// ohne `seal`/`evict` weg, kann sein `Drop` den Slot freigeben, ohne
+/// `&mut`-Zugriff auf die Barriere zu brauchen. `evicted` lebt hier (nicht in
+/// [`PhaseBarrier`]), damit auch der Drop-Pfad zaehlen kann.
+#[derive(Debug, Default)]
+struct HotState {
+    hot: Option<(ShardId, u64)>,
+    evicted: u64,
+}
+
 /// Besitz-Token der heissen Phase. Nicht klonbar: Genau ein Besitzer kann
-/// versiegeln; `Drop` ohne `seal` zaehlt als Abbruch (siehe [`PhaseBarrier`]).
+/// versiegeln. Faellt das Token ohne `seal`/`evict` weg (`Drop`, z. B.
+/// Fehlerpfad mit `?`), gibt der Drop die Barriere frei und zaehlt den Shard
+/// als verworfen (`Evicted`, kein Cache-Eintrag): Der naechste Shard kann
+/// sofort beginnen.
 #[derive(Debug)]
 pub struct HotToken {
     shard: ShardId,
     generation: u64,
+    state: Arc<Mutex<HotState>>,
+    consumed: bool,
+}
+
+impl Drop for HotToken {
+    /// Abbruchpfad: War das Token noch heiss (weder `seal` noch `evict` haben
+    /// es konsumiert) und gehoert der Slot noch ihm, wird die Barriere
+    /// freigegeben und der Shard als verworfen gezaehlt. Passt der Slot nicht
+    /// mehr zu diesem Token (fremd/veraltet/konsumiert), passiert nichts.
+    fn drop(&mut self) {
+        if self.consumed {
+            return;
+        }
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        match &state.hot {
+            Some((current, generation))
+                if *current == self.shard && *generation == self.generation => {}
+            _ => return,
+        }
+        state.hot = None;
+        state.evicted += 1;
+    }
 }
 
 impl HotToken {
@@ -97,15 +135,24 @@ impl HotToken {
 }
 
 /// Erzwingt die OoC-Phasenfolge. Genau eine heisse Phase zur Zeit.
+///
+/// Der heisse Slot ist mit den ausgegebenen [`HotToken`]s geteilt: Wird ein
+/// Token ohne `seal`/`evict` fallengelassen, gibt sein `Drop` die Barriere
+/// frei (Abbruchpfad, zaehlt als `Evicted`).
 #[derive(Debug, Default)]
 pub struct PhaseBarrier {
-    hot: Option<(ShardId, u64)>,
+    state: Arc<Mutex<HotState>>,
     generation: u64,
     sealed: Vec<SealReceipt>,
-    evicted: u64,
 }
 
 impl PhaseBarrier {
+    /// Sperrt den geteilten Zustand (toleriert Vergiftung: Haltet der
+    /// kritische Abschnitt nie Anwendercode, ist der Zustand konsistent).
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, HotState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Neue, leere Barriere (nichts heiss).
     #[must_use]
     pub fn new() -> Self {
@@ -114,15 +161,21 @@ impl PhaseBarrier {
 
     /// Beginnt die heisse Phase fuer `shard`. Fehler, wenn noch einer heiss ist.
     pub fn begin(&mut self, shard: ShardId) -> Result<HotToken, BarrierError> {
-        if let Some((current, _)) = &self.hot {
+        let mut state = self.lock_state();
+        if let Some((current, _)) = &state.hot {
             return Err(BarrierError::AlreadyHot {
                 current: current.clone(),
             });
         }
         self.generation += 1;
         let generation = self.generation;
-        self.hot = Some((shard.clone(), generation));
-        Ok(HotToken { shard, generation })
+        state.hot = Some((shard.clone(), generation));
+        Ok(HotToken {
+            shard,
+            generation,
+            state: Arc::clone(&self.state),
+            consumed: false,
+        })
     }
 
     /// Versiegelt die heisse Phase: `serialized` ist die kanonische
@@ -130,23 +183,27 @@ impl PhaseBarrier {
     /// Content-Hash. Danach ist der Shard verworfen (RAM frei).
     pub fn seal(
         &mut self,
-        token: HotToken,
+        mut token: HotToken,
         serialized: &[u8],
         pass_version: &str,
     ) -> Result<SealReceipt, BarrierError> {
-        match &self.hot {
-            Some((current, generation))
-                if *current == token.shard && *generation == token.generation => {}
-            _ => {
-                return Err(BarrierError::StaleToken {
-                    token_shard: token.shard,
-                });
+        {
+            let mut state = token.state.lock().unwrap_or_else(|e| e.into_inner());
+            match &state.hot {
+                Some((current, generation))
+                    if *current == token.shard && *generation == token.generation => {}
+                _ => {
+                    return Err(BarrierError::StaleToken {
+                        token_shard: token.shard.clone(),
+                    });
+                }
             }
+            state.hot = None;
         }
-        self.hot = None;
+        token.consumed = true;
         let receipt = SealReceipt {
             content: ContentId::shard_content(&token.shard, serialized, pass_version),
-            shard: token.shard,
+            shard: token.shard.clone(),
             bytes_len: serialized.len(),
             seq: self.sealed.len() as u64,
         };
@@ -156,31 +213,35 @@ impl PhaseBarrier {
 
     /// Verwirft die heisse Phase ohne Versiegelung (Abbruchpfad; kein
     /// Cache-Eintrag, keine Wiederverwendbarkeit).
-    pub fn evict(&mut self, token: HotToken) -> Result<ShardPhase, BarrierError> {
-        match &self.hot {
-            Some((current, generation))
-                if *current == token.shard && *generation == token.generation => {}
-            _ => {
-                return Err(BarrierError::StaleToken {
-                    token_shard: token.shard,
-                });
+    pub fn evict(&mut self, mut token: HotToken) -> Result<ShardPhase, BarrierError> {
+        {
+            let mut state = token.state.lock().unwrap_or_else(|e| e.into_inner());
+            match &state.hot {
+                Some((current, generation))
+                    if *current == token.shard && *generation == token.generation => {}
+                _ => {
+                    return Err(BarrierError::StaleToken {
+                        token_shard: token.shard.clone(),
+                    });
+                }
             }
+            state.hot = None;
+            state.evicted += 1;
         }
-        self.hot = None;
-        self.evicted += 1;
+        token.consumed = true;
         Ok(ShardPhase::Evicted)
     }
 
     /// Aktuell heisser Shard (genau einer oder keiner).
     #[must_use]
-    pub fn hot(&self) -> Option<&ShardId> {
-        self.hot.as_ref().map(|(id, _)| id)
+    pub fn hot(&self) -> Option<ShardId> {
+        self.lock_state().hot.as_ref().map(|(id, _)| id.clone())
     }
 
     /// `true`, wenn gerade ein Shard heiss ist.
     #[must_use]
     pub fn is_hot(&self) -> bool {
-        self.hot.is_some()
+        self.lock_state().hot.is_some()
     }
 
     /// Alle Versiegelungs-Belege in Reihenfolge.
@@ -195,10 +256,11 @@ impl PhaseBarrier {
         self.sealed.len()
     }
 
-    /// Anzahl verworfener (nicht versiegelter) Shards.
+    /// Anzahl verworfener (nicht versiegelter) Shards (inklusive per
+    /// `Drop` fallengelassener Token, siehe [`HotToken`]).
     #[must_use]
     pub fn evicted_count(&self) -> u64 {
-        self.evicted
+        self.lock_state().evicted
     }
 }
 
@@ -222,7 +284,7 @@ mod tests {
         let hot = b.begin(ShardId::new("a", 0)).expect("erstes begin");
         assert_eq!(hot.shard(), &ShardId::new("a", 0));
         assert!(b.is_hot());
-        assert_eq!(b.hot(), Some(&ShardId::new("a", 0)));
+        assert_eq!(b.hot(), Some(ShardId::new("a", 0)));
         let err = b.begin(ShardId::new("b", 0)).expect_err("zweites begin");
         assert_eq!(
             err,
@@ -280,5 +342,36 @@ mod tests {
         let next = b.begin(ShardId::new("b", 0)).expect("begin nach evict");
         let receipt = b.seal(next, b"b", PASS).expect("seal");
         assert_eq!(receipt.shard, ShardId::new("b", 0));
+    }
+
+    #[test]
+    fn drop_ohne_seal_gibt_barriere_frei() {
+        let mut b = PhaseBarrier::new();
+        {
+            let _hot = b.begin(ShardId::new("a", 0)).expect("begin");
+            assert!(b.is_hot());
+            // `_hot` faellt hier ohne seal/evict weg (Abbruchpfad, z. B. `?`).
+        }
+        assert!(!b.is_hot());
+        assert_eq!(b.hot(), None);
+        assert_eq!(b.evicted_count(), 1);
+        assert_eq!(b.sealed_count(), 0);
+        // Die Barriere ist sofort wieder frei.
+        let next = b.begin(ShardId::new("b", 0)).expect("begin nach drop");
+        b.seal(next, b"b", PASS).expect("seal");
+        assert_eq!(b.sealed_count(), 1);
+        assert_eq!(b.evicted_count(), 1);
+    }
+
+    #[test]
+    fn verbrauchtes_token_zaehlt_drop_nicht_doppelt() {
+        let mut b = PhaseBarrier::new();
+        let hot = b.begin(ShardId::new("a", 0)).expect("begin");
+        b.seal(hot, b"a", PASS).expect("seal");
+        // `hot` war konsumiert: Sein Drop darf nichts mehr zaehlen.
+        assert_eq!(b.evicted_count(), 0);
+        let hot2 = b.begin(ShardId::new("b", 0)).expect("begin2");
+        b.evict(hot2).expect("evict");
+        assert_eq!(b.evicted_count(), 1);
     }
 }
