@@ -82,7 +82,10 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux new-window -d -t "$SESSION" -n "$WINDOW" "$WIN_CMD"
     echo "tmux-test: Fenster $SESSION:$WINDOW angelegt (cmd: $WIN_CMD)"
 else
-    tmux new-session -d -s "$SESSION" -n "$WINDOW" "$WIN_CMD"
-    echo "tmux-test: Session $SESSION mit Fenster $WINDOW angelegt (cmd: $WIN_CMD)"
+    # WICHTIG: tmux-Server in eigenem systemd-Scope starten. Der Aufrufer läuft in einer
+    # transienten Scope-Unit, deren Cleanup beim Befehlsende alle Restprozesse (inkl. tmux-Server)
+    # killen würde — das hat wiederholt Sessions samt Läufen zerstört. Eigener Scope überlebt.
+    systemd-run --user --scope --unit="tmux-$SESSION" -- tmux new-session -d -s "$SESSION" -n "$WINDOW" "$WIN_CMD"
+    echo "tmux-test: Session $SESSION mit Fenster $WINDOW angelegt (cmd: $WIN_CMD, scope: tmux-$SESSION)"
 fi
 echo "tmux-test: Reattach mit: tmux attach -t $SESSION   (Abhaengen: Ctrl-b d)"
