@@ -107,6 +107,57 @@ lifted onto the Sail rules in this lane:
     `BlockItem` is just `Exp` now. The missing body still defaults to
     `()`; `{ let p = E }`, `{ let p = E; }`, `{ let p = E; ... }`
     parse exactly as before — accepted language unchanged.
+10. **Rest-list family strict (Lane 99, Rig `limited-run-…-175801`)**:
+    every remaining nullable `(<X> ",")* <X>?` list is strict now
+    (non-empty, right-recursive, explicit trailing-`,` arm, Lane-87
+    shape): `TypList` (Rig `310:5-313:5`), `NumList` (Rig
+    `324:5-327:5`, headline — the empty-reduce competed with every
+    `KOptList`-leading token after `{`), `PatList`, `MPatList` (Rig
+    `1083:5-1086:5`), `FPatList`, `FMPatList` (Rig `1143:5-1146:5`),
+    `FexpList` (Rig `910:5-913:5`), `VecUpdList` (Rig `935:5-938:5`),
+    `MapClList`, `ParamKOptList`, `EnumFns`, `TypeUnions` (Rig
+    `1379:5-1382:5`), `SubstList`, `ExternBindList` (split out of the
+    inline `ExternBody` braces), `AttrKVList`, `AttrDataList` (split
+    out of the inline `AttrData` brackets). Use sites that accepted
+    empty bodies in the port keep `?` (`{}` / `{||}` / `[||]` /
+    `[]` / `()` via `None`: `NumList`, `PatList`-vectors,
+    `MPatList`-vectors, `FPatList`, `FMPatList`, `FexpList`
+    incl. `StructUpdate`-`with`, `VecUpdList`-`with`, `MapClList`,
+    `ParamKOptList` (`TyArgs` too), `EnumFns`, `TypeUnions`,
+    `ExternBindList`, `AttrKVList`, `AttrDataList`), so the accepted
+    language is unchanged. Tuple use sites (`Typ`, `Pat`, `MPat`,
+    `Exp`) keep three explicit arms (`(x)`, `(x,)`, `(x, …)`) —
+    this also restores the `(e,)` single-tuple that strict `ExpList`
+    alone would reject. `PatIdTail` / `MPatIdTail` keep their
+    separate `"()"` arms, so strictness removes the old `()`
+    double tree (same effect as fix 6 for `{}`).
+    `tests/grammar_coverage.rs` pins the empty/trailing shapes.
+11. **Remaining `(...)+` / `(...)?` intermediates as explicit arms
+    (Lane 99)**: the `(<PatOp> <AtomicMPat>)+` mapping-pattern chain
+    is a right-recursive `MPatOps` rule; the `("." <RawId>)*`
+    `ConfigKey` tail is two right-recursive arms (Rig `1282:5-1286:5`);
+    the `CallArgs?` / `IdCallTail?` / `PatIdTail?` / `MPatIdTail?` /
+    `MPatSuffix?` use sites are split into bare/tailed arms; the
+    `VecUpdTail?` tail is inlined into three `VecUpd` arms (Rig
+    `918:5-926:5`); `FMPat`-`=` (Rig `1136:5-1139:5`),
+    `UnbracketedTyParam`-`constraint` (Rig `1220:5-1223:5`) and
+    `RegDef`-`=` (Rig `1509:5-1513:5`) are two/four explicit arms.
+    Same combinations as before; accepted language unchanged
+    (except degenerate `instantiation I with` with no substitution,
+    which now errors instead of yielding an empty list).
+12. **Residuals (already E4, Rig decides)**: the already-strict rules
+    still report reduce-vs-shift on continuation-leading tokens
+    (`TypSchm`-`effect` 377, `Exp`-`else` 544, `LoopExp`-`by`/`in`
+    640/648, `CaseList`-`,`/`-cont` 719/725, `Block`-`;` 745/750/764/
+    769, `ExpList`-cont 889, `IndexRange`-`@`/`..` 1395/1404,
+    `StructFields`-cont 1363, `RDefBody`-`,`/`-cont` 1423/1429).
+    These shapes are unchanged by this lane; they share one signature
+    (completed arm vs continuation shift) and are expected to quiet
+    down once the macro-chunk states of fixes 10–11 are gone — if the
+    Rig still reports them, that is a follow-up with Rig evidence,
+    not another blind reshape. Unreported `(...)?` tails (`TypQuant`
+    `,`, `PatexpTyp` `->`, guards, `Fexp`/`PlainExp` `=`, …) are
+    deliberately untouched (minimal diff).
 
 6. **`RDefBody` strict (Lane 87, E4 `Block` shape)**: the old
     `(<RIdDef> ",")* <RIdDef>?` list was nullable AND used as `RDefBody?`

@@ -31,6 +31,19 @@
 //     carrying their `;` terminator, so after `let p = E` the lookahead
 //     decides by shift only (`in` continues, `;` continues the block)
 //     and only `}` reduces — no reduce-vs-shift on `in` anymore.
+//   - Lane 99 (same E4 shape, Restfamilie nach Rig 175801): `TypList`/
+//     `NumList` (Rig 310/324, 324 als Headline) + `PatList`/`MPatList`/
+//     `FPatList`/`FMPatList`/`FexpList`/`VecUpdList`/`MapClList`/
+//     `ParamKOptList`/`EnumFns`/`TypeUnions`/`SubstList`/`ExternBindList`/
+//     `AttrKVList`/`AttrDataList` strikt mit `?`-Use-Sites wo der Port
+//     `{}`/`[]`/`()` akzeptierte; Tuple-Use-Sites (`Typ`/`Pat`/`MPat`/
+//     `Exp`) als drei explizite Arme (`(x)`, `(x,)`, `(x, ...)`); Vektor-/
+//     Listen-Inlines (`[...]`, `[|...|]`) wiederverwenden die strikten
+//     Listen; `(...)+`-Makro-Reste (`MPatOps`-Kette, `ConfigKey`-`.`) als
+//     explizite rechts-rekursive Arme; `?`-Schwaenze als explizite Arme
+//     (`CallArgs`/`IdCallTail`/`PatIdTail`/`MPatIdTail`/`MPatSuffix`,
+//     `VecUpd`-Tails, `FMPat`-`=`, `UnbracketedTyParam`-`constraint`,
+//     `RegDef`-`=`).
 //   - `IndexRange` parens removed: `"(" IndexRange ")"` duplicated
 //     `AtomicTyp`'s `"(" Typ ")"` for every parenthesised type (`(t)` had
 //     two trees; `(a, b)` was shift-vs-reduce on `,`) while being the only
@@ -284,16 +297,15 @@ AtomicTyp: Typ = {
     "dec" => Typ::Dec,
     "inc" => Typ::Inc,
     "register" "(" <t:Typ> ")" => Typ::App("register".to_string(), vec![t]),
-    "(" <t:Typ> <ts:("," <TypList>)?> ")" => match ts {
-        Some(mut rest) => {
-            let mut v = vec![t];
-            v.append(&mut rest);
-            Typ::Tuple(v)
-        }
-        None => t,
+    "(" <t:Typ> ")" => t,
+    "(" <t:Typ> "," <ts:TypList> ")" => {
+        let mut v = vec![t];
+        v.extend(ts);
+        Typ::Tuple(v)
     },
-    "{" <ns:NumList> "}" => Typ::NSet(ns),
-    "{|" <ns:NumList> "|}" => Typ::NSet(ns),
+    "(" <t:Typ> "," ")" => Typ::Tuple(vec![t]),
+    "{" <ns:NumList?> "}" => Typ::NSet(ns.unwrap_or_default()),
+    "{|" <ns:NumList?> "|}" => Typ::NSet(ns.unwrap_or_default()),
     "{" <ks:KOptList> "." <t:Typ> "}" =>
         Typ::Exist(ks, Box::new(Typ::Lit(Lit::True)), Box::new(t)),
     "{" <ks:KOptList> "," <c:Typ> "." <t:Typ> "}" =>
@@ -302,15 +314,25 @@ AtomicTyp: Typ = {
 
 // `tyarg`.
 TyArgs: Vec<Typ> = {
-    "(" <ts:TypList> ")" => ts,
+    "(" <ts:TypList?> ")" => ts.unwrap_or_default(),
 }
 
 // `typ_list` (trailing comma allowed).
+// `typ_list`: E4-strict (Lane 99) — non-empty, right-recursive, explicit
+// trailing-"," arm (Lane-87 `RDefBody` shape). The old nullable
+// `(<Typ> ",")* <Typ>?` list expanded to `(...)+`/`(...)*` intermediates
+// whose shifts/reduces competed on every `Typ`-leading token
+// (Rig 310:5-313:5). The tuple use site above keeps three explicit arms
+// so `(t)`, `(t,)` and `(t, ...)` all parse as before; `TyArgs` keeps
+// `?`, so `()` still parses (via `None`); accepted language unchanged.
 TypList: Vec<Typ> = {
-    <mut v:(<Typ> ",")*> <last:Typ?> => {
-        if let Some(t) = last { v.push(t); }
+    <t:Typ> => vec![t],
+    <t:Typ> "," <ts:TypList> => {
+        let mut v = vec![t];
+        v.extend(ts);
         v
     },
+    <t:Typ> "," => vec![t],
 }
 
 // `negative_num`.
@@ -320,11 +342,21 @@ NegNum: String = {
 }
 
 // `num_list` (trailing comma allowed).
+// `num_list`: E4-strict (Lane 99) — non-empty, right-recursive, explicit
+// trailing-"," arm (Lane-87 `RDefBody` shape). The old nullable
+// `(<NegNum> ",")* <NegNum>?` list expanded to `(...)+`/`(...)*`
+// intermediates whose empty-reduce competed with every `KOptList`-leading
+// token after `{` (Rig 324:5-327:5, headline conflict). Use sites keep
+// `?`, so `{}` / `{||}` still parse (via `None`); accepted language
+// unchanged.
 NumList: Vec<String> = {
-    <mut v:(<NegNum> ",")*> <last:NegNum?> => {
-        if let Some(n) = last { v.push(n); }
+    <n:NegNum> => vec![n],
+    <n:NegNum> "," <ns:NumList> => {
+        let mut v = vec![n];
+        v.extend(ns);
         v
     },
+    <n:NegNum> "," => vec![n],
 }
 
 // `kind`.
@@ -460,11 +492,19 @@ Pat1: Pat = {
 }
 
 // `pat_list` (trailing comma allowed).
+// `pat_list`: E4-strict (Lane 99, same shape as `TypList` above).
+// Use sites: the tuple site keeps three explicit arms so `(p)`, `(p,)`
+// and `(p, ...)` all parse as before; `PatIdTail` keeps its separate
+// `"()"` arm, so strictness additionally removes the old `()` double
+// tree. Accepted language unchanged.
 PatList: Vec<Pat> = {
-    <mut v:(<Pat> ",")*> <last:Pat?> => {
-        if let Some(p) = last { v.push(p); }
+    <p:Pat> => vec![p],
+    <p:Pat> "," <ps:PatList> => {
+        let mut v = vec![p];
+        v.extend(ps);
         v
     },
+    <p:Pat> "," => vec![p],
 }
 
 // `atomic_pat`: base with chained `: type` annotations.
@@ -478,32 +518,29 @@ AtomicPat: Pat = {
     },
 }
 
+// Tail after a pattern head identifier.
+// `PatIdTail?` use site is two explicit arms (Lane 99): the bare-`Ident`
+// arm and the tailed arm, so no `?`-intermediate reduce competes with the
+// `(`/`[` shifts. Accepted language unchanged.
 AtomicPatBase: Pat = {
     "_" => Pat::Wild,
     <l:NegLit> => Pat::Lit(l),
-    <i:Ident> <t:PatIdTail?> => match t {
-        Some(PatIdTail::Call(args)) => Pat::App(i, args),
-        Some(PatIdTail::Subrange(lo, hi)) => Pat::VectorSubrange(i, lo, hi),
-        None => Pat::Id(i),
+    <i:Ident> => Pat::Id(i),
+    <i:Ident> <t:PatIdTail> => match t {
+        PatIdTail::Call(args) => Pat::App(i, args),
+        PatIdTail::Subrange(lo, hi) => Pat::VectorSubrange(i, lo, hi),
     },
     <k:Kid> => Pat::KidVar(k),
-    "(" <p:Pat> <ts:("," <PatList>)?> ")" => match ts {
-        Some(mut rest) => {
-            let mut v = vec![p];
-            v.append(&mut rest);
-            Pat::Tuple(v)
-        }
-        None => p,
+    "(" <p:Pat> ")" => p,
+    "(" <p:Pat> "," <ps:PatList> ")" => {
+        let mut v = vec![p];
+        v.extend(ps);
+        Pat::Tuple(v)
     },
-    "[" <mut v:(<Pat> ",")*> <last:Pat?> "]" => {
-        if let Some(p) = last { v.push(p); }
-        Pat::Vector(v)
-    },
-    "[|" <mut v:(<Pat> ",")*> <last:Pat?> "|]" => {
-        if let Some(p) = last { v.push(p); }
-        Pat::List(v)
-    },
-    "struct" <i:Ident?> "{" <fs:FPatList> "}" => Pat::Struct(i, fs),
+    "(" <p:Pat> "," ")" => Pat::Tuple(vec![p]),
+    "[" <ps:PatList?> "]" => Pat::Vector(ps.unwrap_or_default()),
+    "[|" <ps:PatList?> "|]" => Pat::List(ps.unwrap_or_default()),
+    "struct" <i:Ident?> "{" <fs:FPatList?> "}" => Pat::Struct(i, fs.unwrap_or_default()),
 }
 
 // Tail after a pattern head identifier.
@@ -517,10 +554,13 @@ PatIdTail: PatIdTail = {
 }
 
 FPatList: Vec<FieldPat> = {
-    <mut v:(<FPat> ",")*> <last:FPat?> => {
-        if let Some(f) = last { v.push(f); }
+    <f:FPat> => vec![f],
+    <f:FPat> "," <fs:FPatList> => {
+        let mut v = vec![f];
+        v.extend(fs);
         v
     },
+    <f:FPat> "," => vec![f],
 }
 
 // `fpat`.
@@ -801,10 +841,8 @@ AtomicExp: Exp = {
 }
 
 AtomSuffix: ExpSuffix = {
-    "." <i:Ident> <a:CallArgs?> => match a {
-        Some(args) => ExpSuffix::Call(i, args),
-        None => ExpSuffix::Field(i),
-    },
+    "." <i:Ident> => ExpSuffix::Field(i),
+    "." <i:Ident> <a:CallArgs> => ExpSuffix::Call(i, a),
     ":" <t:AtomicTyp> => ExpSuffix::TypAnnot(t),
     "[" <e:Exp> "]" => ExpSuffix::Index(Box::new(e)),
     "[" <hi:Exp> ".." <lo:Exp> "]" => ExpSuffix::Subrange(Box::new(hi), Box::new(lo)),
@@ -815,10 +853,8 @@ AtomBase: Exp = {
     "config" <i:RawId> => Exp::Config(i),
     "undefined" => Exp::Undef,
     <l:Lit> => Exp::Lit(l),
-    <i:Ident> <t:IdCallTail?> => match t {
-        Some(args) => Exp::App(i, args),
-        None => Exp::Id(i),
-    },
+    <i:Ident> => Exp::Id(i),
+    <i:Ident> <t:IdCallTail> => Exp::App(i, t),
     <i:Ident> "->" <g:Ident> <a:IdCallTail> =>
         Exp::Suffix(Box::new(Exp::Id(i)), vec![ExpSuffix::Call(g, a)]),
     <k:Kid> => Exp::Sizeof(Typ::Var(k)),
@@ -830,28 +866,26 @@ AtomBase: Exp = {
         Box::new(e),
         Box::new(m.unwrap_or(Exp::Lit(Lit::Str(String::new())))),
     ),
-    "struct" <i:Ident?> "{" <fs:FexpList> "}" => Exp::Struct(i, fs),
-    "(" <e:Exp> <ts:("," <ExpList>)?> ")" => match ts {
-        Some(mut rest) => {
-            let mut v = vec![e];
-            v.append(&mut rest);
-            Exp::Tuple(v)
-        }
-        None => e,
-    },
-    "[" "]" => Exp::Vector(vec![]),
-    "[" <e:Exp> "with" <us:VecUpdList> "]" => Exp::VectorUpdate(Box::new(e), us),
-    "[" <e:Exp> "]" => Exp::Vector(vec![e]),
-    "[" <e:Exp> "," <mut es:(<Exp> ",")*> <last:Exp?> "]" => {
-        if let Some(x) = last { es.push(x); }
+    "struct" <i:Ident?> "{" <fs:FexpList?> "}" => Exp::Struct(i, fs.unwrap_or_default()),
+    "(" <e:Exp> ")" => e,
+    "(" <e:Exp> "," <es:ExpList> ")" => {
         let mut v = vec![e];
-        v.append(&mut es);
+        v.extend(es);
+        Exp::Tuple(v)
+    },
+    "(" <e:Exp> "," ")" => Exp::Tuple(vec![e]),
+    "[" "]" => Exp::Vector(vec![]),
+    "[" <e:Exp> "with" <us:VecUpdList?> "]" => Exp::VectorUpdate(
+        Box::new(e),
+        us.unwrap_or_default(),
+    ),
+    "[" <e:Exp> "]" => Exp::Vector(vec![e]),
+    "[" <e:Exp> "," <es:ExpList?> "]" => {
+        let mut v = vec![e];
+        v.extend(es.unwrap_or_default());
         Exp::Vector(v)
     },
-    "[|" <mut v:(<Exp> ",")*> <last:Exp?> "|]" => {
-        if let Some(e) = last { v.push(e); }
-        Exp::List(v)
-    },
+    "[|" <es:ExpList?> "|]" => Exp::List(es.unwrap_or_default()),
     "{" <b:BlockOrUpd> "}" => b,
 }
 
@@ -892,7 +926,10 @@ ExpList: Vec<Exp> = {
 // `{ block | exp with updates }`.
 BlockOrUpd: Exp = {
     <b:Block> => Exp::Block(b),
-    <e:Exp> "with" <fs:FexpList> => Exp::StructUpdate(Box::new(e), fs),
+    <e:Exp> "with" <fs:FexpList?> => Exp::StructUpdate(
+        Box::new(e),
+        fs.unwrap_or_default(),
+    ),
 }
 
 // `fexp_exp`.
@@ -906,36 +943,46 @@ Fexp: FieldExp = {
     },
 }
 
+// `fexp_list` (trailing comma allowed).
+// E4-strict (Lane 99): the old nullable list expanded to `(...)+`
+// intermediates (Rig 910:5-913:5). Use sites keep `?`, so `struct {}`
+// still parses (via `None`); accepted language unchanged.
 FexpList: Vec<FieldExp> = {
-    <mut v:(<Fexp> ",")*> <last:Fexp?> => {
-        if let Some(f) = last { v.push(f); }
+    <f:Fexp> => vec![f],
+    <f:Fexp> "," <fs:FexpList> => {
+        let mut v = vec![f];
+        v.extend(fs);
         v
     },
+    <f:Fexp> "," => vec![f],
 }
 
-// `vector_update`.
+// `vector_update`: the `VecUpdTail?` tail is three explicit arms
+// (Lane 99, Fix-8 shape) — the old tail left an empty production whose
+// reduce competed with the `=`/`..` shifts (Rig 918:5-926:5). Same three
+// combinations as before; accepted language unchanged.
 VecUpd: VectorUpdate = {
-    <a:AtomicExp> <t:VecUpdTail?> => match t {
-        Some(VecUpdTail::Eq(e)) => VectorUpdate::Single(Box::new(a), Box::new(e)),
-        Some(VecUpdTail::Range(lo, e)) =>
-            VectorUpdate::Range(Box::new(a), Box::new(lo), Box::new(e)),
-        None => VectorUpdate::Single(
-            Box::new(a.clone()),
-            Box::new(a),
-        ),
-    },
+    <a:AtomicExp> => VectorUpdate::Single(
+        Box::new(a.clone()),
+        Box::new(a),
+    ),
+    <a:AtomicExp> "=" <e:Exp> => VectorUpdate::Single(Box::new(a), Box::new(e)),
+    <a:AtomicExp> ".." <hi:AtomicExp> "=" <e:Exp> =>
+        VectorUpdate::Range(Box::new(a), Box::new(hi), Box::new(e)),
 }
 
-VecUpdTail: VecUpdTail = {
-    "=" <e:Exp> => VecUpdTail::Eq(e),
-    ".." <hi:AtomicExp> "=" <e:Exp> => VecUpdTail::Range(hi, e),
-}
-
+// `vector_update_list` (trailing comma allowed).
+// E4-strict (Lane 99): the old nullable list expanded to `(...)+`
+// intermediates (Rig 935:5-938:5). The `with` use site keeps `?`, so
+// `[e with ]` still parses (via `None`); accepted language unchanged.
 VecUpdList: Vec<VectorUpdate> = {
-    <mut v:(<VecUpd> ",")*> <last:VecUpd?> => {
-        if let Some(u) = last { v.push(u); }
+    <u:VecUpd> => vec![u],
+    <u:VecUpd> "," <us:VecUpdList> => {
+        let mut v = vec![u];
+        v.extend(us);
         v
     },
+    <u:VecUpd> "," => vec![u],
 }
 
 // ---------------------------------------------------------------------------
@@ -962,23 +1009,35 @@ AttrsTail: Vec<Attr> = {
 
 // `attribute_data`.
 AttrData: AttrData = {
-    "{" <kvs:AttrKVList> "}" => AttrData::Object(kvs),
+    "{" <kvs:AttrKVList?> "}" => AttrData::Object(kvs.unwrap_or_default()),
     <n:RawNum> => AttrData::Num(n),
     <s:RawStr> => AttrData::Str(s),
     <i:RawId> => AttrData::Str(i),
     "true" => AttrData::Bool(true),
     "false" => AttrData::Bool(false),
-    "[" <mut v:(<AttrData> ",")*> <last:AttrData?> "]" => {
-        if let Some(d) = last { v.push(d); }
-        AttrData::List(v)
+    "[" <ds:AttrDataList?> "]" => AttrData::List(ds.unwrap_or_default()),
+}
+
+// `attribute_data` list: E4-strict (Lane 99); the use site keeps `?`, so
+// `[]` still parses (via `None`); accepted language unchanged.
+AttrDataList: Vec<AttrData> = {
+    <d:AttrData> => vec![d],
+    <d:AttrData> "," <ds:AttrDataList> => {
+        let mut v = vec![d];
+        v.extend(ds);
+        v
     },
+    <d:AttrData> "," => vec![d],
 }
 
 AttrKVList: Vec<(String, AttrData)> = {
-    <mut v:(<AttrKV> ",")*> <last:AttrKV?> => {
-        if let Some(kv) = last { v.push(kv); }
+    <kv:AttrKV> => vec![kv],
+    <kv:AttrKV> "," <kvs:AttrKVList> => {
+        let mut v = vec![kv];
+        v.extend(kvs);
         v
     },
+    <kv:AttrKV> "," => vec![kv],
 }
 
 // `attribute_data_key_value`.
@@ -1066,24 +1125,44 @@ FunDefList: Vec<FunDef> = {
 // ---------------------------------------------------------------------------
 
 MPat: MPat = {
-    <a:AtomicMPat> <s:MPatSuffix?> => match s {
-        Some(MPatSuffix::Chain(ops)) => MPat::Infix(Box::new(a), ops),
-        Some(MPatSuffix::As(i)) => MPat::As(Box::new(a), i),
-        None => a,
+    <a:AtomicMPat> => a,
+    <a:AtomicMPat> <s:MPatSuffix> => match s {
+        MPatSuffix::Chain(ops) => MPat::Infix(Box::new(a), ops),
+        MPatSuffix::As(i) => MPat::As(Box::new(a), i),
     },
 }
 
 MPatSuffix: MPatSuffix = {
-    <ops:(<PatOp> <AtomicMPat>)+> => MPatSuffix::Chain(ops),
+    <ops:MPatOps> => MPatSuffix::Chain(ops),
     "as" <i:Ident> => MPatSuffix::As(i),
 }
 
-// `mpat_list` (trailing comma allowed).
-MPatList: Vec<MPat> = {
-    <mut v:(<MPat> ",")*> <last:MPat?> => {
-        if let Some(m) = last { v.push(m); }
+// Operator chain after a mapping-pattern head: E4-strict right-recursive
+// (Lane 99) instead of the `(<PatOp> <AtomicMPat>)+` macro chunk, whose
+// intermediates compete the same way as the reported `(...)+` list states.
+MPatOps: Vec<(PatOp, MPat)> = {
+    <o:PatOp> <m:AtomicMPat> => vec![(o, m)],
+    <o:PatOp> <m:AtomicMPat> <t:MPatOps> => {
+        let mut v = vec![(o, m)];
+        v.extend(t);
         v
     },
+}
+
+// `mpat_list` (trailing comma allowed).
+// E4-strict (Lane 99): the old nullable list expanded to `(...)+`
+// intermediates (Rig 1083:5-1086:5). The tuple use site below keeps
+// three explicit arms; `MPatIdTail` keeps its separate `"()"` arm, so
+// strictness additionally removes the old `()` double tree. Accepted
+// language unchanged.
+MPatList: Vec<MPat> = {
+    <m:MPat> => vec![m],
+    <m:MPat> "," <ms:MPatList> => {
+        let mut v = vec![m];
+        v.extend(ms);
+        v
+    },
+    <m:MPat> "," => vec![m],
 }
 
 AtomicMPat: MPat = {
@@ -1098,28 +1177,21 @@ AtomicMPat: MPat = {
 
 AtomicMPatBase: MPat = {
     <l:NegLit> => MPat::Lit(l),
-    <i:Ident> <t:MPatIdTail?> => match t {
-        Some(MPatIdTail::Call(args)) => MPat::App(i, args),
-        Some(MPatIdTail::Subrange(lo, hi)) => MPat::VectorSubrange(i, lo, hi),
-        None => MPat::Id(i),
+    <i:Ident> => MPat::Id(i),
+    <i:Ident> <t:MPatIdTail> => match t {
+        MPatIdTail::Call(args) => MPat::App(i, args),
+        MPatIdTail::Subrange(lo, hi) => MPat::VectorSubrange(i, lo, hi),
     },
-    "(" <m:MPat> <ts:("," <MPatList>)?> ")" => match ts {
-        Some(mut rest) => {
-            let mut v = vec![m];
-            v.append(&mut rest);
-            MPat::Tuple(v)
-        }
-        None => m,
+    "(" <m:MPat> ")" => m,
+    "(" <m:MPat> "," <ms:MPatList> ")" => {
+        let mut v = vec![m];
+        v.extend(ms);
+        MPat::Tuple(v)
     },
-    "[" <mut v:(<MPat> ",")*> <last:MPat?> "]" => {
-        if let Some(m) = last { v.push(m); }
-        MPat::Vector(v)
-    },
-    "[|" <mut v:(<MPat> ",")*> <last:MPat?> "|]" => {
-        if let Some(m) = last { v.push(m); }
-        MPat::List(v)
-    },
-    "struct" <i:Ident?> "{" <fs:FMPatList> "}" => MPat::Struct(i, fs),
+    "(" <m:MPat> "," ")" => MPat::Tuple(vec![m]),
+    "[" <ms:MPatList?> "]" => MPat::Vector(ms.unwrap_or_default()),
+    "[|" <ms:MPatList?> "|]" => MPat::List(ms.unwrap_or_default()),
+    "struct" <i:Ident?> "{" <fs:FMPatList?> "}" => MPat::Struct(i, fs.unwrap_or_default()),
 }
 
 MPatIdTail: MPatIdTail = {
@@ -1131,19 +1203,23 @@ MPatIdTail: MPatIdTail = {
     },
 }
 
-// `fmpat`.
+// `fmpat`: the `("=" <MPat>)?` tail is two explicit arms (Lane 99,
+// Fix-8 shape) — the old tail left an empty production whose reduce
+// competed with the `=` shift (Rig 1136:5-1139:5). Same accepted
+// language.
 FMPat: (String, MPat) = {
-    <i:Ident> <m:("=" <MPat>)?> => match m {
-        Some(pat) => (i, pat),
-        None => (i.clone(), MPat::Id(i)),
-    },
+    <i:Ident> => (i.clone(), MPat::Id(i)),
+    <i:Ident> "=" <m:MPat> => (i, m),
 }
 
 FMPatList: Vec<(String, MPat)> = {
-    <mut v:(<FMPat> ",")*> <last:FMPat?> => {
-        if let Some(f) = last { v.push(f); }
+    <f:FMPat> => vec![f],
+    <f:FMPat> "," <fs:FMPatList> => {
+        let mut v = vec![f];
+        v.extend(fs);
         v
     },
+    <f:FMPat> "," => vec![f],
 }
 
 // `mpexp`.
@@ -1170,19 +1246,26 @@ MapCl: MapCl = {
 }
 
 // `mapcl_list` (trailing comma allowed).
+// E4-strict (Lane 99, same shape as the other comma lists): the old
+// nullable list expanded to `(...)+` intermediates. The `mapping` use
+// site keeps `?`, so `= {}` still parses (via `None`); accepted language
+// unchanged.
 MapClList: Vec<MapCl> = {
-    <mut v:(<MapCl> ",")*> <last:MapCl?> => {
-        if let Some(m) = last { v.push(m); }
+    <m:MapCl> => vec![m],
+    <m:MapCl> "," <ms:MapClList> => {
+        let mut v = vec![m];
+        v.extend(ms);
         v
     },
+    <m:MapCl> "," => vec![m],
 }
 
 // `map_def`.
 MapDef: MapDef = {
-    "mapping" <i:Ident> <t:(":" <TypSchm>)?> "=" "{" <cs:MapClList> "}" => MapDef {
+    "mapping" <i:Ident> <t:(":" <TypSchm>)?> "=" "{" <cs:MapClList?> "}" => MapDef {
         name: i,
         typschm: t,
-        clauses: cs,
+        clauses: cs.unwrap_or_default(),
     },
 }
 
@@ -1192,8 +1275,8 @@ MapDef: MapDef = {
 
 // `typaram`.
 TyParam: TypQuant = {
-    "(" <ks:ParamKOptList> ")" <t:TyParamTail?> => TypQuant {
-        kopts: ks,
+    "(" <ks:ParamKOptList?> ")" <t:TyParamTail?> => TypQuant {
+        kopts: ks.unwrap_or_default(),
         constraint: t.map(Box::new),
     },
 }
@@ -1209,17 +1292,27 @@ ParamKOpt: KOpt = {
 }
 
 ParamKOptList: Vec<KOpt> = {
-    <mut v:(<ParamKOpt> ",")*> <last:ParamKOpt?> => {
-        if let Some(k) = last { v.push(k); }
+    <k:ParamKOpt> => vec![k],
+    <k:ParamKOpt> "," <ks:ParamKOptList> => {
+        let mut v = vec![k];
+        v.extend(ks);
         v
     },
+    <k:ParamKOpt> "," => vec![k],
 }
 
-// `unbracketed_typaram`.
+// `unbracketed_typaram`: the `("constraint" <Typ>)?` tail is two explicit
+// arms (Lane 99, Fix-8 shape) — the old tail left an empty production
+// whose reduce competed with the `constraint` shift
+// (Rig 1220:5-1223:5). Same accepted language.
 UnbracketedTyParam: TypQuant = {
-    <ks:ParamKOptList> <t:("constraint" <Typ>)?> => TypQuant {
+    <ks:ParamKOptList> => TypQuant {
         kopts: ks,
-        constraint: t.map(Box::new),
+        constraint: None,
+    },
+    <ks:ParamKOptList> "constraint" <t:Typ> => TypQuant {
+        kopts: ks,
+        constraint: Some(Box::new(t)),
     },
 }
 
@@ -1237,10 +1330,10 @@ TypeDef: TypeDef = {
         vec![u],
         true,
     ),
-    "union" <i:Ident> <p:TyParam?> "=" "{" <us:TypeUnions> "}" => TypeDef::Variant(
+    "union" <i:Ident> <p:TyParam?> "=" "{" <us:TypeUnions?> "}" => TypeDef::Variant(
         i,
         p.unwrap_or(TypQuant { kopts: vec![], constraint: None }),
-        us,
+        us.unwrap_or_default(),
         false,
     ),
     "bitfield" <i:Ident> ":" <t:Typ> "=" "{" <rs:RDefBody?> "}" => TypeDef::Bitfield(
@@ -1279,9 +1372,10 @@ AbstractInst: Vec<String> = {
 }
 
 ConfigKey: Vec<String> = {
-    <k:RawId> <mut ks:("." <RawId>)*> => {
+    <k:RawId> => vec![k],
+    <k:RawId> "." <ks:ConfigKey> => {
         let mut v = vec![k];
-        v.append(&mut ks);
+        v.extend(ks);
         v
     },
 }
@@ -1293,7 +1387,7 @@ EnumBody: (Vec<(String, Typ)>, Vec<(EnumMember, Option<Exp>)>) = {
         m.into_iter().map(|i| (EnumMember::Item(i), None)).collect(),
     ),
     "=" "{" <e:Enum?> "}" => (vec![], e.unwrap_or_default()),
-    "with" <f:EnumFns> "=" "{" <e:Enum?> "}" => (f, e.unwrap_or_default()),
+    "with" <f:EnumFns?> "=" "{" <e:Enum?> "}" => (f.unwrap_or_default(), e.unwrap_or_default()),
 }
 
 // `enum_bar`.
@@ -1311,10 +1405,13 @@ EnumFn: (String, Typ) = {
 }
 
 EnumFns: Vec<(String, Typ)> = {
-    <mut v:(<EnumFn> ",")*> <last:EnumFn?> => {
-        if let Some(f) = last { v.push(f); }
+    <f:EnumFn> => vec![f],
+    <f:EnumFn> "," <fs:EnumFns> => {
+        let mut v = vec![f];
+        v.extend(fs);
         v
     },
+    <f:EnumFn> "," => vec![f],
 }
 
 // `enum` member list (trailing comma allowed).
@@ -1376,10 +1473,13 @@ TypeUnion: TypeUnion = {
 }
 
 TypeUnions: Vec<TypeUnion> = {
-    <mut v:(<TypeUnion> ",")*> <last:TypeUnion?> => {
-        if let Some(u) = last { v.push(u); }
+    <u:TypeUnion> => vec![u],
+    <u:TypeUnion> "," <us:TypeUnions> => {
+        let mut v = vec![u];
+        v.extend(us);
         v
     },
+    <u:TypeUnion> "," => vec![u],
 }
 
 // `index_range`: the parenthesised arm `"(" IndexRange ")"` was removed
@@ -1475,10 +1575,20 @@ PureOpt: bool = {
 
 ExternBody: Vec<(String, String)> = {
     <s:RawStr> => vec![("_".to_string(), s)],
-    "{" <mut v:(<ExternBind> ",")*> <last:ExternBind?> "}" => {
-        if let Some(b) = last { v.push(b); }
+    "{" <bs:ExternBindList?> "}" => bs.unwrap_or_default(),
+}
+
+// `extern` bindings: E4-strict (Lane 99, same shape as the other comma
+// lists); the `"{" ... "}"` use site keeps `?`, so `{}` still parses
+// (via `None`); accepted language unchanged.
+ExternBindList: Vec<(String, String)> = {
+    <b:ExternBind> => vec![b],
+    <b:ExternBind> "," <bs:ExternBindList> => {
+        let mut v = vec![b];
+        v.extend(bs);
         v
     },
+    <b:ExternBind> "," => vec![b],
 }
 
 ExternBind: (String, String) = {
@@ -1499,17 +1609,30 @@ OutcomeTail: Vec<Def> = {
     "=" "{" <ds:Defs> "}" => ds,
 }
 
-// `register_def`.
+// `register_def`: the `("=" <Exp>)?` tails are explicit arms (Lane 99,
+// Fix-8 shape) — the old tails left empty productions whose reduces
+// competed with the `=` shift (Rig 1509:5-1513:5). Same combinations as
+// before; accepted language unchanged.
 RegDef: RegDef = {
-    "register" <i:Ident> ":" <t:Typ> <e:("=" <Exp>)?> => RegDef {
+    "register" <i:Ident> ":" <t:Typ> => RegDef {
         name: i,
         typ: t,
-        init: e,
+        init: None,
     },
-    "register" EffectSet EffectSet <i:Ident> ":" <t:Typ> <e:("=" <Exp>)?> => RegDef {
+    "register" <i:Ident> ":" <t:Typ> "=" <e:Exp> => RegDef {
         name: i,
         typ: t,
-        init: e,
+        init: Some(e),
+    },
+    "register" EffectSet EffectSet <i:Ident> ":" <t:Typ> => RegDef {
+        name: i,
+        typ: t,
+        init: None,
+    },
+    "register" EffectSet EffectSet <i:Ident> ":" <t:Typ> "=" <e:Exp> => RegDef {
+        name: i,
+        typ: t,
+        init: Some(e),
     },
     "register" "configuration" <i:Ident> ":" <t:Typ> "=" <e:Exp> => RegDef {
         name: i,
@@ -1557,10 +1680,13 @@ Subst: Subst = {
 }
 
 SubstList: Vec<Subst> = {
-    <mut v:(<Subst> ",")*> <last:Subst?> => {
-        if let Some(s) = last { v.push(s); }
+    <s:Subst> => vec![s],
+    <s:Subst> "," <ss:SubstList> => {
+        let mut v = vec![s];
+        v.extend(ss);
         v
     },
+    <s:Subst> "," => vec![s],
 }
 
 // `overload_def` body.
@@ -1615,8 +1741,8 @@ DefAux: DefAux = {
     <d:DefaultDef> => DefAux::Default(d),
     "mutual" "{" <fs:FunDefList> "}" => DefAux::MutRec(fs),
     <p:RawPragma> => DefAux::Pragma(Pragma::Line(p.0, p.1)),
-    <s:RawStructPragma> <kvs:AttrKVList> "}" =>
-        DefAux::Pragma(Pragma::Structured(s, kvs)),
+    <s:RawStructPragma> <kvs:AttrKVList?> "}" =>
+        DefAux::Pragma(Pragma::Structured(s, kvs.unwrap_or_default())),
     "termination_measure" <i:Ident> <p:Pat> "=" <e:Exp> =>
         DefAux::Measure(i, p, e),
     "termination_measure" <i:Ident> <ms:LoopMeasures> =>
