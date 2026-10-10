@@ -1,0 +1,10 @@
+[package]
+name = "sail-except"
+version = "0.1.0"
+edition = "2021"
+description = "Early-return/throw/try-catch/exit/assert mapping for the pure-Rust Sail compiler (Lane 28)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_except"
+path = "src/lib.rs"
