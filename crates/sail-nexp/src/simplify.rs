@@ -15,49 +15,83 @@
 //! defined one; under total environments evaluation is preserved
 //! exactly.
 
+use std::borrow::Cow;
+
 use crate::expr::{NConstraint, NExp};
 
 /// One rewrite pass over an [`NExp`].
 pub fn simplify(e: &NExp) -> NExp {
+    simplify_cow(e).into_owned()
+}
+
+/// One rewrite pass over an [`NExp`], borrowing `e` wherever the
+/// rewrite leaves the node untouched.
+///
+/// RAM diet (Lane 90): the old `simplify` rebuilt every node (fresh
+/// `Box`es, cloned leaves and payload strings) even when no rule fired.
+/// A `Borrowed` result allocates nothing — no `clone`, no fresh `Box`.
+/// Owned outputs are value-identical to [`simplify`]; identity rules
+/// (`x + 0 -> x`, `--y -> y`, …) return the already-simplified child
+/// directly instead of cloning it.
+pub fn simplify_cow(e: &NExp) -> Cow<'_, NExp> {
     match e {
-        NExp::Id(_) | NExp::Var(_) | NExp::Constant(_) => e.clone(),
-        NExp::App(f, args) => simplify_app(f, args),
+        NExp::Id(_) | NExp::Var(_) | NExp::Constant(_) => Cow::Borrowed(e),
+        NExp::App(f, args) => {
+            let simp: Vec<Cow<'_, NExp>> = args.iter().map(simplify_cow).collect();
+            if simp.iter().all(|c| matches!(c, Cow::Borrowed(_))) && !app_folds(f, args) {
+                Cow::Borrowed(e)
+            } else {
+                Cow::Owned(simplify_app(
+                    f,
+                    simp.into_iter().map(Cow::into_owned).collect(),
+                ))
+            }
+        }
         NExp::If(c, t, b) => {
-            let c = simplify_constraint(c);
-            let t = simplify(t);
-            let b = simplify(b);
-            match c {
-                NConstraint::True => t,
-                NConstraint::False => b,
-                _ if t == b => t,
-                _ => NExp::If(Box::new(c), Box::new(t), Box::new(b)),
+            let (cc, tc, bc) =
+                (simplify_constraint_cow(c), simplify_cow(t), simplify_cow(b));
+            let all_borrowed = matches!(cc, Cow::Borrowed(_))
+                && matches!(tc, Cow::Borrowed(_))
+                && matches!(bc, Cow::Borrowed(_));
+            if all_borrowed {
+                // Children untouched: only the `True`/`False`/dedup rules
+                // can still fire (checked on refs, no allocation).
+                let is_true = matches!(cc.as_ref(), NConstraint::True);
+                let is_false = matches!(cc.as_ref(), NConstraint::False);
+                let same = tc.as_ref() == bc.as_ref();
+                if is_true {
+                    tc
+                } else if is_false {
+                    bc
+                } else if same {
+                    tc
+                } else {
+                    Cow::Borrowed(e)
+                }
+            } else {
+                let (c, t, b) = (cc.into_owned(), tc.into_owned(), bc.into_owned());
+                Cow::Owned(match c {
+                    NConstraint::True => t,
+                    NConstraint::False => b,
+                    _ if t == b => t,
+                    _ => NExp::If(Box::new(c), Box::new(t), Box::new(b)),
+                })
             }
         }
         NExp::Times(a, b) => {
-            let (a, b) = (simplify(a), simplify(b));
-            times(a, b)
+            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            times_join(e, ra, rb)
         }
         NExp::Sum(a, b) => {
-            let (a, b) = (simplify(a), simplify(b));
-            sum(a, b)
+            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            sum_join(e, ra, rb)
         }
         NExp::Minus(a, b) => {
-            let (a, b) = (simplify(a), simplify(b));
-            minus(a, b)
+            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            minus_join(e, ra, rb)
         }
-        NExp::Exp(x) => {
-            let x = simplify(x);
-            match x {
-                NExp::Constant(0) => NExp::Constant(1),
-                NExp::Constant(e) if e < 0 => NExp::Exp(Box::new(NExp::Constant(e))),
-                NExp::Constant(e) if e < 127 => NExp::Constant(1i128 << (e as u32)),
-                _ => NExp::Exp(Box::new(x)),
-            }
-        }
-        NExp::Neg(x) => {
-            let x = simplify(x);
-            neg(x)
-        }
+        NExp::Exp(x) => exp_join(e, simplify_cow(x)),
+        NExp::Neg(x) => neg_join(e, simplify_cow(x)),
     }
 }
 
@@ -76,7 +110,10 @@ fn is_one(e: &NExp) -> bool {
     num(e) == Some(1)
 }
 
-fn sum(a: NExp, b: NExp) -> NExp {
+/// Owned `sum` kernel: the pre-Lane-90 `sum` body, verbatim in
+/// behaviour. Recursive compositions call the other `*_owned` kernels
+/// (all inputs here are already-owned, so moving is optimal).
+fn sum_owned(a: NExp, b: NExp) -> NExp {
     match (a, b) {
         (NExp::Constant(x), NExp::Constant(y)) => match x.checked_add(y) {
             Some(v) => NExp::Constant(v),
@@ -86,15 +123,56 @@ fn sum(a: NExp, b: NExp) -> NExp {
         (x, y) if is_zero(&y) => x,
         // -(a) + -(b) -> -(a + b) (kept as one negation for canonicity:
         // both operand orders reach the same term).
-        (NExp::Neg(x), NExp::Neg(y)) => neg(sum(*x, *y)),
+        (NExp::Neg(x), NExp::Neg(y)) => neg_owned(sum_owned(*x, *y)),
         // x + (-y) -> x - y, in either operand order.
-        (x, NExp::Neg(y)) => minus(x, *y),
-        (NExp::Neg(x), y) => minus(y, *x),
+        (x, NExp::Neg(y)) => minus_owned(x, *y),
+        (NExp::Neg(x), y) => minus_owned(y, *x),
         (x, y) => NExp::Sum(Box::new(x), Box::new(y)),
     }
 }
 
-fn minus(a: NExp, b: NExp) -> NExp {
+/// Join already-simplified `sum` children with the [`sum_owned`] rules.
+///
+/// Single home of the fold conditions: identity arms return the child
+/// [`Cow`] directly (no clone either way); a node whose children are
+/// all borrowed and which no rule fires on is borrowed as a whole.
+/// Anything else delegates to [`sum_owned`] on materialized children,
+/// so values always equal the old `simplify`.
+fn sum_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a, NExp> {
+    // Identities first: order-independent and value-safe against every
+    // `sum_owned` arm (`0 + 0` reaches `0` either way).
+    let take_b = is_zero(a.as_ref());
+    let take_a = is_zero(b.as_ref());
+    // Coarse fold test: a superset of the `sum_owned` folding arms
+    // (`(Const, Const)`, `(Neg, Neg)`, `(x, -y)`, `(-x, y)`). Saying
+    // `true` too often only costs a rebuild, never a wrong value;
+    // saying `false` here means `sum_owned` would rebuild identically.
+    let folds = matches!(
+        (a.as_ref(), b.as_ref()),
+        (NExp::Constant(_), NExp::Constant(_))
+            | (NExp::Neg(_), NExp::Neg(_))
+            | (_, NExp::Neg(_))
+            | (NExp::Neg(_), _)
+    );
+    let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
+    if take_b {
+        return b;
+    }
+    if take_a {
+        return a;
+    }
+    if !folds {
+        return if unchanged {
+            Cow::Borrowed(orig)
+        } else {
+            Cow::Owned(NExp::Sum(Box::new(a.into_owned()), Box::new(b.into_owned())))
+        };
+    }
+    Cow::Owned(sum_owned(a.into_owned(), b.into_owned()))
+}
+
+/// Owned `minus` kernel: the pre-Lane-90 `minus` body, verbatim in behaviour.
+fn minus_owned(a: NExp, b: NExp) -> NExp {
     if a == b {
         return NExp::Constant(0);
     }
@@ -104,7 +182,7 @@ fn minus(a: NExp, b: NExp) -> NExp {
             None => NExp::Minus(Box::new(NExp::Constant(x)), Box::new(NExp::Constant(y))),
         },
         (x, y) if is_zero(&y) => x,
-        (x, y) if is_zero(&x) => neg(y),
+        (x, y) if is_zero(&x) => neg_owned(y),
         // (x + c1) - c2 -> x + (c1 - c2)
         (NExp::Sum(x, c1), NExp::Constant(c2)) if matches!(*c1, NExp::Constant(_)) => {
             let NExp::Constant(c1v) = *c1 else {
@@ -112,7 +190,7 @@ fn minus(a: NExp, b: NExp) -> NExp {
             };
             match c1v.checked_sub(c2) {
                 Some(0) => *x,
-                Some(v) => sum(*x, NExp::Constant(v)),
+                Some(v) => sum_owned(*x, NExp::Constant(v)),
                 None => NExp::Minus(
                     Box::new(NExp::Sum(Box::new(*x), Box::new(NExp::Constant(c1v)))),
                     Box::new(NExp::Constant(c2)),
@@ -123,7 +201,38 @@ fn minus(a: NExp, b: NExp) -> NExp {
     }
 }
 
-fn times(a: NExp, b: NExp) -> NExp {
+/// Join already-simplified `minus` children (see [`sum_join`]).
+fn minus_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a, NExp> {
+    // `x - 0 -> x` returns the child directly.
+    let take_a = is_zero(b.as_ref());
+    // `a - a -> 0` fires on refs (covers the kernel's early return,
+    // including the all-constant case, with identical values).
+    let same = a.as_ref() == b.as_ref();
+    let folds = match (a.as_ref(), b.as_ref()) {
+        (NExp::Constant(_), NExp::Constant(_)) => true,
+        (NExp::Sum(_, c1), NExp::Constant(_)) => matches!(&**c1, NExp::Constant(_)),
+        _ if is_zero(a.as_ref()) => true,
+        _ => false,
+    };
+    let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
+    if take_a {
+        return a;
+    }
+    if same {
+        return Cow::Owned(NExp::Constant(0));
+    }
+    if !folds {
+        return if unchanged {
+            Cow::Borrowed(orig)
+        } else {
+            Cow::Owned(NExp::Minus(Box::new(a.into_owned()), Box::new(b.into_owned())))
+        };
+    }
+    Cow::Owned(minus_owned(a.into_owned(), b.into_owned()))
+}
+
+/// Owned `times` kernel: the pre-Lane-90 `times` body, verbatim in behaviour.
+fn times_owned(a: NExp, b: NExp) -> NExp {
     match (a, b) {
         (NExp::Constant(x), NExp::Constant(y)) => match x.checked_mul(y) {
             Some(v) => NExp::Constant(v),
@@ -133,14 +242,49 @@ fn times(a: NExp, b: NExp) -> NExp {
         (x, y) if is_one(&x) => y,
         (x, y) if is_one(&y) => x,
         // (-1) * x -> -x
-        (NExp::Constant(-1), x) | (x, NExp::Constant(-1)) => neg(x),
+        (NExp::Constant(-1), x) | (x, NExp::Constant(-1)) => neg_owned(x),
         // (-a) * (-b) -> a * b
-        (NExp::Neg(a), NExp::Neg(b)) => times(*a, *b),
+        (NExp::Neg(a), NExp::Neg(b)) => times_owned(*a, *b),
         (x, y) => NExp::Times(Box::new(x), Box::new(y)),
     }
 }
 
-fn neg(x: NExp) -> NExp {
+/// Join already-simplified `times` children (see [`sum_join`]).
+fn times_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a, NExp> {
+    // `1 * y -> y`, `x * 1 -> x`: order-independent, value-safe against
+    // every `times_owned` arm (`1 * 1` reaches `1` either way).
+    let take_b = is_one(a.as_ref());
+    let take_a = is_one(b.as_ref());
+    let zero = is_zero(a.as_ref()) || is_zero(b.as_ref());
+    let folds = matches!(
+        (a.as_ref(), b.as_ref()),
+        (NExp::Constant(_), NExp::Constant(_))
+            | (NExp::Constant(-1), _)
+            | (_, NExp::Constant(-1))
+            | (NExp::Neg(_), NExp::Neg(_))
+    );
+    let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
+    if take_b {
+        return b;
+    }
+    if take_a {
+        return a;
+    }
+    if zero {
+        return Cow::Owned(NExp::Constant(0));
+    }
+    if !folds {
+        return if unchanged {
+            Cow::Borrowed(orig)
+        } else {
+            Cow::Owned(NExp::Times(Box::new(a.into_owned()), Box::new(b.into_owned())))
+        };
+    }
+    Cow::Owned(times_owned(a.into_owned(), b.into_owned()))
+}
+
+/// Owned `neg` kernel: the pre-Lane-90 `neg` body, verbatim in behaviour.
+fn neg_owned(x: NExp) -> NExp {
     match x {
         NExp::Constant(v) => match v.checked_neg() {
             Some(w) => NExp::Constant(w),
@@ -148,50 +292,151 @@ fn neg(x: NExp) -> NExp {
         },
         NExp::Neg(y) => *y,
         // -(a - b) -> b - a
-        NExp::Minus(a, b) => minus(*b, *a),
+        NExp::Minus(a, b) => minus_owned(*b, *a),
         y => NExp::Neg(Box::new(y)),
     }
 }
 
-fn simplify_app(f: &str, args: &[NExp]) -> NExp {
-    let args: Vec<NExp> = args.iter().map(simplify).collect();
-    match (f, args.as_slice()) {
-        ("div", [a, b]) => match (num(a), num(b)) {
-            (_, Some(0)) => NExp::div(a.clone(), b.clone()),
-            (Some(x), Some(y)) => match x.checked_div(y) {
-                Some(v) => NExp::Constant(v),
-                None => NExp::div(NExp::Constant(x), NExp::Constant(y)),
+/// Join an already-simplified `neg` child (see [`sum_join`]).
+///
+/// `--y -> y` borrows the inner node when it is borrowed: no clone, no
+/// box. Folds that need owned values materialize this node only (one
+/// clone); the old code rebuilt the whole spine instead.
+fn neg_join<'a>(orig: &'a NExp, x: Cow<'a, NExp>) -> Cow<'a, NExp> {
+    match x {
+        Cow::Borrowed(xr) => match xr {
+            NExp::Neg(y) => Cow::Borrowed(y),
+            NExp::Constant(v) => match v.checked_neg() {
+                Some(w) => Cow::Owned(NExp::Constant(w)),
+                // Rebuild would equal `orig`.
+                None => Cow::Borrowed(orig),
             },
-            _ if is_one(b) => a.clone(),
-            // `0 div d -> 0` only for known non-zero `d` (`0 div 0`
-            // is undefined and must stay unfolded).
-            _ if is_zero(a) && matches!(num(b), Some(d) if d != 0) => NExp::Constant(0),
-            _ => NExp::div(a.clone(), b.clone()),
+            // `-(a - b) -> b - a` needs owned values.
+            NExp::Minus(_, _) => Cow::Owned(neg_owned(xr.clone())),
+            _ => Cow::Borrowed(orig),
         },
-        ("mod", [a, b]) => match (num(a), num(b)) {
-            (_, Some(0)) => NExp::modulo(a.clone(), b.clone()),
-            (Some(x), Some(y)) => match x.checked_rem(y) {
-                Some(v) => NExp::Constant(v),
-                None => NExp::modulo(NExp::Constant(x), NExp::Constant(y)),
-            },
-            _ if is_one(b) => NExp::Constant(0),
-            _ if is_zero(a) && matches!(num(b), Some(d) if d != 0) => NExp::Constant(0),
-            _ => NExp::modulo(a.clone(), b.clone()),
+        Cow::Owned(xo) => Cow::Owned(neg_owned(xo)),
+    }
+}
+
+/// Join an already-simplified `exp` child (see [`sum_join`]).
+fn exp_join<'a>(orig: &'a NExp, x: Cow<'a, NExp>) -> Cow<'a, NExp> {
+    match x {
+        Cow::Borrowed(xr) => match xr {
+            NExp::Constant(0) => Cow::Owned(NExp::Constant(1)),
+            // `2^e` for `e < 0` rebuilds to `orig`.
+            NExp::Constant(e) if *e < 0 => Cow::Borrowed(orig),
+            NExp::Constant(e) if *e < 127 => Cow::Owned(NExp::Constant(1i128 << (*e as u32))),
+            _ => Cow::Borrowed(orig),
         },
-        ("abs", [a]) => match num(a) {
-            Some(v) => match v.checked_abs() {
-                Some(w) => NExp::Constant(w),
-                None => NExp::abs(NExp::Constant(v)),
+        Cow::Owned(xo) => Cow::Owned(match xo {
+            NExp::Constant(0) => NExp::Constant(1),
+            NExp::Constant(e) if e < 0 => NExp::Exp(Box::new(NExp::Constant(e))),
+            NExp::Constant(e) if e < 127 => NExp::Constant(1i128 << (e as u32)),
+            x => NExp::Exp(Box::new(x)),
+        }),
+    }
+}
+
+/// Whether [`simplify_app`] would return anything other than a
+/// rebuild of `args` (a fold or an identity returning a child).
+///
+/// Checked on refs so [`simplify_cow`] can borrow `App` nodes no rule
+/// fires on. The conditions mirror the [`simplify_app`] arms exactly
+/// (including which arms rebuild identically); a wrong `true` only
+/// costs a rebuild, never a wrong value.
+fn app_folds(f: &str, args: &[NExp]) -> bool {
+    match f {
+        "div" => match args {
+            [a, b] => match (num(a), num(b)) {
+                // `(_, Some(0))` rebuilds identically; `(Some, Some)` folds
+                // unless checked division fails (rebuilds identically).
+                (Some(x), Some(y)) => x.checked_div(y).is_some(),
+                _ => is_one(b) || (is_zero(a) && matches!(num(b), Some(d) if d != 0)),
             },
-            None => match a {
-                // abs is idempotent on applications of abs and on 2^x.
-                NExp::App(g, inner) if g == "abs" => {
-                    NExp::abs(inner.first().cloned().unwrap_or(NExp::Constant(0)))
+            // Wrong arity rebuilds identically.
+            _ => false,
+        },
+        "mod" => match args {
+            [a, b] => match (num(a), num(b)) {
+                (Some(x), Some(y)) => x.checked_rem(y).is_some(),
+                _ => is_one(b) || (is_zero(a) && matches!(num(b), Some(d) if d != 0)),
+            },
+            _ => false,
+        },
+        "abs" => match args {
+            [a] => match num(a) {
+                // `checked_abs` fails only for `i128::MIN` (rebuilds).
+                Some(v) => v.checked_abs().is_some(),
+                // Nested `abs` unwraps one level, `2^x` is returned as-is;
+                // anything else rebuilds identically.
+                None => {
+                    matches!(a, NExp::App(g, _) if g.as_str() == "abs")
+                        || matches!(a, NExp::Exp(_))
                 }
-                NExp::Exp(_) => a.clone(),
-                NExp::Constant(_) => unreachable!(),
-                _ => NExp::abs(a.clone()),
             },
+            _ => false,
+        },
+        // Uninterpreted functions only simplify their arguments.
+        _ => false,
+    }
+}
+
+/// Owned `App` kernel: the pre-Lane-90 `simplify_app` body, verbatim in
+/// behaviour, but taking already-simplified owned arguments by value so
+/// every rebuild *moves* (the old `&[NExp]` version cloned `a`/`b`/the
+/// fallback `args` vec on every path).
+fn simplify_app(f: &str, args: Vec<NExp>) -> NExp {
+    match f {
+        "div" => match <[NExp; 2]>::try_from(args) {
+            Ok([a, b]) => match (num(&a), num(&b)) {
+                (_, Some(0)) => NExp::div(a, b),
+                (Some(x), Some(y)) => match x.checked_div(y) {
+                    Some(v) => NExp::Constant(v),
+                    None => NExp::div(NExp::Constant(x), NExp::Constant(y)),
+                },
+                _ if is_one(&b) => a,
+                // `0 div d -> 0` only for known non-zero `d` (`0 div 0`
+                // is undefined and must stay unfolded).
+                _ if is_zero(&a) && matches!(num(&b), Some(d) if d != 0) => {
+                    NExp::Constant(0)
+                }
+                _ => NExp::div(a, b),
+            },
+            Err(args) => NExp::App(f.to_string(), args),
+        },
+        "mod" => match <[NExp; 2]>::try_from(args) {
+            Ok([a, b]) => match (num(&a), num(&b)) {
+                (_, Some(0)) => NExp::modulo(a, b),
+                (Some(x), Some(y)) => match x.checked_rem(y) {
+                    Some(v) => NExp::Constant(v),
+                    None => NExp::modulo(NExp::Constant(x), NExp::Constant(y)),
+                },
+                _ if is_one(&b) => NExp::Constant(0),
+                _ if is_zero(&a) && matches!(num(&b), Some(d) if d != 0) => {
+                    NExp::Constant(0)
+                }
+                _ => NExp::modulo(a, b),
+            },
+            Err(args) => NExp::App(f.to_string(), args),
+        },
+        "abs" => match <[NExp; 1]>::try_from(args) {
+            Ok([a]) => match num(&a) {
+                Some(v) => match v.checked_abs() {
+                    Some(w) => NExp::Constant(w),
+                    None => NExp::abs(NExp::Constant(v)),
+                },
+                None => match a {
+                    // abs is idempotent on applications of abs and on 2^x.
+                    NExp::App(g, inner) if g == "abs" => {
+                        NExp::abs(inner.into_iter().next().unwrap_or(NExp::Constant(0)))
+                    }
+                    NExp::Exp(_) => a,
+                    NExp::Constant(_) => unreachable!(),
+                    _ => NExp::abs(a),
+                },
+            },
+            Err(args) => NExp::App(f.to_string(), args),
         },
         _ => NExp::App(f.to_string(), args),
     }
@@ -199,128 +444,294 @@ fn simplify_app(f: &str, args: &[NExp]) -> NExp {
 
 /// One rewrite pass over an [`NConstraint`].
 pub fn simplify_constraint(c: &NConstraint) -> NConstraint {
+    simplify_constraint_cow(c).into_owned()
+}
+
+/// One rewrite pass over an [`NConstraint`], borrowing `c` wherever the
+/// rewrite leaves the node untouched (see [`simplify_cow`]).
+///
+/// Owned outputs are value-identical to [`simplify_constraint`].
+pub fn simplify_constraint_cow(c: &NConstraint) -> Cow<'_, NConstraint> {
     match c {
         NConstraint::True | NConstraint::False | NConstraint::Id(_) | NConstraint::Var(_) => {
-            c.clone()
+            Cow::Borrowed(c)
         }
         NConstraint::Equal(a, b) => {
-            let (a, b) = (simplify(a), simplify(b));
-            if a == b {
-                NConstraint::True
-            } else if let (Some(x), Some(y)) = (num(&a), num(&b)) {
-                if x == y {
-                    NConstraint::True
-                } else {
-                    NConstraint::False
-                }
-            } else {
-                NConstraint::Equal(Box::new(a), Box::new(b))
-            }
+            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            eq_join(c, ra, rb, NConstraint::Equal, true)
         }
         NConstraint::NotEqual(a, b) => {
-            let (a, b) = (simplify(a), simplify(b));
-            if a == b {
-                NConstraint::False
-            } else if let (Some(x), Some(y)) = (num(&a), num(&b)) {
-                if x != y {
-                    NConstraint::True
-                } else {
-                    NConstraint::False
-                }
-            } else {
-                NConstraint::NotEqual(Box::new(a), Box::new(b))
-            }
+            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            eq_join(c, ra, rb, NConstraint::NotEqual, false)
         }
-        NConstraint::Ge(a, b) => simplify_cmp(a, b, |x, y| x >= y, NConstraint::Ge),
-        NConstraint::Gt(a, b) => simplify_cmp(a, b, |x, y| x > y, NConstraint::Gt),
-        NConstraint::Le(a, b) => simplify_cmp(a, b, |x, y| x <= y, NConstraint::Le),
-        NConstraint::Lt(a, b) => simplify_cmp(a, b, |x, y| x < y, NConstraint::Lt),
+        NConstraint::Ge(a, b) => {
+            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            cmp_join(c, ra, rb, |x, y| x >= y, NConstraint::Ge)
+        }
+        NConstraint::Gt(a, b) => {
+            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            cmp_join(c, ra, rb, |x, y| x > y, NConstraint::Gt)
+        }
+        NConstraint::Le(a, b) => {
+            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            cmp_join(c, ra, rb, |x, y| x <= y, NConstraint::Le)
+        }
+        NConstraint::Lt(a, b) => {
+            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            cmp_join(c, ra, rb, |x, y| x < y, NConstraint::Lt)
+        }
         NConstraint::Set(n, vs) => {
-            let n = simplify(n);
-            if let Some(v) = num(&n) {
-                if vs.contains(&v) {
+            let rn = simplify_cow(n);
+            if let Some(v) = num(rn.as_ref()) {
+                return Cow::Owned(if vs.contains(&v) {
                     NConstraint::True
                 } else {
                     NConstraint::False
-                }
-            } else if vs.is_empty() {
-                NConstraint::False
+                });
+            }
+            if vs.is_empty() {
+                return Cow::Owned(NConstraint::False);
+            }
+            if matches!(rn, Cow::Borrowed(_)) && is_sorted_dedup(vs) {
+                // Unchanged child and an already-canonical set: also spares
+                // the `vs.clone()` the old pass did unconditionally.
+                Cow::Borrowed(c)
             } else {
                 let mut sorted = vs.clone();
                 sorted.sort();
                 sorted.dedup();
-                NConstraint::Set(Box::new(n), sorted)
+                Cow::Owned(NConstraint::Set(Box::new(rn.into_owned()), sorted))
             }
         }
         NConstraint::App(f, args) => {
             // Uninterpreted: only simplify the arguments, never fold.
-            NConstraint::App(f.clone(), args.iter().map(simplify).collect())
+            let simp: Vec<Cow<'_, NExp>> = args.iter().map(simplify_cow).collect();
+            if simp.iter().all(|x| matches!(x, Cow::Borrowed(_))) {
+                Cow::Borrowed(c)
+            } else {
+                Cow::Owned(NConstraint::App(
+                    f.clone(),
+                    simp.into_iter().map(Cow::into_owned).collect(),
+                ))
+            }
         }
         NConstraint::And(a, b) => {
-            let (a, b) = (simplify_constraint(a), simplify_constraint(b));
-            match (a, b) {
-                (NConstraint::False, _) | (_, NConstraint::False) => NConstraint::False,
-                (NConstraint::True, x) | (x, NConstraint::True) => x,
-                (x, y) if x == y => x,
-                (x, y) => NConstraint::And(Box::new(x), Box::new(y)),
-            }
+            let (ra, rb) = (simplify_constraint_cow(a), simplify_constraint_cow(b));
+            and_join(c, ra, rb)
         }
         NConstraint::Or(a, b) => {
-            let (a, b) = (simplify_constraint(a), simplify_constraint(b));
-            match (a, b) {
-                (NConstraint::True, _) | (_, NConstraint::True) => NConstraint::True,
-                (NConstraint::False, x) | (x, NConstraint::False) => x,
-                (x, y) if x == y => x,
-                (x, y) => NConstraint::Or(Box::new(x), Box::new(y)),
-            }
+            let (ra, rb) = (simplify_constraint_cow(a), simplify_constraint_cow(b));
+            or_join(c, ra, rb)
         }
         NConstraint::Not(x) => {
-            let x = simplify_constraint(x);
-            match x {
-                NConstraint::True => NConstraint::False,
-                NConstraint::False => NConstraint::True,
-                NConstraint::Not(y) => *y,
-                y => NConstraint::Not(Box::new(y)),
+            let rx = simplify_constraint_cow(x);
+            match rx {
+                Cow::Borrowed(xr) => match xr {
+                    NConstraint::True => Cow::Owned(NConstraint::False),
+                    NConstraint::False => Cow::Owned(NConstraint::True),
+                    // `!!y -> y` borrows the inner node.
+                    NConstraint::Not(y) => Cow::Borrowed(y),
+                    _ => Cow::Borrowed(c),
+                },
+                Cow::Owned(xo) => Cow::Owned(match xo {
+                    NConstraint::True => NConstraint::False,
+                    NConstraint::False => NConstraint::True,
+                    NConstraint::Not(y) => *y,
+                    y => NConstraint::Not(Box::new(y)),
+                }),
             }
         }
     }
 }
 
-fn simplify_cmp(
-    a: &NExp,
-    b: &NExp,
+/// Whether `vs` is already sorted and deduplicated (strictly
+/// increasing), i.e. the `Set` canonical form needs no rebuild.
+fn is_sorted_dedup(vs: &[i128]) -> bool {
+    vs.windows(2).all(|w| w[0] < w[1])
+}
+
+/// Join already-simplified `Equal`/`NotEqual` children.
+///
+/// `is_equal` selects the polarity (`true` for `Equal`, `false` for
+/// `NotEqual`); the decisions mirror the pre-Lane-90 arms verbatim
+/// (`a == b` first, then the numeric fold).
+fn eq_join<'a>(
+    orig: &'a NConstraint,
+    a: Cow<'a, NExp>,
+    b: Cow<'a, NExp>,
+    rebuild: fn(Box<NExp>, Box<NExp>) -> NConstraint,
+    is_equal: bool,
+) -> Cow<'a, NConstraint> {
+    // `a == b` was checked before the numeric fold in the old arms.
+    let provably_same = a.as_ref() == b.as_ref();
+    let nums = match (num(a.as_ref()), num(b.as_ref())) {
+        (Some(x), Some(y)) => Some(x == y),
+        _ => None,
+    };
+    let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
+    if provably_same {
+        return Cow::Owned(if is_equal {
+            NConstraint::True
+        } else {
+            NConstraint::False
+        });
+    }
+    if let Some(are_equal) = nums {
+        return Cow::Owned(if are_equal == is_equal {
+            NConstraint::True
+        } else {
+            NConstraint::False
+        });
+    }
+    if unchanged {
+        Cow::Borrowed(orig)
+    } else {
+        Cow::Owned(rebuild(Box::new(a.into_owned()), Box::new(b.into_owned())))
+    }
+}
+
+/// Owned `And` kernel: the pre-Lane-90 `And` arm, verbatim in behaviour.
+fn and_owned(a: NConstraint, b: NConstraint) -> NConstraint {
+    match (a, b) {
+        (NConstraint::False, _) | (_, NConstraint::False) => NConstraint::False,
+        (NConstraint::True, x) | (x, NConstraint::True) => x,
+        (x, y) if x == y => x,
+        (x, y) => NConstraint::And(Box::new(x), Box::new(y)),
+    }
+}
+
+/// Join already-simplified `And` children.
+///
+/// The `True`/`False`/dedup identities return the surviving child
+/// [`Cow`] directly (no clone either way); an untouched node is
+/// borrowed; anything else delegates to [`and_owned`].
+fn and_join<'a>(
+    orig: &'a NConstraint,
+    a: Cow<'a, NConstraint>,
+    b: Cow<'a, NConstraint>,
+) -> Cow<'a, NConstraint> {
+    // Decided on refs first so the moves below never overlap a borrow.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Pick {
+        A,
+        B,
+        Rebuild,
+    }
+    let pick = match (a.as_ref(), b.as_ref()) {
+        (NConstraint::False, _) | (_, NConstraint::True) => Pick::A,
+        (_, NConstraint::False) | (NConstraint::True, _) => Pick::B,
+        (x, y) if x == y => Pick::A,
+        _ => Pick::Rebuild,
+    };
+    match pick {
+        Pick::A => a,
+        Pick::B => b,
+        Pick::Rebuild => {
+            if matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_)) {
+                Cow::Borrowed(orig)
+            } else {
+                Cow::Owned(and_owned(a.into_owned(), b.into_owned()))
+            }
+        }
+    }
+}
+
+/// Owned `Or` kernel: the pre-Lane-90 `Or` arm, verbatim in behaviour.
+fn or_owned(a: NConstraint, b: NConstraint) -> NConstraint {
+    match (a, b) {
+        (NConstraint::True, _) | (_, NConstraint::True) => NConstraint::True,
+        (NConstraint::False, x) | (x, NConstraint::False) => x,
+        (x, y) if x == y => x,
+        (x, y) => NConstraint::Or(Box::new(x), Box::new(y)),
+    }
+}
+
+/// Join already-simplified `Or` children (see [`and_join`]).
+fn or_join<'a>(
+    orig: &'a NConstraint,
+    a: Cow<'a, NConstraint>,
+    b: Cow<'a, NConstraint>,
+) -> Cow<'a, NConstraint> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Pick {
+        A,
+        B,
+        Rebuild,
+    }
+    let pick = match (a.as_ref(), b.as_ref()) {
+        (NConstraint::True, _) | (_, NConstraint::False) => Pick::A,
+        (_, NConstraint::True) | (NConstraint::False, _) => Pick::B,
+        (x, y) if x == y => Pick::A,
+        _ => Pick::Rebuild,
+    };
+    match pick {
+        Pick::A => a,
+        Pick::B => b,
+        Pick::Rebuild => {
+            if matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_)) {
+                Cow::Borrowed(orig)
+            } else {
+                Cow::Owned(or_owned(a.into_owned(), b.into_owned()))
+            }
+        }
+    }
+}
+
+/// Join already-simplified comparison children.
+///
+/// Replaces the pre-Lane-90 `simplify_cmp` (same decisions, same odd
+/// `a == b` rule: constant for every operator, `True` iff `decide` is
+/// reflexive). An untouched node is borrowed instead of rebuilt.
+fn cmp_join<'a>(
+    orig: &'a NConstraint,
+    a: Cow<'a, NExp>,
+    b: Cow<'a, NExp>,
     decide: impl Fn(i128, i128) -> bool,
     rebuild: fn(Box<NExp>, Box<NExp>) -> NConstraint,
-) -> NConstraint {
-    let (a, b) = (simplify(a), simplify(b));
-    if a == b {
-        // a `cmp` a is constant for every comparison operator.
-        let one = NExp::Constant(1);
-        let zero = NExp::Constant(0);
-        return if decide(1, 1) && decide(0, 0) {
+) -> Cow<'a, NConstraint> {
+    // `a == b` was checked before the numeric fold in the old body.
+    let provably_same = a.as_ref() == b.as_ref();
+    let decided = match (num(a.as_ref()), num(b.as_ref())) {
+        (Some(x), Some(y)) => Some(decide(x, y)),
+        _ => None,
+    };
+    let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
+    if provably_same {
+        // A `cmp` of a value with itself is constant for every
+        // comparison operator (mirrors the old body exactly).
+        return Cow::Owned(if decide(1, 1) && decide(0, 0) {
             NConstraint::True
         } else {
-            let _ = (one, zero);
             NConstraint::False
-        };
+        });
     }
-    if let (Some(x), Some(y)) = (num(&a), num(&b)) {
-        if decide(x, y) {
+    if let Some(v) = decided {
+        return Cow::Owned(if v {
             NConstraint::True
         } else {
             NConstraint::False
-        }
+        });
+    }
+    if unchanged {
+        Cow::Borrowed(orig)
     } else {
-        rebuild(Box::new(a), Box::new(b))
+        Cow::Owned(rebuild(Box::new(a.into_owned()), Box::new(b.into_owned())))
     }
 }
 
 /// Iterate [`simplify`] to a fixpoint (at most 64 rounds) and sort the
 /// operands of `Sum`/`Times` into a canonical order.
+///
+/// The loop shape (seed, 64-round cap, fixpoint comparison) is exactly
+/// the pre-Lane-90 one; only each round's two passes run through the
+/// borrowing [`simplify_cow`]/[`canonical_cow`] variants, so unchanged
+/// regions cross a round with one shared borrow instead of two full
+/// rebuilds.
 pub fn normalize(e: &NExp) -> NExp {
     let mut cur = e.clone();
     for _ in 0..64 {
-        let next = canonical(&simplify(&cur));
+        let simp = simplify_cow(&cur);
+        let next = canonical_cow(simp.as_ref()).into_owned();
         if next == cur {
             return next;
         }
@@ -333,10 +744,14 @@ pub fn normalize(e: &NExp) -> NExp {
 /// `And`/`Or` are additionally flattened and sorted (like `Sum`/`Times`
 /// in [`normalize`); embedded [`NExp`]s are [`normalize`]d, so results
 /// are canonical up to operand order of distinct atoms.
+///
+/// Same loop-shape guarantee as [`normalize`]: only the per-round
+/// constraint pass borrows via [`simplify_constraint_cow`].
 pub fn normalize_constraint(c: &NConstraint) -> NConstraint {
     let mut cur = c.clone();
     for _ in 0..64 {
-        let next = canonical_constraint(&simplify_constraint(&cur));
+        let simp = simplify_constraint_cow(&cur);
+        let next = canonical_constraint(simp.as_ref());
         if next == cur {
             return next;
         }
@@ -430,33 +845,92 @@ fn rebuild_or(mut parts: Vec<NConstraint>) -> NConstraint {
 }
 
 /// Flatten nested `Sum`/`Times` and sort operands canonically.
-fn canonical(e: &NExp) -> NExp {
+///
+/// `Sum`/`Times` nodes always rebuild: flattening re-nests the spine
+/// (left-nested), so borrowing the input could return a different shape
+/// than the old pass even for sorted leaves. All other nodes borrow
+/// when their children are untouched; owned outputs are value-identical
+/// to the pre-Lane-90 `canonical`.
+fn canonical_cow(e: &NExp) -> Cow<'_, NExp> {
     match e {
-        NExp::Sum(_, _) => {
-            let mut terms = Vec::new();
-            flatten_sum(e, &mut terms);
-            let mut terms: Vec<NExp> = terms.into_iter().map(|t| canonical(&t)).collect();
-            terms.sort();
-            rebuild_sum(terms)
+        NExp::Sum(_, _) => Cow::Owned(canonical_sum(e)),
+        NExp::Times(_, _) => Cow::Owned(canonical_times(e)),
+        NExp::Minus(a, b) => {
+            let (ra, rb) = (canonical_cow(a), canonical_cow(b));
+            if matches!(ra, Cow::Borrowed(_)) && matches!(rb, Cow::Borrowed(_)) {
+                Cow::Borrowed(e)
+            } else {
+                Cow::Owned(NExp::Minus(Box::new(ra.into_owned()), Box::new(rb.into_owned())))
+            }
         }
-        NExp::Times(_, _) => {
-            let mut factors = Vec::new();
-            flatten_times(e, &mut factors);
-            let mut factors: Vec<NExp> = factors.into_iter().map(|f| canonical(&f)).collect();
-            factors.sort();
-            rebuild_times(factors)
+        NExp::Neg(x) => {
+            let rx = canonical_cow(x);
+            if matches!(rx, Cow::Borrowed(_)) {
+                Cow::Borrowed(e)
+            } else {
+                Cow::Owned(NExp::Neg(Box::new(rx.into_owned())))
+            }
         }
-        NExp::Minus(a, b) => NExp::Minus(Box::new(canonical(a)), Box::new(canonical(b))),
-        NExp::Neg(x) => NExp::Neg(Box::new(canonical(x))),
-        NExp::Exp(x) => NExp::Exp(Box::new(canonical(x))),
-        NExp::If(c, t, b) => NExp::If(
-            Box::new(simplify_constraint(c)),
-            Box::new(canonical(t)),
-            Box::new(canonical(b)),
-        ),
-        NExp::App(f, args) => NExp::App(f.clone(), args.iter().map(canonical).collect()),
-        _ => e.clone(),
+        NExp::Exp(x) => {
+            let rx = canonical_cow(x);
+            if matches!(rx, Cow::Borrowed(_)) {
+                Cow::Borrowed(e)
+            } else {
+                Cow::Owned(NExp::Exp(Box::new(rx.into_owned())))
+            }
+        }
+        NExp::If(c, t, b) => {
+            let (rc, rt, rb) =
+                (simplify_constraint_cow(c), canonical_cow(t), canonical_cow(b));
+            if matches!(rc, Cow::Borrowed(_))
+                && matches!(rt, Cow::Borrowed(_))
+                && matches!(rb, Cow::Borrowed(_))
+            {
+                Cow::Borrowed(e)
+            } else {
+                Cow::Owned(NExp::If(
+                    Box::new(rc.into_owned()),
+                    Box::new(rt.into_owned()),
+                    Box::new(rb.into_owned()),
+                ))
+            }
+        }
+        NExp::App(f, args) => {
+            let simp: Vec<Cow<'_, NExp>> = args.iter().map(|t| canonical_cow(t)).collect();
+            if simp.iter().all(|x| matches!(x, Cow::Borrowed(_))) {
+                Cow::Borrowed(e)
+            } else {
+                Cow::Owned(NExp::App(
+                    f.clone(),
+                    simp.into_iter().map(Cow::into_owned).collect(),
+                ))
+            }
+        }
+        NExp::Id(_) | NExp::Var(_) | NExp::Constant(_) => Cow::Borrowed(e),
     }
+}
+
+/// Flatten nested `Sum` and sort operands canonically (always rebuilds).
+fn canonical_sum(e: &NExp) -> NExp {
+    let mut terms = Vec::new();
+    flatten_sum(e, &mut terms);
+    let mut terms: Vec<NExp> = terms.into_iter().map(|t| canonical(&t)).collect();
+    terms.sort();
+    rebuild_sum(terms)
+}
+
+/// Flatten nested `Times` and sort operands canonically (always rebuilds).
+fn canonical_times(e: &NExp) -> NExp {
+    let mut factors = Vec::new();
+    flatten_times(e, &mut factors);
+    let mut factors: Vec<NExp> = factors.into_iter().map(|f| canonical(&f)).collect();
+    factors.sort();
+    rebuild_times(factors)
+}
+
+/// Owned canonical form (thin wrapper over [`canonical_cow`]).
+fn canonical(e: &NExp) -> NExp {
+    canonical_cow(e).into_owned()
 }
 
 fn flatten_sum(e: &NExp, out: &mut Vec<NExp>) {
@@ -611,5 +1085,158 @@ mod tests {
             simplify_constraint(&NConstraint::Equal(Box::new(c(2)), Box::new(c(3)))),
             NConstraint::False
         );
+    }
+
+    #[test]
+    fn simplify_cow_borrows_untouched_trees() {
+        use std::borrow::Cow;
+        let (n, _m, _a, b) = kids();
+        // No rule fires anywhere: the whole tree is borrowed.
+        let e = Sum(
+            Box::new(v(n)),
+            Box::new(Times(Box::new(v(b)), Box::new(NExp::Id("f".to_string())))),
+        );
+        assert!(matches!(simplify_cow(&e), Cow::Borrowed(_)));
+        let cc = NConstraint::Ge(Box::new(v(n)), Box::new(c(0)));
+        assert!(matches!(simplify_constraint_cow(&cc), Cow::Borrowed(_)));
+        // Unknown app with unchanged args borrows (old pass cloned `f`
+        // and rebuilt the vec every time).
+        let app = NExp::App("f".to_string(), vec![v(n), c(1)]);
+        assert!(matches!(simplify_cow(&app), Cow::Borrowed(_)));
+        // Already-sorted `Set` with unchanged child borrows (old pass
+        // cloned `vs` unconditionally).
+        let set = NConstraint::Set(Box::new(v(n)), vec![1, 2, 3]);
+        assert!(matches!(simplify_constraint_cow(&set), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn simplify_cow_fold_values_match_owned_contract() {
+        use std::borrow::Cow;
+        let (n, _m, _a, b) = kids();
+        // Hand-written expectations (independent of the cow plumbing):
+        // constant folds, identities returning children, app rules.
+        let cases: Vec<(NExp, NExp)> = vec![
+            (NExp::div(c(7), c(2)), c(3)),
+            (NExp::div(c(1), c(0)), NExp::div(c(1), c(0))),
+            (NExp::div(v(n), c(1)), v(n)),
+            (NExp::div(c(0), c(5)), c(0)),
+            (NExp::modulo(c(7), c(2)), c(1)),
+            (NExp::modulo(v(n), c(1)), c(0)),
+            (NExp::abs(NExp::Exp(Box::new(v(n)))), NExp::Exp(Box::new(v(n)))),
+            (
+                NExp::abs(NExp::App("abs".to_string(), vec![v(n)])),
+                NExp::abs(v(n)),
+            ),
+            (
+                Sum(Box::new(Neg(Box::new(v(n)))), Box::new(Neg(Box::new(c(4))))),
+                Neg(Box::new(Sum(Box::new(v(n)), Box::new(c(4))))),
+            ),
+            (
+                Sum(Box::new(v(n)), Box::new(Neg(Box::new(c(1))))),
+                Minus(Box::new(v(n)), Box::new(c(1))),
+            ),
+            (
+                Minus(Box::new(Sum(Box::new(v(n)), Box::new(c(5)))), Box::new(c(3))),
+                Sum(Box::new(v(n)), Box::new(c(2))),
+            ),
+            (
+                Times(Box::new(c(-1)), Box::new(v(n))),
+                Neg(Box::new(v(n))),
+            ),
+            (
+                Times(Box::new(Neg(Box::new(v(n)))), Box::new(Neg(Box::new(c(2))))),
+                Times(Box::new(v(n)), Box::new(c(2))),
+            ),
+            (
+                Neg(Box::new(Minus(Box::new(v(n)), Box::new(c(1))))),
+                Minus(Box::new(c(1)), Box::new(v(n))),
+            ),
+            (NExp::Exp(Box::new(c(-2))), NExp::Exp(Box::new(c(-2)))),
+        ];
+        for (input, expected) in &cases {
+            assert_eq!(simplify(input), *expected, "owned: {input:?}");
+            assert_eq!(simplify_cow(input).into_owned(), *expected, "cow: {input:?}");
+        }
+        assert!(matches!(
+            simplify_cow(&Sum(Box::new(v(n)), Box::new(c(1)))),
+            Cow::Borrowed(_)
+        ));
+        assert!(matches!(
+            simplify_cow(&Sum(Box::new(v(n)), Box::new(c(0)))),
+            Cow::Owned(_)
+        ));
+        // Constraint folds with hand-written expectations.
+        let ccases: Vec<(NConstraint, NConstraint)> = vec![
+            (
+                NConstraint::Equal(Box::new(c(2)), Box::new(c(2))),
+                NConstraint::True,
+            ),
+            (
+                NConstraint::NotEqual(Box::new(v(n)), Box::new(v(n))),
+                NConstraint::False,
+            ),
+            (
+                NConstraint::Ge(Box::new(v(n)), Box::new(v(n))),
+                NConstraint::True,
+            ),
+            (
+                NConstraint::Lt(Box::new(v(n)), Box::new(v(n))),
+                NConstraint::False,
+            ),
+            (
+                NConstraint::Set(Box::new(c(2)), vec![3, 1, 2]),
+                NConstraint::True,
+            ),
+            (
+                NConstraint::Set(Box::new(v(n)), vec![3, 1, 1, 2]),
+                NConstraint::Set(Box::new(v(n)), vec![1, 2, 3]),
+            ),
+            (
+                NConstraint::Or(Box::new(NConstraint::False), Box::new(NConstraint::Var(b))),
+                NConstraint::Var(b),
+            ),
+            (
+                NConstraint::Not(Box::new(NConstraint::Not(Box::new(NConstraint::Var(b))))),
+                NConstraint::Var(b),
+            ),
+        ];
+        for (input, expected) in &ccases {
+            assert_eq!(simplify_constraint(input), *expected, "owned: {input:?}");
+            assert_eq!(
+                simplify_constraint_cow(input).into_owned(),
+                *expected,
+                "cow: {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_is_idempotent_and_canonical() {
+        let (n, _m, a, b) = kids();
+        let e = Sum(
+            Box::new(v(b)),
+            Box::new(Sum(
+                Box::new(Neg(Box::new(Neg(Box::new(v(a)))))),
+                Box::new(Times(Box::new(v(n)), Box::new(c(1)))),
+            )),
+        );
+        let once = normalize(&e);
+        // Fixpoint: normalizing again changes nothing.
+        assert_eq!(normalize(&once), once);
+        // Fixpoint on a second shape as well.
+        let f = Times(Box::new(c(2)), Box::new(v(n)));
+        let f1 = normalize(&f);
+        assert_eq!(normalize(&f1), f1);
+        // Constraint fixpoint likewise.
+        let cc = NConstraint::And(
+            Box::new(NConstraint::Var(b)),
+            Box::new(NConstraint::And(
+                Box::new(NConstraint::True),
+                Box::new(NConstraint::Var(b)),
+            )),
+        );
+        let conc = normalize_constraint(&cc);
+        assert_eq!(conc, NConstraint::Var(b));
+        assert_eq!(normalize_constraint(&conc), conc);
     }
 }

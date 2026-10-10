@@ -13,7 +13,10 @@ pub mod ir;
 pub mod mono;
 pub mod shard;
 
-pub use anf::{AnfConfig, AnfError, anf_lower, internal_lets, remove_blocks};
+pub use anf::{
+    AnfConfig, AnfError, anf_lower, internal_lets, internal_lets_cow, remove_blocks,
+    remove_blocks_cow,
+};
 pub use ir::{BinOp, Expr, FunDef, Lit, Pat, Ty};
 pub use mono::{MonoConfig, MonoError, monomorphize};
 pub use shard::{ShardConfig, ShardStats, lower_shard, lower_stream};

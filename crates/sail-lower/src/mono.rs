@@ -5,6 +5,8 @@
 //! pro Funktion: keine globale Instanz-Tabelle, keine programweiten Fixpunkte.
 //! Split-Limits verhindern Blowup (vgl. OCaml `-auto_mono` + Split-Fuel).
 
+use std::borrow::Cow;
+
 use crate::ir::{Expr, FunDef, Ty};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -67,20 +69,36 @@ impl fmt::Display for MonoError {
 
 impl std::error::Error for MonoError {}
 
-fn subst_ty(ty: &Ty, env: &BTreeMap<&str, &Ty>) -> Ty {
+fn subst_ty_cow<'a>(ty: &'a Ty, env: &BTreeMap<&str, &Ty>) -> Cow<'a, Ty> {
     match ty {
-        Ty::Var(v) => env.get(v.as_str()).map_or_else(|| ty.clone(), |t| (*t).clone()),
-        _ => ty.clone(),
+        // Treffer: einziger Clone (das eingesetzte `Ty`); Miss und
+        // Nicht-Var borgen (RAM-Diät Lane 90, Muster wie `subst_cow`).
+        Ty::Var(v) => match env.get(v.as_str()) {
+            Some(t) => Cow::Owned((*t).clone()),
+            None => Cow::Borrowed(ty),
+        },
+        _ => Cow::Borrowed(ty),
     }
 }
 
-fn subst_expr(expr: &Expr, env: &BTreeMap<&str, &Ty>) -> Expr {
+fn subst_ty(ty: &Ty, env: &BTreeMap<&str, &Ty>) -> Ty {
+    subst_ty_cow(ty, env).into_owned()
+}
+
+fn subst_expr_cow<'a>(expr: &'a Expr, env: &BTreeMap<&str, &Ty>) -> Cow<'a, Expr> {
     // Test-IR: Typen stehen nur in Let-Patterns nicht; Calls/Vars bleiben.
     // Wir traversieren trotzdem (Platzhalter für echte typ-annotierte IR),
     // damit Split-Limit über `size` greift. `env` ist hier ungenutzt,
     // wird in der echten IR zur Substitution.
+    //
+    // Da (noch) nichts zu ersetzen ist, wird immer geborgt: das alte
+    // `expr.clone()` pro `monomorphize_one` entfällt ersatzlos.
     let _ = env;
-    expr.clone()
+    Cow::Borrowed(expr)
+}
+
+fn subst_expr(expr: &Expr, env: &BTreeMap<&str, &Ty>) -> Expr {
+    subst_expr_cow(expr, env).into_owned()
 }
 
 /// Instanziiert `func` für genau eine Typ-Argument-Liste.
@@ -112,16 +130,24 @@ pub fn monomorphize_one(
         .zip(type_args.iter())
         .collect();
 
-    let suffix: String = type_args
-        .iter()
-        .map(|t| t.to_string().replace('(', "_").replace([')', ','], "_"))
-        .collect::<Vec<_>>()
-        .join("_");
-    let params = func
-        .params
-        .iter()
-        .map(|(n, t)| (n.clone(), subst_ty(t, &env)))
-        .collect();
+    // Deterministischer Namens-Suffix ohne Zwischen-`Vec`: jeder
+    // Typ wird einmal gerendert (`to_string`), Klammern/Kommas werden
+    // beim Hineinschieben ersetzt (statt `replace`+`join`-Kette mit je
+    // zwei Alloks pro Typ). Ausgabe identisch zur alten Kette.
+    let mut suffix = String::with_capacity(type_args.len() * 8);
+    for (i, t) in type_args.iter().enumerate() {
+        if i > 0 {
+            suffix.push('_');
+        }
+        for ch in t.to_string().chars() {
+            match ch {
+                '(' | ')' | ',' => suffix.push('_'),
+                _ => suffix.push(ch),
+            }
+        }
+    }
+    let mut params = Vec::with_capacity(func.params.len());
+    params.extend(func.params.iter().map(|(n, t)| (n.clone(), subst_ty(t, &env))));
     let body = subst_expr(&func.body, &env);
     Ok(FunDef {
         name: format!("{}#{suffix}", func.name),
@@ -247,5 +273,36 @@ mod tests {
                 .unwrap_err(),
             MonoError::NotPolymorphic { func: "f".to_string() }
         );
+    }
+
+    #[test]
+    fn mono_suffix_and_subst_cow_contract() {
+        use std::borrow::Cow;
+        let f = poly_id();
+        // Suffix-Format: `name_T1_T2`, Klammern/Kommas → `_`.
+        let out = monomorphize_one(&f, &[Ty::Bits(8)], &MonoConfig::default()).unwrap();
+        assert_eq!(out.name, "id#bits_8_");
+        let out = monomorphize_one(
+            &f,
+            &[Ty::Named("int".to_string()), Ty::Bits(8)],
+            &MonoConfig::default(),
+        );
+        // `id` hat genau einen Typparameter: Arity-Fehler, kein Suffix-Raten.
+        assert!(out.is_err());
+        // `subst_ty_cow`: Treffer → Owned, Miss/Nicht-Var → Borrowed.
+        let env: BTreeMap<&str, &Ty> = BTreeMap::new();
+        let v = Ty::Var("a".to_string());
+        assert!(matches!(subst_ty_cow(&v, &env), Cow::Borrowed(_)));
+        assert!(matches!(
+            subst_ty_cow(&Ty::Named("int".to_string()), &env),
+            Cow::Borrowed(_)
+        ));
+        let int = Ty::Named("int".to_string());
+        let env: BTreeMap<&str, &Ty> = [("a", &int)].into_iter().collect();
+        assert_eq!(subst_ty_cow(&v, &env).into_owned(), int);
+        // `subst_expr_cow`: Test-IR ohne Typen in Exprs → immer Borrowed.
+        let body = Expr::Var("x".to_string());
+        assert!(matches!(subst_expr_cow(&body, &env), Cow::Borrowed(_)));
+        assert_eq!(subst_expr(&body, &env), body);
     }
 }
