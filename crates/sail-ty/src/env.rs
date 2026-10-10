@@ -6,6 +6,10 @@ use std::collections::HashMap;
 
 /// Global typing environment (immutable snapshots are `Clone`d per worker
 /// thread; no shared interior mutability, so no lock contention).
+///
+/// Retained (MIGRATION.md #24): `sail-ast` has no `Env.t` yet; the
+/// val/register/local tables stay here until that lane lands. Schemes
+/// lower onto `sail_ast::TypSchm` (see [`crate::conv`]).
 #[derive(Clone, Debug, Default)]
 pub struct TypeEnv {
     /// `val` specs: function name -> quantified scheme.
