@@ -51,17 +51,33 @@ lifted onto the Sail rules in this lane:
 4. **Nullable Block + `with`**: `Block` is strict now (see E4), so after
    `{ Exp` the lookahead `with` can only shift the `StructUpdate` arm of
    `BlockOrUpd` (`;`/`}` reduce the block item instead).
+5. **`IndexRange` parens removed (Lane 76, static audit — E3, no build)**:
+   `"(" IndexRange ")"` duplicated `AtomicTyp`'s `"(" Typ ")"` for every
+   parenthesised type, so `(t)` was ambiguous (two trees, same
+   `Single(t)` AST) and `(a, b)` was shift-vs-reduce on `,` — while being
+   the only spelling for `(a..b)` / `(a@b)`. Menhir's shift preference
+   resolves `(t)`/`(a, b)` to the `Typ` reading, which is exactly what the
+   removal keeps; only parenthesised `..`-ranges/`@`-concats are lost
+   (bare `a..b` / `a@b` still parse). Corpus: 0 occurrences in `sail-lib`
+   (no `bitfield`s at all there; `@` only as expression operator) —
+   `tests/corpus.rs` guards this on the Rig. `pub MPat` was demoted to a
+   private rule alongside (only used inside `MPExp`; the wiring below
+   never listed an `MPatParser`).
 
 ## D1/D2 — unchanged, evaluated per corpus
 
 - **D1** (`AtomicIndexRange`: `Typ (".." Typ)?` competing with tuple `,`
-  / `..` inside `name : range`) and **D2** (`AtomicTyp` parenthesised
-  singleton vs tuple) are intentionally UNCHANGED in this lane. Whether
-  they surface as real LALR conflicts (first Rig build) and whether the
-  ambiguous inputs occur in real code (`tests/corpus.rs`) decides the fix:
-  candidates are a comma-free `Typ` subset inside `IndexRange` (D1) and an
-  explicit paren/tuple split (D2), at the cost of rejecting currently
-  accepted inputs — hence no blind fix here.
+  / `..` inside `name : range`) is subsumed by fix 5 above: the only real
+  ambiguity was the `"(" IndexRange ")"` wrapper, not the `Typ` rules —
+  those stay UNCHANGED. Whether any residual D1 shape surfaces as a real
+  LALR conflict is decided by the first Rig build.
+- **D2** (`AtomicTyp` parenthesised singleton vs tuple) is UNCHANGED and
+  was never ambiguous on its own (`","` vs `")"` after `"(" Typ` are
+  disjoint); it stays pending the Rig build all the same.
+- Should the Rig build still report a conflict here, the candidates are a
+  comma-free `Typ` subset inside `IndexRange` (D1) and an explicit
+  paren/tuple split (D2), at the cost of rejecting currently accepted
+  inputs — hence no blind fix here.
 
 ## Known acceptance deltas vs Menhir (watched by `tests/corpus.rs`)
 
@@ -78,6 +94,9 @@ quantifies them on `crates/sail-prelude/sail-lib`:
   arguments, `do` bodies, ...); only `BlockItem`s admit them.
 - `{}` is rejected (strict `Block`); no occurrences in the corpus at the
   time of writing (checked via `grep`, non-binding — the Rig decides).
+- Parenthesised index ranges (`(a..b)`, `(a@b)`) are rejected (wrapper
+  removal, fix 5); bare `a..b` / `a@b` still parse. No occurrences in
+  `sail-lib` (no `bitfield`s there at all).
 
 ## Dropped OCaml action logic (intentional)
 
@@ -129,7 +148,8 @@ only for `Id`/`TyVar`/`Num`/`Bin`/`Hex`/`Real`/`Str`/`OpId`/`DocBlock`/
 
 - `Cargo.toml`: `lalrpop-util = "0.22"` dependency,
   `lalrpop = "0.22"` build-dependency.
-- `build.rs`: `lalrpop::process_root().unwrap()`.
+- `build.rs`: `lalrpop::process_root()`, with a clear `eprintln!` + exit 1
+  on failure (no `panic!`/`unwrap`/`expect`).
 - `src/lib.rs`: `lalrpop_mod!(sail)` + `parse_*` running
   `FileParser` / `TypParser` / `TypSchmParser` / `ExpParser` /
   `PatParser` / `DefParser` over `lexer::tokenize` output; lex errors
