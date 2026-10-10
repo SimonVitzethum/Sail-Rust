@@ -1,0 +1,8 @@
+[package]
+name = "sail-lake"
+version = "0.1.0"
+edition = "2021"
+description = "Lake project generator for the Sail Lean backend (port of start_lean_output/create_lake_project)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
