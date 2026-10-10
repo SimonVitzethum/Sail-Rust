@@ -523,5 +523,4 @@ mod tests {
         assert!(matches!(ast.kind, ConstraintKind::Not(_)));
         assert_eq!(constraint_from_ast(&ast, &it), Some(c));
     }
-    }
 }
