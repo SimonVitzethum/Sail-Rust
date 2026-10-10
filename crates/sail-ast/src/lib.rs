@@ -23,9 +23,6 @@ pub mod json;
 
 pub use files::{FileInfo, FileTable};
 
-pub mod ast;
-pub mod json;
-
 pub use id::{GenArena, IdGen, NodeId};
 pub use interner::{Interner, SimpleInterner, Symbol};
 pub use span::{FileId, Span};
