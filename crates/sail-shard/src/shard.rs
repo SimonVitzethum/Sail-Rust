@@ -314,8 +314,9 @@ pub fn armv9_shard_plan() -> Vec<String> {
 /// Shardet mehrere benannte Dateien: erst Dateigrenzen, dann Extra-Splits
 /// fuer grosse Dateien (`max_lines_per_chunk`).
 ///
-/// `files`: `(name, contents)`-Paare. Jede Datei wird zuerst als Ganzes ein
-/// Shard; enthaelt sie `file_start`-Marker, wird sie weiter unterteilt.
+/// `files`: `(name, contents)`-Paare. Jede Datei wird per
+/// [`split_by_file_markers`] unterteilt (ohne Marker: ein Shard unter dem
+/// uebergebenen Dateinamen).
 /// Grosse Dateien (siehe [`LARGE_INSTR_FILES`]) werden zusaetzlich per
 /// [`extra_split`] in Chunks der Groesse `max_lines_per_chunk` zerlegt.
 #[must_use]
