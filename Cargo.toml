@@ -24,6 +24,7 @@ members = [
     "crates/sail-int",
     "crates/sail-real",
     "crates/sail-extern",
+    "crates/sail-termination",
 ]
 resolver = "2"
 
