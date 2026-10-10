@@ -127,6 +127,39 @@ Merge-Notizen:
 - Identitaet unverstellt (SimonVitzethum); Worktree-Reste (target/,
   Cargo.lock) gab es keine.
 
+E3-Integration Welle 5 (10.10.2026, Integrator — KEINE Builds, nur Merges):
+8 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer, Message endet mit
+Co-authored-by), Branches + Worktrees geloescht: Lane 87, 88, 89, 90, 91,
+92, 93, 97. Keine Lane uebersprungen (alle 8 vorhanden).
+Uebersprungen + Grund:
+- lane/41-lang-delta, lane/42-shared-mem, lane/43-scheduler-replay,
+  lane/44-el3-psci-boot, lane/98-grammar-family: gesperrt — NICHT angefasst
+  (Branches + Worktrees ungeprueft stehen gelassen).
+Merge-Notizen:
+- Lane 87 (konfliktfrei): RDefBody strikt (E4-Block-Muster) — reaktiviert den
+  build.rs-Generierungsversuch (process_root mit cleanem Fehler, bereits auf
+  Main); Rig prueft als Naechstes.
+- Lane 88/89 (konfliktfrei): reine Typfixes (E0015 const-fn str_eq;
+  E0608/E0506 summaries/barrier); ci.yml-/TEST-RIG.md-Diffs ggü. Main sind
+  Main-seitig (fc9381a --profile-ci) und bleiben erhalten.
+- Lane 90 (konfliktfrei): simplify/internal_lets Owned-Rewrites auf
+  subst_cow + Clone-Diaet (bitvec/lake/lower/nexp).
+- Lane 91 (konfliktfrei vereint): deny-audit-Job warnend (continue-on-error)
+  + AUDIT.md-A6-Update + deny.toml-Kommentar; Main---profile-ci-Test-Job
+  unveraendert behalten.
+- Lane 92 (konfliktfrei): Warn-Cap/Summary-Mode + Log-Rotation
+  (limited-run.sh/tmux-test.sh) + TEST-RIG.md; Main---profile-ci-Herkunft
+  (erbt von release) unveraendert behalten.
+- Lane 93/97 (konfliktfrei, neu): PREFLIGHT.md + GATE_STATUS.md (Befund only).
+- lanes/-Specs je Lane mit uebernommen (87, 91, 93 per Branch-Commit;
+  88, 89, 90, 92, 97 uncommitted aus Worktrees kopiert + in den
+  Merge-Commit aufgenommen).
+- Checks nach allen Merges: kein Cargo.lock getrackt, .gitignore unveraendert
+  (worktrees/+target/+Cargo.lock+logs/), keine Konfliktmarker,
+  forbid(unsafe_code) in allen geaenderten Crate-Roots, kein unsafe-Token
+  ausser forbid-Zeilen. Build-Verifikation offen (Rig der Haupt-Session).
+- Identitaet unverstellt (SimonVitzethum).
+
 E3-Integration (10.10.2026, Integrator — KEINE Builds, nur Merges):
 10 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer), Branches +
 Worktrees geloescht: Lane 62, 63, 64, 65, 66, 67, 69, 70, 58 (selektiv),
