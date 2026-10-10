@@ -34,7 +34,7 @@ pub use check::{BidirectionalChecker, CheckLimits, TypedDefSummary};
 pub use env::TypeEnv;
 pub use error::{Span, TypeError, TypeResult};
 pub use kind::Kind;
-pub use nexp::{MiniExp, MiniTyp, NConstraint, Nexp, TypQuant};
+pub use nexp::{MiniExp, MiniFExp, MiniLexp, MiniLoop, MiniOrder, MiniPExp, MiniTyp, NConstraint, Nexp, TypQuant};
 pub use pat::MiniPat;
 pub use quant::{QuantScope, QuantVar};
 pub use rules::{RuleEntry, RuleId, RuleStatus, RULE_TABLE};

@@ -23,13 +23,15 @@
 //! (folding, kind checking, solving) is untouched.
 
 use sail_ast::{
-    Constraint, ConstraintKind, Exp, ExpKind, Interner, Kind as AstKind, KOpt, Lit, LitKind,
-    Name, NExp, NExpKind, Node, Pat, PatKind, QuantItem, Typ, TypArg, TypArgKind, TypKind,
+    Constraint, ConstraintKind, Exp, ExpKind, FExp, Interner, Kind as AstKind, KOpt, LExp,
+    LExpKind, Lit, LitKind, Loop as AstLoop, Name, NExp, NExpKind, Node, NodeId, Order as AstOrder,
+    Pat, PatKind, PExp, PExpKind, QuantItem, Span, StructName, Typ, TypArg, TypArgKind, TypKind,
     TypSchm,
 };
 
 use crate::kind::Kind;
-use crate::nexp::{MiniExp, MiniTyp, NConstraint, Nexp, TypQuant};
+use crate::nexp::{MiniExp, MiniFExp, MiniLexp, MiniLoop, MiniOrder, MiniPExp, MiniTyp, NConstraint, Nexp, TypQuant};
+use crate::pat::MiniPat;
 
 fn mk_nexp(kind: NExpKind) -> NExp {
     Node::dummy(kind)
@@ -270,6 +272,27 @@ fn mk_pat(kind: PatKind) -> Pat {
     Node::dummy(kind)
 }
 
+fn mk_lexp(kind: LExpKind) -> LExp {
+    Node::dummy(kind)
+}
+
+fn mk_pexp(kind: PExpKind) -> PExp {
+    PExp {
+        id: NodeId::DUMMY,
+        span: Span::DUMMY,
+        kind,
+    }
+}
+
+fn mk_fexp(field: Name, value: Exp) -> FExp {
+    FExp {
+        id: NodeId::DUMMY,
+        span: Span::DUMMY,
+        field,
+        value,
+    }
+}
+
 fn mk_lit(kind: LitKind) -> Lit {
     Node::dummy(kind)
 }
@@ -401,8 +424,240 @@ fn var_pat(it: &mut impl Interner, var: &str, annot: Option<&MiniTyp>) -> Option
     }
 }
 
+/// Lower a local pattern onto a canonical node. `None` is unreachable
+/// inside `MiniPat` (every constructor maps); the `Option` keeps the
+/// combinator shape uniform with the expression converters.
+pub fn minipat_to_ast(p: &MiniPat, it: &mut impl Interner) -> Option<Pat> {
+    match p {
+        MiniPat::Wild => Some(mk_pat(PatKind::Wild)),
+        MiniPat::Var(v) => Some(mk_pat(PatKind::Id(ast_name(it, v)))),
+        MiniPat::IntLit(i) => {
+            let sym = it.intern(&i.to_string());
+            Some(mk_pat(PatKind::Lit(mk_lit(LitKind::Num(sym)))))
+        }
+        MiniPat::BoolLit(true) => Some(mk_pat(PatKind::Lit(mk_lit(LitKind::True)))),
+        MiniPat::BoolLit(false) => Some(mk_pat(PatKind::Lit(mk_lit(LitKind::False)))),
+        MiniPat::Tuple(ps) => {
+            let mut out = Vec::with_capacity(ps.len());
+            for e in ps {
+                out.push(minipat_to_ast(e, it)?);
+            }
+            Some(mk_pat(PatKind::Tuple(out)))
+        }
+        MiniPat::Annot(inner, t) => Some(mk_pat(PatKind::Typ {
+            typ: typ_to_ast(t, it),
+            pat: Box::new(minipat_to_ast(inner, it)?),
+        })),
+    }
+}
+
+/// Lift a canonical node back onto a local pattern. `None` for shapes with
+/// no local counterpart (`Or`/`Not`/`As`/`App`/vector/struct/list/…).
+pub fn minipat_from_ast(p: &Pat, it: &impl Interner) -> Option<MiniPat> {
+    match &p.kind {
+        PatKind::Wild => Some(MiniPat::Wild),
+        PatKind::Id(name) => resolve_name(name, it).map(MiniPat::Var),
+        PatKind::Lit(l) => match &l.kind {
+            LitKind::Num(s) => it.resolve(*s)?.parse::<i128>().ok().map(MiniPat::IntLit),
+            LitKind::True => Some(MiniPat::BoolLit(true)),
+            LitKind::False => Some(MiniPat::BoolLit(false)),
+            _ => None,
+        },
+        PatKind::Tuple(ps) => {
+            let mut out = Vec::with_capacity(ps.len());
+            for e in ps {
+                out.push(minipat_from_ast(e, it)?);
+            }
+            Some(MiniPat::Tuple(out))
+        }
+        PatKind::Typ { typ, pat } => Some(MiniPat::Annot(
+            Box::new(minipat_from_ast(pat, it)?),
+            typ_from_ast(typ, it)?,
+        )),
+        _ => None,
+    }
+}
+
+fn miniloop_to_ast(kind: MiniLoop) -> AstLoop {
+    match kind {
+        MiniLoop::While => AstLoop::While,
+        MiniLoop::Until => AstLoop::Until,
+    }
+}
+
+fn miniloop_from_ast(kind: AstLoop) -> MiniLoop {
+    match kind {
+        AstLoop::While => MiniLoop::While,
+        AstLoop::Until => MiniLoop::Until,
+    }
+}
+
+fn miniorder_to_ast(order: MiniOrder) -> AstOrder {
+    match order {
+        MiniOrder::Inc => AstOrder::Inc,
+        MiniOrder::Dec => AstOrder::Dec,
+    }
+}
+
+fn miniorder_from_ast(order: AstOrder) -> MiniOrder {
+    match order {
+        AstOrder::Inc => MiniOrder::Inc,
+        AstOrder::Dec => MiniOrder::Dec,
+    }
+}
+
+/// Lower a local l-value onto a canonical node.
+pub fn minilexp_to_ast(l: &MiniLexp, it: &mut impl Interner) -> Option<LExp> {
+    match l {
+        MiniLexp::Id(v) => Some(mk_lexp(LExpKind::Id(ast_name(it, v)))),
+        MiniLexp::Deref(e) => Some(mk_lexp(LExpKind::Deref(Box::new(miniexp_to_ast(e, it)?)))),
+        MiniLexp::Typed { typ, id } => Some(mk_lexp(LExpKind::Typ {
+            typ: typ_to_ast(typ, it),
+            id: ast_name(it, id),
+        })),
+        MiniLexp::Tuple(ls) => {
+            let mut out = Vec::with_capacity(ls.len());
+            for e in ls {
+                out.push(minilexp_to_ast(e, it)?);
+            }
+            Some(mk_lexp(LExpKind::Tuple(out)))
+        }
+        MiniLexp::VectorConcat(ls) => {
+            let mut out = Vec::with_capacity(ls.len());
+            for e in ls {
+                out.push(minilexp_to_ast(e, it)?);
+            }
+            Some(mk_lexp(LExpKind::VectorConcat(out)))
+        }
+        MiniLexp::Vector { lexp, index } => Some(mk_lexp(LExpKind::Vector {
+            lexp: Box::new(minilexp_to_ast(lexp, it)?),
+            index: Box::new(miniexp_to_ast(index, it)?),
+        })),
+        MiniLexp::VectorRange { lexp, lo, hi } => Some(mk_lexp(LExpKind::VectorRange {
+            lexp: Box::new(minilexp_to_ast(lexp, it)?),
+            lo: Box::new(miniexp_to_ast(lo, it)?),
+            hi: Box::new(miniexp_to_ast(hi, it)?),
+        })),
+        MiniLexp::Field { lexp, field } => Some(mk_lexp(LExpKind::Field {
+            lexp: Box::new(minilexp_to_ast(lexp, it)?),
+            field: ast_name(it, field),
+        })),
+    }
+}
+
+/// Lift a canonical l-value back onto a local one.
+pub fn minilexp_from_ast(l: &LExp, it: &impl Interner) -> Option<MiniLexp> {
+    match &l.kind {
+        LExpKind::Id(name) => resolve_name(name, it).map(MiniLexp::Id),
+        LExpKind::Deref(e) => Some(MiniLexp::Deref(Box::new(miniexp_from_ast(e, it)?))),
+        LExpKind::Typ { typ, id } => Some(MiniLexp::Typed {
+            typ: typ_from_ast(typ, it)?,
+            id: resolve_name(id, it)?,
+        }),
+        LExpKind::Tuple(ls) => {
+            let mut out = Vec::with_capacity(ls.len());
+            for e in ls {
+                out.push(minilexp_from_ast(e, it)?);
+            }
+            Some(MiniLexp::Tuple(out))
+        }
+        LExpKind::VectorConcat(ls) => {
+            let mut out = Vec::with_capacity(ls.len());
+            for e in ls {
+                out.push(minilexp_from_ast(e, it)?);
+            }
+            Some(MiniLexp::VectorConcat(out))
+        }
+        LExpKind::Vector { lexp, index } => Some(MiniLexp::Vector {
+            lexp: Box::new(minilexp_from_ast(lexp, it)?),
+            index: Box::new(miniexp_from_ast(index, it)?),
+        }),
+        LExpKind::VectorRange { lexp, lo, hi } => Some(MiniLexp::VectorRange {
+            lexp: Box::new(minilexp_from_ast(lexp, it)?),
+            lo: Box::new(miniexp_from_ast(lo, it)?),
+            hi: Box::new(miniexp_from_ast(hi, it)?),
+        }),
+        LExpKind::Field { lexp, field } => Some(MiniLexp::Field {
+            lexp: Box::new(minilexp_from_ast(lexp, it)?),
+            field: resolve_name(field, it)?,
+        }),
+    }
+}
+
+fn minifexps_to_ast(fs: &[MiniFExp], it: &mut impl Interner) -> Option<Vec<FExp>> {
+    let mut out = Vec::with_capacity(fs.len());
+    for f in fs {
+        out.push(mk_fexp(ast_name(it, &f.field), miniexp_to_ast(&f.value, it)?));
+    }
+    Some(out)
+}
+
+fn minifexps_from_ast(fs: &[FExp], it: &impl Interner) -> Option<Vec<MiniFExp>> {
+    let mut out = Vec::with_capacity(fs.len());
+    for f in fs {
+        out.push(MiniFExp {
+            field: resolve_name(&f.field, it)?,
+            value: miniexp_from_ast(&f.value, it)?,
+        });
+    }
+    Some(out)
+}
+
+fn minipexps_to_ast(arms: &[MiniPExp], it: &mut impl Interner) -> Option<Vec<PExp>> {
+    let mut out = Vec::with_capacity(arms.len());
+    for a in arms {
+        let pat = minipat_to_ast(&a.pat, it)?;
+        let body = miniexp_to_ast(&a.body, it)?;
+        match &a.guard {
+            None => out.push(mk_pexp(PExpKind::PatExp { pat, body })),
+            Some(g) => out.push(mk_pexp(PExpKind::PatWhen {
+                pat,
+                guard: miniexp_to_ast(g, it)?,
+                body,
+            })),
+        }
+    }
+    Some(out)
+}
+
+fn minipexps_from_ast(arms: &[PExp], it: &impl Interner) -> Option<Vec<MiniPExp>> {
+    let mut out = Vec::with_capacity(arms.len());
+    for a in arms {
+        match &a.kind {
+            PExpKind::PatExp { pat, body } => out.push(MiniPExp {
+                pat: minipat_from_ast(pat, it)?,
+                guard: None,
+                body: miniexp_from_ast(body, it)?,
+            }),
+            PExpKind::PatWhen { pat, guard, body } => out.push(MiniPExp {
+                pat: minipat_from_ast(pat, it)?,
+                guard: Some(miniexp_from_ast(guard, it)?),
+                body: miniexp_from_ast(body, it)?,
+            }),
+        }
+    }
+    Some(out)
+}
+
+fn miniexps_to_ast(es: &[MiniExp], it: &mut impl Interner) -> Option<Vec<Exp>> {
+    let mut out = Vec::with_capacity(es.len());
+    for e in es {
+        out.push(miniexp_to_ast(e, it)?);
+    }
+    Some(out)
+}
+
+fn miniexps_from_ast(es: &[Exp], it: &impl Interner) -> Option<Vec<MiniExp>> {
+    let mut out = Vec::with_capacity(es.len());
+    for e in es {
+        out.push(miniexp_from_ast(e, it)?);
+    }
+    Some(out)
+}
+
 /// Lower a local expression onto a canonical node. `None` for applied
-/// non-variables (currying needs Lane 02 elaboration).
+/// non-variables (currying needs Lane 02 elaboration) and for literal
+/// payloads outside the `Num`/`True`/`False` subset.
 pub fn miniexp_to_ast(e: &MiniExp, it: &mut impl Interner) -> Option<Exp> {
     match e {
         MiniExp::IntLit(i) => {
@@ -440,6 +695,78 @@ pub fn miniexp_to_ast(e: &MiniExp, it: &mut impl Interner) -> Option<Exp> {
             then_branch: Box::new(miniexp_to_ast(a, it)?),
             else_branch: Box::new(miniexp_to_ast(b, it)?),
         })),
+        MiniExp::Block(es) => Some(mk_exp(ExpKind::Block(miniexps_to_ast(es, it)?))),
+        MiniExp::Loop { kind, measure, cond, body } => Some(mk_exp(ExpKind::Loop {
+            loop_kind: miniloop_to_ast(*kind),
+            measure: match measure {
+                None => None,
+                Some(m) => Some(Box::new(miniexp_to_ast(m, it)?)),
+            },
+            cond: Box::new(miniexp_to_ast(cond, it)?),
+            body: Box::new(miniexp_to_ast(body, it)?),
+        })),
+        MiniExp::For { var, from, to, step, order, body } => Some(mk_exp(ExpKind::For {
+            var: ast_name(it, var),
+            from: Box::new(miniexp_to_ast(from, it)?),
+            to: Box::new(miniexp_to_ast(to, it)?),
+            step: Box::new(miniexp_to_ast(step, it)?),
+            order: miniorder_to_ast(*order),
+            body: Box::new(miniexp_to_ast(body, it)?),
+        })),
+        MiniExp::Vector(es) => Some(mk_exp(ExpKind::Vector(miniexps_to_ast(es, it)?))),
+        MiniExp::VectorAppend(a, b) => Some(mk_exp(ExpKind::VectorAppend(
+            Box::new(miniexp_to_ast(a, it)?),
+            Box::new(miniexp_to_ast(b, it)?),
+        ))),
+        MiniExp::List(es) => Some(mk_exp(ExpKind::List(miniexps_to_ast(es, it)?))),
+        MiniExp::Cons(h, t) => Some(mk_exp(ExpKind::Cons(
+            Box::new(miniexp_to_ast(h, it)?),
+            Box::new(miniexp_to_ast(t, it)?),
+        ))),
+        MiniExp::Struct { name, fields } => Some(mk_exp(ExpKind::Struct {
+            name: match name {
+                None => StructName::Anon,
+                Some(n) => StructName::Id(ast_name(it, n)),
+            },
+            fields: minifexps_to_ast(fields, it)?,
+        })),
+        MiniExp::StructUpdate { record, fields } => Some(mk_exp(ExpKind::StructUpdate {
+            record: Box::new(miniexp_to_ast(record, it)?),
+            fields: minifexps_to_ast(fields, it)?,
+        })),
+        MiniExp::Field { record, field } => Some(mk_exp(ExpKind::Field {
+            record: Box::new(miniexp_to_ast(record, it)?),
+            field: ast_name(it, field),
+        })),
+        MiniExp::Match { scrutinee, arms } => Some(mk_exp(ExpKind::Match {
+            scrutinee: Box::new(miniexp_to_ast(scrutinee, it)?),
+            arms: minipexps_to_ast(arms, it)?,
+        })),
+        MiniExp::Assign { lexp, value } => Some(mk_exp(ExpKind::Assign {
+            lexp: Box::new(minilexp_to_ast(lexp, it)?),
+            value: Box::new(miniexp_to_ast(value, it)?),
+        })),
+        MiniExp::Sizeof(n) => Some(mk_exp(ExpKind::Sizeof(nexp_to_ast(n, it)))),
+        MiniExp::Return(e) => Some(mk_exp(ExpKind::Return(Box::new(miniexp_to_ast(e, it)?)))),
+        MiniExp::Exit(e) => Some(mk_exp(ExpKind::Exit(Box::new(miniexp_to_ast(e, it)?)))),
+        MiniExp::Config(keys) => Some(mk_exp(ExpKind::Config(keys.clone()))),
+        MiniExp::Ref(v) => Some(mk_exp(ExpKind::Ref(ast_name(it, v)))),
+        MiniExp::Throw(e) => Some(mk_exp(ExpKind::Throw(Box::new(miniexp_to_ast(e, it)?)))),
+        MiniExp::Try { exp, arms } => Some(mk_exp(ExpKind::Try {
+            exp: Box::new(miniexp_to_ast(exp, it)?),
+            arms: minipexps_to_ast(arms, it)?,
+        })),
+        MiniExp::Assert { cond, msg } => Some(mk_exp(ExpKind::Assert {
+            cond: Box::new(miniexp_to_ast(cond, it)?),
+            msg: Box::new(miniexp_to_ast(msg, it)?),
+        })),
+        MiniExp::Var { lexp, init, body } => Some(mk_exp(ExpKind::Var {
+            lexp: Box::new(minilexp_to_ast(lexp, it)?),
+            init: Box::new(miniexp_to_ast(init, it)?),
+            body: Box::new(miniexp_to_ast(body, it)?),
+        })),
+        MiniExp::Undef => Some(mk_exp(ExpKind::Undef)),
+        MiniExp::Constraint(c) => Some(mk_exp(ExpKind::Constraint(constraint_to_ast(c, it)))),
     }
 }
 
@@ -454,8 +781,10 @@ fn let_pat(p: &Pat, it: &impl Interner) -> Option<(String, Option<MiniTyp>)> {
     }
 }
 
-/// Lift a canonical node back onto a local expression. `None` for
-/// shapes outside the `Lit/Id/Let/App/Tuple/Typ/If` subset.
+/// Lift a canonical node back onto a local expression. `None` for the
+/// internal `E_internal_*`/`E_internal_value` shapes, multi-argument
+/// applications, literal payloads outside `Num`/`True`/`False`, and
+/// patterns/l-values outside the local subsets.
 pub fn miniexp_from_ast(e: &Exp, it: &impl Interner) -> Option<MiniExp> {
     match &e.kind {
         ExpKind::Lit(l) => match &l.kind {
@@ -497,6 +826,78 @@ pub fn miniexp_from_ast(e: &Exp, it: &impl Interner) -> Option<MiniExp> {
             Box::new(miniexp_from_ast(then_branch, it)?),
             Box::new(miniexp_from_ast(else_branch, it)?),
         )),
+        ExpKind::Block(es) => Some(MiniExp::Block(miniexps_from_ast(es, it)?)),
+        ExpKind::Loop { loop_kind, measure, cond, body } => Some(MiniExp::Loop {
+            kind: miniloop_from_ast(*loop_kind),
+            measure: match measure {
+                None => None,
+                Some(m) => Some(Box::new(miniexp_from_ast(m, it)?)),
+            },
+            cond: Box::new(miniexp_from_ast(cond, it)?),
+            body: Box::new(miniexp_from_ast(body, it)?),
+        }),
+        ExpKind::For { var, from, to, step, order, body } => Some(MiniExp::For {
+            var: resolve_name(var, it)?,
+            from: Box::new(miniexp_from_ast(from, it)?),
+            to: Box::new(miniexp_from_ast(to, it)?),
+            step: Box::new(miniexp_from_ast(step, it)?),
+            order: miniorder_from_ast(*order),
+            body: Box::new(miniexp_from_ast(body, it)?),
+        }),
+        ExpKind::Vector(es) => Some(MiniExp::Vector(miniexps_from_ast(es, it)?)),
+        ExpKind::VectorAppend(a, b) => Some(MiniExp::VectorAppend(
+            Box::new(miniexp_from_ast(a, it)?),
+            Box::new(miniexp_from_ast(b, it)?),
+        )),
+        ExpKind::List(es) => Some(MiniExp::List(miniexps_from_ast(es, it)?)),
+        ExpKind::Cons(h, t) => Some(MiniExp::Cons(
+            Box::new(miniexp_from_ast(h, it)?),
+            Box::new(miniexp_from_ast(t, it)?),
+        )),
+        ExpKind::Struct { name, fields } => Some(MiniExp::Struct {
+            name: match name {
+                StructName::Anon => None,
+                StructName::Id(n) => Some(resolve_name(n, it)?),
+            },
+            fields: minifexps_from_ast(fields, it)?,
+        }),
+        ExpKind::StructUpdate { record, fields } => Some(MiniExp::StructUpdate {
+            record: Box::new(miniexp_from_ast(record, it)?),
+            fields: minifexps_from_ast(fields, it)?,
+        }),
+        ExpKind::Field { record, field } => Some(MiniExp::Field {
+            record: Box::new(miniexp_from_ast(record, it)?),
+            field: resolve_name(field, it)?,
+        }),
+        ExpKind::Match { scrutinee, arms } => Some(MiniExp::Match {
+            scrutinee: Box::new(miniexp_from_ast(scrutinee, it)?),
+            arms: minipexps_from_ast(arms, it)?,
+        }),
+        ExpKind::Assign { lexp, value } => Some(MiniExp::Assign {
+            lexp: Box::new(minilexp_from_ast(lexp, it)?),
+            value: Box::new(miniexp_from_ast(value, it)?),
+        }),
+        ExpKind::Sizeof(n) => Some(MiniExp::Sizeof(nexp_from_ast(n, it)?)),
+        ExpKind::Return(e) => Some(MiniExp::Return(Box::new(miniexp_from_ast(e, it)?))),
+        ExpKind::Exit(e) => Some(MiniExp::Exit(Box::new(miniexp_from_ast(e, it)?))),
+        ExpKind::Config(keys) => Some(MiniExp::Config(keys.clone())),
+        ExpKind::Ref(name) => resolve_name(name, it).map(MiniExp::Ref),
+        ExpKind::Throw(e) => Some(MiniExp::Throw(Box::new(miniexp_from_ast(e, it)?))),
+        ExpKind::Try { exp, arms } => Some(MiniExp::Try {
+            exp: Box::new(miniexp_from_ast(exp, it)?),
+            arms: minipexps_from_ast(arms, it)?,
+        }),
+        ExpKind::Assert { cond, msg } => Some(MiniExp::Assert {
+            cond: Box::new(miniexp_from_ast(cond, it)?),
+            msg: Box::new(miniexp_from_ast(msg, it)?),
+        }),
+        ExpKind::Var { lexp, init, body } => Some(MiniExp::Var {
+            lexp: Box::new(minilexp_from_ast(lexp, it)?),
+            init: Box::new(miniexp_from_ast(init, it)?),
+            body: Box::new(miniexp_from_ast(body, it)?),
+        }),
+        ExpKind::Undef => Some(MiniExp::Undef),
+        ExpKind::Constraint(c) => Some(MiniExp::Constraint(constraint_from_ast(c, it)?)),
         _ => None,
     }
 }

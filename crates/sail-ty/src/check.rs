@@ -269,6 +269,15 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
                     )),
                 }
             }
+            // Lane 105: representable-but-unchecked extended forms
+            // (`Block`/`Loop`/`For`/`Match`/… — every `E_*` outside the
+            // Lane-79 subset). No inference rules added or changed; these
+            // report a mismatch so they can never silently succeed.
+            _ => Err(TypeError::mismatch(
+                span,
+                "lane-79 inferable expression".to_string(),
+                "extended MiniExp form (representable, checking deferred)".to_string(),
+            )),
         }
     }
 

@@ -15,6 +15,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::pat::MiniPat;
+
 /// Numeric type-level expression (subset of Sail `nexp`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Nexp {
@@ -380,25 +382,168 @@ impl TypQuant {
     }
 }
 
-/// Minimal expression (subset of Sail `exp`) for bidirectional checking.
+/// Loop kind for [`MiniExp::Loop`] (mirrors Sail `loop`: `while`/`until`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MiniLoop {
+    While,
+    Until,
+}
+
+/// Iteration order for [`MiniExp::For`] (mirrors Sail `order`: `inc`/`dec`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MiniOrder {
+    Inc,
+    Dec,
+}
+
+/// One struct field initializer: `field = value` (mirrors Sail `fexp`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MiniFExp {
+    pub field: String,
+    pub value: MiniExp,
+}
+
+/// One match/try arm: `pat [if guard] => body` (mirrors Sail `pexp`:
+/// `PatExp` for `guard: None`, `PatWhen` for `guard: Some`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MiniPExp {
+    pub pat: MiniPat,
+    pub guard: Option<MiniExp>,
+    pub body: MiniExp,
+}
+
+/// Left-hand-side expression for assignment targets (subset of Sail
+/// `lexp_aux`; mirrors `sail_ast::LExpKind` without spans).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MiniLexp {
+    /// `x`
+    Id(String),
+    /// `*e`
+    Deref(Box<MiniExp>),
+    /// `(x : t)` typed binder
+    Typed { typ: MiniTyp, id: String },
+    /// `(l1, l2, ...)`
+    Tuple(Vec<MiniLexp>),
+    /// Concatenated vector targets
+    VectorConcat(Vec<MiniLexp>),
+    /// `l[i]`
+    Vector { lexp: Box<MiniLexp>, index: Box<MiniExp> },
+    /// `l[hi .. lo]`
+    VectorRange {
+        lexp: Box<MiniLexp>,
+        lo: Box<MiniExp>,
+        hi: Box<MiniExp>,
+    },
+    /// `l.field`
+    Field { lexp: Box<MiniLexp>, field: String },
+}
+
+/// Minimal expression: covers every non-internal Sail `exp_aux` constructor
+/// (`E_*` in `sail/src/lib/extraction/Ast.ml`, one `E_lit` shared by
+/// [`MiniExp::IntLit`]/[`MiniExp::BoolLit`). The bidirectional checker
+/// still synthesizes only the Lane-79 subset
+/// (`IntLit`/`BoolLit`/`Var`/`Let`/`App`/`Tuple`/`Annot`/`If`); all other
+/// forms are representable plus convertible (`conv.rs`) but report a
+/// mismatch at `infer` (checking deferred, no checker rules added).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MiniExp {
+    /// Integer literal (`E_lit`)
     IntLit(i128),
+    /// Boolean literal (`E_lit`)
     BoolLit(bool),
+    /// Variable (`E_id`, also `E_ref` targets via [`MiniExp::Ref`])
     Var(String),
-    /// `let x: t = e1 in e2`
+    /// `let x: t = e1 in e2` (`E_let`, `x` must be a plain/annotated id)
     Let {
         var: String,
         annot: Option<MiniTyp>,
         bound: Box<MiniExp>,
         body: Box<MiniExp>,
     },
-    /// `f x`
+    /// `f x` (`E_app` with a variable head; curried heads stay `None` in conv)
     App(Box<MiniExp>, Box<MiniExp>),
-    /// `(e1, e2, ...)`
+    /// `(e1, e2, ...)` (`E_tuple`)
     Tuple(Vec<MiniExp>),
-    /// `e : t` annotation
+    /// `e : t` annotation (`E_typ`)
     Annot(Box<MiniExp>, MiniTyp),
-    /// `if c then a else b`
+    /// `if c then a else b` (`E_if`)
     If(Box<MiniExp>, Box<MiniExp>, Box<MiniExp>),
+    /// `e1; e2; ...` sequence (`E_block`)
+    Block(Vec<MiniExp>),
+    /// `while`/`until cond do body` (`E_loop`; `measure` is the
+    /// `in_place_loop_measure`, `None` = `Measure_none`)
+    Loop {
+        kind: MiniLoop,
+        measure: Option<Box<MiniExp>>,
+        cond: Box<MiniExp>,
+        body: Box<MiniExp>,
+    },
+    /// `for x = <from> to <to> step <step> (<order>) do <body>` (`E_for`)
+    For {
+        var: String,
+        from: Box<MiniExp>,
+        to: Box<MiniExp>,
+        step: Box<MiniExp>,
+        order: MiniOrder,
+        body: Box<MiniExp>,
+    },
+    /// `[e1, e2, ...]` (`E_vector`)
+    Vector(Vec<MiniExp>),
+    /// `v1 @ v2` (`E_vector_append`)
+    VectorAppend(Box<MiniExp>, Box<MiniExp>),
+    /// `[e1, e2, ...]` list literal (`E_list`)
+    List(Vec<MiniExp>),
+    /// `h :: t` (`E_cons`)
+    Cons(Box<MiniExp>, Box<MiniExp>),
+    /// `struct { f = e, ... }` (`E_struct`; `name: None` = anonymous)
+    Struct {
+        name: Option<String>,
+        fields: Vec<MiniFExp>,
+    },
+    /// `r with { f = e, ... }` (`E_struct_update`)
+    StructUpdate {
+        record: Box<MiniExp>,
+        fields: Vec<MiniFExp>,
+    },
+    /// `r.field` (`E_field`)
+    Field { record: Box<MiniExp>, field: String },
+    /// `match scrut { pat [if g] => body, ... }` (`E_match`)
+    Match {
+        scrutinee: Box<MiniExp>,
+        arms: Vec<MiniPExp>,
+    },
+    /// `l = v` (`E_assign`)
+    Assign {
+        lexp: Box<MiniLexp>,
+        value: Box<MiniExp>,
+    },
+    /// `sizeof(n)` (`E_sizeof`)
+    Sizeof(Nexp),
+    /// `return e` (`E_return`)
+    Return(Box<MiniExp>),
+    /// `exit e` (`E_exit`)
+    Exit(Box<MiniExp>),
+    /// `%config` keys (`E_config`)
+    Config(Vec<String>),
+    /// `ref x` (`E_ref`)
+    Ref(String),
+    /// `throw e` (`E_throw`)
+    Throw(Box<MiniExp>),
+    /// `try e catch { pat [if g] => body, ... }` (`E_try`)
+    Try {
+        exp: Box<MiniExp>,
+        arms: Vec<MiniPExp>,
+    },
+    /// `assert(cond, msg)` (`E_assert`)
+    Assert { cond: Box<MiniExp>, msg: Box<MiniExp> },
+    /// `var l = init in body` (`E_var`)
+    Var {
+        lexp: Box<MiniLexp>,
+        init: Box<MiniExp>,
+        body: Box<MiniExp>,
+    },
+    /// `undefined` (`E_undef`)
+    Undef,
+    /// `constraint(c)` (`E_constraint`)
+    Constraint(NConstraint),
 }
