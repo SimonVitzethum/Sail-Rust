@@ -175,6 +175,14 @@ impl<S: Solver> Solver for CachingSolver<S> {
         if let Ok(mut state) = self.state.lock() {
             if let Some(r) = state.map.get(nc).copied() {
                 state.stats.hits += 1;
+                // True LRU recency: the hit is promoted to the back so
+                // hot entries survive eviction. Without this the queue
+                // was FIFO — frequently proved constraints were evicted
+                // first while cold entries stayed resident.
+                if let Some(pos) = state.order.iter().position(|k| k == nc) {
+                    state.order.remove(pos);
+                }
+                state.order.push_back(nc.clone());
                 return r;
             }
             state.stats.misses += 1;
