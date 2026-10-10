@@ -5,6 +5,10 @@ edition = "2021"
 description = "Sail2 source parser skeleton (hand-written, streaming per file, forbid(unsafe_code))"
 license = "BSD-2-Clause"
 
+[dependencies]
+sail-ast = { path = "../sail-ast" }
+sail-lex = { path = "../sail-lex" }
+
 [lib]
 name = "sail_parse"
 path = "src/lib.rs"
