@@ -578,6 +578,38 @@ fn parse_bitfield_ranges() {
 }
 
 #[test]
+fn parse_bitfield_body_strict() {
+    // Lane 87 (sail.lalrpop:1288): `RDefBody` is strict (non-empty,
+    // right-recursive, E4-`Block` shape) but still used as `RDefBody?`, so
+    // `{}` parses — via exactly one tree — while item lists keep trailing
+    // commas. Same accepted language as before, no corpus impact.
+    let typ = Typ::App("bits".to_string(), vec![Typ::Lit(Lit::Num("8".to_string()))]);
+    let bitfield = |fields: Vec<RegField>| {
+        Def::Aux(DefAux::Type(TypeDef::Bitfield("B".to_string(), typ.clone(), fields)))
+    };
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = {}").unwrap(),
+        bitfield(vec![])
+    );
+    let single = IndexRange::Single(Typ::Lit(Lit::Num("4".to_string())));
+    let one = RegField::Item("f".to_string(), single.clone());
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : 4 }").unwrap(),
+        bitfield(vec![one.clone()])
+    );
+    // Trailing comma parses to the same single-item body.
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : 4, }").unwrap(),
+        bitfield(vec![one.clone()])
+    );
+    // Several fields, `..`-ranges, `@`-concats, doc/attribute prefixes.
+    assert!(parse_def("bitfield B : bits(8) = { f : 7..0, g : 4 }").is_ok());
+    assert!(parse_def("bitfield B : bits(8) = { f : a @ b }").is_ok());
+    assert!(parse_def("bitfield B : bits(8) = { $[myattr] f : 4 }").is_ok());
+    assert!(parse_def("bitfield B : bits(8) = { /// field f\n f : 4 }").is_ok());
+}
+
+#[test]
 fn parse_foreach_by_in() {
     // E4: `by Exp` / `in Typ` tails; the step cannot end in a bare `let`.
     assert!(parse_exp("foreach (i from 0 to 10) do i").is_ok());
