@@ -1,0 +1,16 @@
+[package]
+name = "sail-solver"
+version = "0.1.0"
+edition = "2021"
+description = "Solver-Trait, bounded Memo-Cache und Solver-Pool fuer den reinen Rust-Sail-Compiler (Lane 06). Z3 nur optional."
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+# Optionale Z3-Anbindung. Default: reiner Stub ohne C-Dep.
+z3 = ["dep:z3"]
+
+[dependencies]
+z3 = { version = "0.12", optional = true }
+
+[dev-dependencies]
