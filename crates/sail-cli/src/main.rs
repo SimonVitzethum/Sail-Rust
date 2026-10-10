@@ -203,6 +203,87 @@ fn run_lean(opts: &Options, profiler: &mut Profiler) -> Result<(), CliError> {
     Ok(())
 }
 
+/// E2E-Tiny-Arm-Treiber (Lane 116 verdrahtet den Lane-45-Einstieg `e2e::run`
+/// ans CLI): `--e2e <input.sail> --out-dir <dir> [--e2e-module <name>]`.
+/// Kehrt nie mit stillem Erfolg über Lücken hinweg zurück — offene Bodies
+/// stehen als Fail-Liste im Fehler (Exit 1), I/O-Probleme als fatal (Exit 2).
+/// Die Flag-Schreibweise ist vorläufig; endgültige Flag-Parität bleibt
+/// Lane-38-Hoheit.
+fn run_e2e(
+    opts: &Options,
+    memo: &mut BoundedMemoCache,
+    profiler: &mut Profiler,
+) -> Result<(), CliError> {
+    if opts.inputs.len() != 1 {
+        return Err(CliError {
+            exit_code: EXIT_ERROR,
+            message: "sail-rs: --e2e expects exactly one input file\nUse 'sail-rs --help' for a list of available arguments."
+                .to_string(),
+        });
+    }
+    let args = e2e::E2eArgs::with_input(
+        opts.inputs[0].clone(),
+        opts.e2e_out_dir.clone(),
+        opts.e2e_module.clone(),
+    );
+    if opts.dry_run {
+        println!("sail-rs: dry-run plan (no inputs read, no outputs written)");
+        println!(
+            "  target=e2e input={} outdir={} module={}",
+            args.input, args.out_dir, args.module,
+        );
+        profiler.simulated("parse");
+        profiler.simulated("lean-emit");
+        profiler.finish_total();
+        if opts.dprofile {
+            profiler.emit_stderr();
+        }
+        return Ok(());
+    }
+    check_inputs(opts, memo, profiler)?;
+    verbose_log(
+        opts,
+        &format!("e2e input={} outdir={}", args.input, args.out_dir),
+    );
+    profiler.phase("typecheck", || {});
+    let outcome = e2e::run(&args);
+    profiler.phase("lean-emit", || {});
+    profiler.finish_total();
+    if opts.dprofile {
+        profiler.emit_stderr();
+    }
+    println!(
+        "sail-rs: e2e {} -> {} (module {}): {} file(s), {} fail(s), ooc sealed={} evicted={}",
+        args.input,
+        args.out_dir,
+        args.module,
+        outcome.emitted.len(),
+        outcome.fails.len(),
+        outcome.ooc.sealed,
+        outcome.ooc.evicted,
+    );
+    for f in &outcome.emitted {
+        println!("sail-rs: e2e emitted {f}");
+    }
+    for f in &outcome.fails {
+        println!("sail-rs: e2e {f}");
+    }
+    match e2e::exit_code_for(&outcome) {
+        0 => Ok(()),
+        2 => Err(CliError::fatal(format!(
+            "sail-rs: e2e failed with {} I/O fail(s), see report above",
+            outcome.fails.len()
+        ))),
+        _ => Err(CliError {
+            exit_code: EXIT_ERROR,
+            message: format!(
+                "sail-rs: e2e incomplete: {} fail(s), see report above",
+                outcome.fails.len()
+            ),
+        }),
+    }
+}
+
 fn run(opts: &Options) -> Result<(), CliError> {
     if opts.print_help {
         print!("{}", help_text(env!("CARGO_PKG_VERSION")));
@@ -249,6 +330,10 @@ fn run(opts: &Options) -> Result<(), CliError> {
         );
     } else {
         verbose_log(opts, "memo-z3=off");
+    }
+
+    if opts.e2e {
+        return run_e2e(opts, &mut _memo, &mut profiler);
     }
 
     if opts.dry_run {

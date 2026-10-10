@@ -100,6 +100,12 @@ pub struct Options {
     pub print_version: bool,
     pub print_help: bool,
     pub dry_run: bool,
+    // --- E2E-Tiny-Arm-Treiber (Lane 116 verdrahtet Lane-45-`e2e.rs`; rein
+    // additiv, keine bestehenden Flags angefasst; endgültige Flag-Parität
+    // bleibt Lane-38-Hoheit) ---
+    pub e2e: bool,
+    pub e2e_out_dir: Option<String>,
+    pub e2e_module: Option<String>,
     pub inputs: Vec<String>,
     // --- Akzeptiert-und-ignoriert (andere OCaml-Backends) ---
     pub passthrough_bool: Vec<String>,
@@ -474,6 +480,16 @@ pub fn parse_args(argv: &[String]) -> Result<Options, CliError> {
                 check_no_inline(arg)?;
                 opts.dry_run = true;
             }
+            "e2e" => {
+                check_no_inline(arg)?;
+                opts.e2e = true;
+            }
+            "out-dir" => {
+                opts.e2e_out_dir = Some(take_value(arg)?);
+            }
+            "e2e-module" => {
+                opts.e2e_module = Some(take_value(arg)?);
+            }
             _ if is_bool_passthrough(&name) => {
                 check_no_inline(arg)?;
                 opts.passthrough_bool.push(name);
@@ -568,6 +584,11 @@ ignored by this Lean frontend. Single-dash and double-dash as well as '-' and\n\
 sail-rs extensions\n\
   --dry-run                                 validate arguments and print the execution plan without reading\n\
                                             inputs or writing outputs (also via env SAIL_RS_DRY_RUN=1)\n\
+  --e2e                                     run the Tiny-Arm E2E driver (Lane-45 sketch in src/e2e.rs):\n\
+                                            parse one input, emit stub + Lake skeleton to --out-dir,\n\
+                                            report the Fail list (exit 1) or I/O problems (exit 2)\n\
+  --out-dir <directory>                     output directory for --e2e (default target/sail-e2e/SailTinyArm)\n\
+  --e2e-module <name>                       Lean module name for --e2e (default SailTinyArm)\n\
   --memo-z3-max-entries <n>                 bound the in-memory memo-z3 cache to <n> entries (default 10000).\n\
                                             OCaml-Sail memoizes unboundedly; sail-rs always stays bounded.\n\
   --memo-z3-max-bytes <n>                   bound the in-memory memo-z3 cache to roughly <n> bytes (default 67108864)\n\
@@ -777,5 +798,35 @@ mod tests {
         ] {
             assert!(help.contains(needle), "missing: {needle}");
         }
+    }
+
+    #[test]
+    fn e2e_flags_parsen_mit_out_dir_und_modul() {
+        let opts = parse_args(&argv(&[
+            "--e2e",
+            "--out-dir",
+            "out",
+            "--e2e-module",
+            "Tiny",
+            "in.sail",
+        ]))
+        .unwrap();
+        assert!(opts.e2e);
+        assert_eq!(opts.e2e_out_dir.as_deref(), Some("out"));
+        assert_eq!(opts.e2e_module.as_deref(), Some("Tiny"));
+        assert_eq!(opts.inputs, vec!["in.sail".to_string()]);
+    }
+
+    #[test]
+    fn e2e_bool_mit_gleich_ist_usage_fehler() {
+        let err = parse_args(&argv(&["--e2e=true"])).unwrap_err();
+        assert_eq!(err.exit_code, EXIT_ERROR);
+    }
+
+    #[test]
+    fn out_dir_underscore_form_ist_aequivalent() {
+        let opts = parse_args(&argv(&["--out_dir", "o", "--e2e"])).unwrap();
+        assert_eq!(opts.e2e_out_dir.as_deref(), Some("o"));
+        assert!(opts.e2e);
     }
 }

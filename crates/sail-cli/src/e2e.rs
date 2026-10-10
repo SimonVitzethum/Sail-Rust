@@ -74,6 +74,25 @@ impl E2eArgs {
             module: "SailTinyArm".to_string(),
         }
     }
+
+    /// CLI-Verdrahtung (Lane 116): genau eine Eingabe plus `--out-dir`- und
+    /// `--e2e-module`-Overrides; der Rest bleibt Tiny-Arm-Default.
+    #[must_use]
+    pub fn with_input(
+        input: String,
+        out_dir: Option<String>,
+        module: Option<String>,
+    ) -> Self {
+        let mut args = Self::tiny_arm_default();
+        args.input = input;
+        if let Some(dir) = out_dir {
+            args.out_dir = dir;
+        }
+        if let Some(name) = module {
+            args.module = name;
+        }
+        args
+    }
 }
 
 /// Teilergebnis: geschrieben wurde, was ohne Unified-AST geht; der Rest
@@ -278,6 +297,24 @@ pub fn run_with_ooc<H: OocHooks>(args: &E2eArgs, driver: &mut OocDriver<H>) -> O
     driver.finish();
     out.ooc = driver.stats().clone();
     out
+}
+
+/// Exit-Code-Abbildung für den CLI-Rand (Lane-116-Verdrahtung,
+/// Lane-38-Konvention `EXIT_OK/EXIT_ERROR/EXIT_FATAL = 0/1/2`): 0 ohne Fails,
+/// 2 bei Ein-/Ausgabe-Fails, sonst 1 (offene Pipeline-Fails, kein stiller
+/// Erfolg über Lücken hinweg).
+#[must_use]
+pub fn exit_code_for(outcome: &Outcome) -> i32 {
+    if outcome.fails.is_empty() {
+        return 0;
+    }
+    let io = outcome.fails.iter().any(|f| {
+        matches!(
+            f.stage,
+            "read-input" | "write-outdir" | "write-defs" | "write-file"
+        )
+    });
+    if io { 2 } else { 1 }
 }
 
 /// Pipeline-Skizze: parsen → zählen → Stubs + Register + Lake-Skelett
@@ -519,5 +556,28 @@ mod tests {
         let fail = E2eFail::new("ooc-wire", "lane-62", format!("OoC-Streaming: {err}"));
         assert_eq!(fail.owner, "lane-62");
         assert!(fail.to_string().contains("Warm-Budget"));
+    }
+
+    #[test]
+    fn with_input_ueberschreibt_nur_out_dir_und_modul() {
+        let args = E2eArgs::with_input("a.sail".to_string(), Some("out".to_string()), None);
+        assert_eq!(args.input, "a.sail");
+        assert_eq!(args.out_dir, "out");
+        assert_eq!(args.module, E2eArgs::tiny_arm_default().module);
+    }
+
+    #[test]
+    fn exit_code_0_ohne_fails_2_bei_io_1_bei_pipeline_fails() {
+        assert_eq!(exit_code_for(&Outcome::default()), 0);
+        let mut io = Outcome::default();
+        io.fails.push(E2eFail::new(
+            "read-input",
+            "lane-38",
+            "weg".to_string(),
+        ));
+        assert_eq!(exit_code_for(&io), 2);
+        let mut pipe = Outcome::default();
+        pipe.fails.extend(static_fails());
+        assert_eq!(exit_code_for(&pipe), 1);
     }
 }
