@@ -14,7 +14,7 @@ use std::sync::Arc;
 /// small locals map. Mutation uses [`Arc::make_mut`] (copy-on-write), so
 /// observable behaviour is unchanged — a cloned env never sees later
 /// inserts into the original.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct SharedTables {
     /// `val` specs: function name -> quantified scheme.
     vals: HashMap<String, TypQuant>,
@@ -157,5 +157,17 @@ mod tests {
         assert!(fork.lookup_register("r").is_some());
         // Polymorphic schemes do not project into `lookup`.
         assert!(fork.lookup("r").is_none());
+    }
+
+    #[test]
+    fn shared_tables_eq_and_serde_roundtrip() {
+        let mut env = TypeEnv::new();
+        env.add_val("f", mono_int());
+        let fork = env.clone();
+        // `PartialEq` compares through the shared tables.
+        assert_eq!(env, fork);
+        let text = serde_json::to_string(&env).expect("env serializes");
+        let back: TypeEnv = serde_json::from_str(&text).expect("env deserializes");
+        assert_eq!(env, back);
     }
 }
