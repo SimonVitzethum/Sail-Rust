@@ -9,8 +9,9 @@
 //!
 //! Lane-01 mapping: [`MinimalDef::Register`] mirrors
 //! `sail-ast` `DefKind::Register(DecSpec)` (`typ`, `name`,
-//! `init: Option<Exp>`); see `REGS_NEEDED.md`. The local minimal types
-//! below are plain data so this crate builds standalone.
+//! `init: Option<Exp>`); see `REGS_NEEDED.md`. The [`bridge`] module converts
+//! real `sail-ast` defs (migration entries #26/#27); the local minimal types
+//! below stay as the plain-data input surface.
 //!
 //! Lane 61 status (MIGRATION.md #26/#27): [`MinimalDef`]/[`SailTyp`] are
 //! retained — renderings (`bits(64)` spellings, optional init text) need
@@ -22,6 +23,14 @@
 use sail_diag::{DiagCode, SailError, Span};
 use std::collections::BTreeMap;
 use std::fmt::Write;
+
+pub mod bridge;
+
+pub use bridge::{
+    dec_spec_to_minimal, extract_registers_ast, lean_nexp_of_ast, lean_typ_of_ast,
+    lean_typ_string_of_ast, render_sail_constraint, render_sail_lit, render_sail_nexp,
+    render_sail_typ, render_sail_typarg, try_render_sail_exp,
+};
 
 /// A Sail type as written in source, e.g. `bits(64)`, `bool`, `int`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
