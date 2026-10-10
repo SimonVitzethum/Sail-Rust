@@ -1,0 +1,8 @@
+[package]
+name = "sail-nexp"
+version = "0.1.0"
+edition = "2021"
+description = "Pure NExp/nconstraint algebra for the sail-rs compiler: simplification, provability predicates, Nat-vs-Int mapping"
+
+[dev-dependencies]
+proptest = "1"

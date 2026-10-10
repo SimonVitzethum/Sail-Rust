@@ -3,5 +3,6 @@ members = [
     "crates/sail-ast",
     "crates/sail-parse",
     "crates/sail-resolve",
+    "crates/sail-nexp",
 ]
 resolver = "2"
