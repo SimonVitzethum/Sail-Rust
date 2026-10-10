@@ -13,6 +13,7 @@ E3: keine Builds/Tests in Lane-Agents — Verifikation später zentral per Test-
 | `WarmLayer` (`warm.rs`) | Warmer Layer: `<hex>.blob`, atomare Spills, `Arc<[u8]>`-Reads (read-mostly), explizites Live-Budget, `evict`/`evict_all` |
 | `MemoSpills` (`memo.rs`) | Kalte Memo-Spills (z. B. Z3-Ergebnisse) über `sail-cache` (Lane 36), run-übergreifend, Domänen-getrennt |
 | `SummaryTable`/`ShardSummary`/`ExportedSymbols` (`summary.rs`) | Cross-Shard-Summaries für Lanes 08/09; max. 64 KiB pro Eintrag, Bodies nur per `ContentId` referenziert |
+| `OocDriverLoop`/`DriverPhase`/`DriverState`/`DriverStats` (`driver.rs`, Lane 83) | Fahrtüchtige Schleife (holen → Phase → sealen → spillen → weiter); Peak-Budgets je Phase (Lane-14-Format, deklariert), Zustände s. `DRIVER.md` |
 
 ## Warum kein echtes mmap
 

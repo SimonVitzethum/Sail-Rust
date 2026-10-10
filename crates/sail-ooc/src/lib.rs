@@ -21,6 +21,9 @@
 //!   (Lane 36), Keys sind Content-Hashes.
 //! * [`SummaryTable`]/[`ShardSummary`]/[`ExportedSymbols`]:
 //!   Cross-Shard-Summaries fuer Lanes 08/09 (Bodies bleiben auf Platte).
+//! * [`OocDriverLoop`]/[`DriverPhase`]/[`DriverState`]/[`DriverStats`]:
+//!   fahrtuechtige Driver-Schleife (Lane 83: holen → Phase → sealen →
+//!   spillen → weiter; Budgets je Phase, Zustaende s. `DRIVER.md`).
 //!
 //! Auf Lane 11 ([`sail_shard`]) und Lane 36 ([`sail_cache`]) wird
 //! aufgesetzt (gelesen, nicht gedoppelt); Lane 37 liefert die
@@ -33,12 +36,18 @@
 #![forbid(unsafe_code)]
 
 mod barrier;
+mod driver;
 mod id;
 mod memo;
 mod summary;
 mod warm;
 
 pub use barrier::{BarrierError, HotToken, PhaseBarrier, SealReceipt, ShardPhase};
+pub use driver::{
+    check_phase_budget, DriverError, DriverPhase, DriverState, DriverStats, OocDriverLoop,
+    PhaseBudget, KIB_PER_MIB, OOC_DRIVER_PASS_VERSION, PEAK_FETCH_KIB, PEAK_REWRITE_KIB,
+    PEAK_SEAL_KIB, PEAK_SPILL_KIB, PEAK_SUMMARY_KIB, PEAK_TYPECHECK_KIB, PHASE_BUDGETS,
+};
 pub use id::ContentId;
 pub use memo::{MEMO_DOMAIN_PREFIX, MemoSpills};
 pub use summary::{
