@@ -3,6 +3,7 @@ name = "sail-int"
 version = "0.1.0"
 edition = "2021"
 description = "Int/Nat/Range/Atom mapping, integer operator table, and E_for lowering for the Lean backend"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 sail-ast = { path = "../sail-ast" }

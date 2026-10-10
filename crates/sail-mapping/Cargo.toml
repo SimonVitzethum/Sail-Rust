@@ -3,7 +3,7 @@ name = "sail-mapping"
 version = "0.1.0"
 edition = "2021"
 description = "Lane 20: Sail mappings — realize_mappings / mapping_patterns / untranslatable_mapping (encdec-split sketch)"
-license = "BSD-2-Clause"
+license = "MIT OR Apache-2.0"
 
 [lib]
 name = "sail_mapping"
