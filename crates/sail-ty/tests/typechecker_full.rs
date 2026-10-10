@@ -1105,7 +1105,7 @@ fn rule_table_complete() {
         );
         if entry.status == RuleStatus::Implemented {
             assert!(
-                !entry.sail_ref().is_empty(),
+                !entry.id.sail_ref().is_empty(),
                 "rule {} has no Sail reference",
                 entry.id.as_str()
             );
