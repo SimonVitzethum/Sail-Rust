@@ -1,0 +1,10 @@
+[package]
+name = "sail-extern"
+version = "0.1.0"
+edition = "2021"
+description = "extern \"lean\" FFI mappings for the pure-Rust Sail compiler (lane 25)"
+license = "BSD-2-Clause"
+
+[lib]
+name = "sail_extern"
+path = "src/lib.rs"
