@@ -44,6 +44,15 @@
 //     (`CallArgs`/`IdCallTail`/`PatIdTail`/`MPatIdTail`/`MPatSuffix`,
 //     `VecUpd`-Tails, `FMPat`-`=`, `UnbracketedTyParam`-`constraint`,
 //     `RegDef`-`=`).
+//   - Lane 103 (Rig 183338): `AbstractInst` peels the first `config` key
+//     into two explicit arms with a use-site-local `ConfigKeyTail`, so the
+//     outer `.`-vs-stop decision state has a single-path context (the old
+//     shared `ConfigKey` re-created it on every encoding: right-recursive
+//     merged the outer/inner after-`RawId` cores, Rig 1375; left-recursive
+//     Lane 102 kept the shared state, Rig 1385); `RIdDef` uses a dedicated
+//     `RegAttrs`/`RegAttrsTail` copy of `Attrs`/`AttrsTail` (per-use-site
+//     dedup against LALR-merge imprecision, Rig 1547). Same keys and
+//     attributes in the same order; accepted language unchanged.
 //   - `IndexRange` parens removed: `"(" IndexRange ")"` duplicated
 //     `AtomicTyp`'s `"(" Typ ")"` for every parenthesised type (`(t)` had
 //     two trees; `(a, b)` was shift-vs-reduce on `,`) while being the only
@@ -1382,19 +1391,32 @@ TypedefTail: DefAux = {
 }
 
 AbstractInst: Vec<String> = {
-    "=" "config" <ks:ConfigKey> => ks,
+    "=" "config" <k:RawId> => vec![k],
+    "=" "config" <k:RawId> "." <ks:ConfigKeyTail> => {
+        let mut v = vec![k];
+        v.extend(ks);
+        v
+    },
 }
 
-// `config` key chain: E4-explicit (Lane 102) — left-recursive, so after
-// `RawId` on `"."` only the reduce to `ConfigKey` applies (the old
-// right-recursive `RawId "." ConfigKey` arm let the reduce compete with
-// the `"."` shift: Rig 1375:5-1375:24). Same keys in the same order;
-// accepted language unchanged.
-ConfigKey: Vec<String> = {
+// `config` key tail: use-site-local chain (Lane 103) — Menhir
+// (`sail/src/lib/parser.mly:1039-1043`) keeps `abstract_instantiation`
+// flat (`Eq; Config; key=separated_nonempty_list(Dot, Id)`) and lets its
+// shift-preference decide. Our named `ConfigKey` nonterminal re-created
+// the decision state on every encoding: right-recursive merged the outer
+// and inner after-`RawId` cores into one state (Rig 1375:5-1375:24), and
+// left-recursive (Lane 102) kept a shared `ConfigKey` state whose reduce
+// (`AbstractInst`) competes with the `"."` shift (Rig 1385:5-1385:37).
+// Peeling the first key into `AbstractInst` gives the outer decision
+// state a single-path context and the inner tail its own nonterminal, so
+// the `.`-vs-stop decision no longer shares a state across nesting
+// levels. Same keys in the same order; accepted language unchanged.
+ConfigKeyTail: Vec<String> = {
     <k:RawId> => vec![k],
-    <mut ks:ConfigKey> "." <k:RawId> => {
-        ks.push(k);
-        ks
+    <k:RawId> "." <ks:ConfigKeyTail> => {
+        let mut v = vec![k];
+        v.extend(ks);
+        v
     },
 }
 
@@ -1526,7 +1548,7 @@ AtomicIndexRange: IndexRange = {
 // `r_id_def`.
 RIdDef: RegField = {
     <d:DocComment> <r:RIdDef> => RegField::Doc(d, Box::new(r)),
-    <a:Attrs> <r:RIdDef> => RegField::Attr(a, Box::new(r)),
+    <a:RegAttrs> <r:RIdDef> => RegField::Attr(a, Box::new(r)),
     <n:Ident> ":" <r:IndexRange> => RegField::Item(n, r),
 }
 
@@ -1545,6 +1567,44 @@ RDefBody: Vec<RegField> = {
         v
     },
     <i:RIdDef> "," => vec![i],
+}
+
+// Register-item attributes: per-use-site copy of `Attrs`/`AttrsTail`
+// (Lane 103) — same arms, same AST. `Attrs` is shared across the whole
+// grammar (`Pat`, `ClosedExp`, `AttrCase`, `FunclAnnot`, `MapCl`,
+// `EnumMember`, `StructField`, `TypeUnion`, `Def`, …), so the shift-side
+// closure of the `RDefBody`-comma decision state carries the union of
+// all their contexts, and the trailing-"," reduce competes with the
+// shift on every `RIdDef` starter (Rig 1547:5-1547:29: reduce-`RDefBody`
+// vs shift on `RawAttr`/`RawDocBlock`/`RawDocLine`/`"operator"`/`RawId`).
+// The dedicated copy confines that state's shift-side context to the
+// register path (per-use-site dedup against LALR-merge imprecision).
+// Accepted language unchanged.
+RegAttrs: Vec<Attr> = {
+    <a:RawAttr> <d:AttrData> <t:RegAttrsTail> => {
+        let mut v = vec![Attr { name: a, data: Some(d) }];
+        v.extend(t);
+        v
+    },
+    <a:RawAttr> <t:RegAttrsTail> => {
+        let mut v = vec![Attr { name: a, data: None }];
+        v.extend(t);
+        v
+    },
+}
+
+RegAttrsTail: Vec<Attr> = {
+    "," <i:RawId> <d:AttrData> <t:RegAttrsTail> => {
+        let mut v = vec![Attr { name: i, data: Some(d) }];
+        v.extend(t);
+        v
+    },
+    "," <i:RawId> <t:RegAttrsTail> => {
+        let mut v = vec![Attr { name: i, data: None }];
+        v.extend(t);
+        v
+    },
+    "]" => vec![],
 }
 
 // ---------------------------------------------------------------------------

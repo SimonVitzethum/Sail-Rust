@@ -1235,3 +1235,90 @@ fn parse_lane102_configkey_attrs_tails() {
     assert!(parse_def("bitfield B : bits(8) = { $[myattr 1] f : 4 }").is_ok());
     assert!(parse_def("bitfield B : bits(8) = { $[a, b 2] f : 4, g : 4 }").is_ok());
 }
+
+#[test]
+fn parse_lane103_abstract_inst_key_chain() {
+    // Lane 103 (Rig 1385:5-1385:37): `AbstractInst` peels the first
+    // `config` key into two explicit arms with a use-site-local
+    // `ConfigKeyTail` (Menhir `parser.mly:1039-1043` is flat). Same
+    // accepted language: keys in order, `None` without `= config`.
+    let abs = |keys: Option<Vec<String>>| {
+        Def::Aux(DefAux::Type(TypeDef::Abstract(
+            "foo".to_string(),
+            Kind::Type,
+            keys,
+        )))
+    };
+    assert_eq!(parse_def("type foo : Type").unwrap(), abs(None));
+    assert_eq!(
+        parse_def("type foo : Type = config a.b").unwrap(),
+        abs(Some(vec!["a".to_string(), "b".to_string()]))
+    );
+    assert_eq!(
+        parse_def("type foo : Type = config a.b.c.d.e").unwrap(),
+        abs(Some(vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+            "e".to_string(),
+        ]))
+    );
+}
+
+#[test]
+fn parse_lane103_register_attrs_dedup() {
+    // Lane 103 (Rig 1547:5-1547:29): `RIdDef` uses the dedicated
+    // `RegAttrs` / `RegAttrsTail` copy. Same accepted language: the
+    // comma decision (continue vs trailing `,`) with attributed fields
+    // on either side, payloads, and shared-`Attrs` `Def` prefixes.
+    let typ = Typ::App("bits".to_string(), vec![Typ::Lit(Lit::Num("8".to_string()))]);
+    let bitfield = |fields: Vec<RegField>| {
+        Def::Aux(DefAux::Type(TypeDef::Bitfield("B".to_string(), typ.clone(), fields)))
+    };
+    let range = IndexRange::Single(Typ::Lit(Lit::Num("4".to_string())));
+    let attr_field = |name: &str, field: &str| {
+        RegField::Attr(
+            vec![Attr { name: name.to_string(), data: None }],
+            Box::new(RegField::Item(field.to_string(), range.clone())),
+        )
+    };
+    // Attributed field after the comma: the exact Rig-1547 shift path.
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { $[a] f : 4, $[b] g : 4 }").unwrap(),
+        bitfield(vec![attr_field("a", "f"), attr_field("b", "g")])
+    );
+    // Plain field first, attributed field after the comma.
+    assert!(parse_def("bitfield B : bits(8) = { f : 4, $[b] g : 4 }").is_ok());
+    // Attributed field with trailing comma: trailing-"," reduce.
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { $[a] f : 4, }").unwrap(),
+        bitfield(vec![attr_field("a", "f")])
+    );
+    // Attribute list with payload on the register path.
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { $[a 1, b] f : 4 }").unwrap(),
+        bitfield(vec![RegField::Attr(
+            vec![
+                Attr {
+                    name: "a".to_string(),
+                    data: Some(AttrData::Num("1".to_string())),
+                },
+                Attr { name: "b".to_string(), data: None },
+            ],
+            Box::new(RegField::Item("f".to_string(), range.clone())),
+        )])
+    );
+    // Shared-`Attrs` `Def` prefix still parses (non-register use-site).
+    assert_eq!(
+        parse_def("$[a] register r : int").unwrap(),
+        Def::Attr(
+            vec![Attr { name: "a".to_string(), data: None }],
+            Box::new(Def::Aux(DefAux::Register(RegDef {
+                name: "r".to_string(),
+                typ: Typ::Id("int".to_string()),
+                init: None,
+            }))),
+        )
+    );
+}
