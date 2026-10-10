@@ -252,6 +252,10 @@ pub fn simplify_constraint(c: &NConstraint) -> NConstraint {
                 NConstraint::Set(Box::new(n), sorted)
             }
         }
+        NConstraint::App(f, args) => {
+            // Uninterpreted: only simplify the arguments, never fold.
+            NConstraint::App(f.clone(), args.iter().map(simplify).collect())
+        }
         NConstraint::And(a, b) => {
             let (a, b) = (simplify_constraint(a), simplify_constraint(b));
             match (a, b) {
@@ -326,16 +330,103 @@ pub fn normalize(e: &NExp) -> NExp {
 }
 
 /// Iterate [`simplify_constraint`] to a fixpoint (at most 64 rounds).
+/// `And`/`Or` are additionally flattened and sorted (like `Sum`/`Times`
+/// in [`normalize`); embedded [`NExp`]s are [`normalize`]d, so results
+/// are canonical up to operand order of distinct atoms.
 pub fn normalize_constraint(c: &NConstraint) -> NConstraint {
     let mut cur = c.clone();
     for _ in 0..64 {
-        let next = simplify_constraint(&cur);
+        let next = canonical_constraint(&simplify_constraint(&cur));
         if next == cur {
             return next;
         }
         cur = next;
     }
     cur
+}
+
+/// Flatten nested `And`/`Or`, sort operands canonically, normalize
+/// embedded [`NExp`]s.
+fn canonical_constraint(c: &NConstraint) -> NConstraint {
+    match c {
+        NConstraint::And(_, _) => {
+            let mut parts = Vec::new();
+            flatten_and(c, &mut parts);
+            let mut parts: Vec<NConstraint> =
+                parts.into_iter().map(|p| canonical_constraint(&p)).collect();
+            parts.sort();
+            parts.dedup();
+            rebuild_and(parts)
+        }
+        NConstraint::Or(_, _) => {
+            let mut parts = Vec::new();
+            flatten_or(c, &mut parts);
+            let mut parts: Vec<NConstraint> =
+                parts.into_iter().map(|p| canonical_constraint(&p)).collect();
+            parts.sort();
+            parts.dedup();
+            rebuild_or(parts)
+        }
+        NConstraint::Not(x) => NConstraint::Not(Box::new(canonical_constraint(x))),
+        NConstraint::Equal(a, b) => NConstraint::Equal(norm_box(a), norm_box(b)),
+        NConstraint::NotEqual(a, b) => NConstraint::NotEqual(norm_box(a), norm_box(b)),
+        NConstraint::Ge(a, b) => NConstraint::Ge(norm_box(a), norm_box(b)),
+        NConstraint::Gt(a, b) => NConstraint::Gt(norm_box(a), norm_box(b)),
+        NConstraint::Le(a, b) => NConstraint::Le(norm_box(a), norm_box(b)),
+        NConstraint::Lt(a, b) => NConstraint::Lt(norm_box(a), norm_box(b)),
+        NConstraint::Set(n, vs) => {
+            let mut sorted = vs.clone();
+            sorted.sort();
+            sorted.dedup();
+            NConstraint::Set(Box::new(normalize(n)), sorted)
+        }
+        NConstraint::App(f, args) => {
+            NConstraint::App(f.clone(), args.iter().map(normalize).collect())
+        }
+        _ => c.clone(),
+    }
+}
+
+fn norm_box(e: &NExp) -> Box<NExp> {
+    Box::new(normalize(e))
+}
+
+fn flatten_and(c: &NConstraint, out: &mut Vec<NConstraint>) {
+    match c {
+        NConstraint::And(a, b) => {
+            flatten_and(a, out);
+            flatten_and(b, out);
+        }
+        _ => out.push(c.clone()),
+    }
+}
+
+fn flatten_or(c: &NConstraint, out: &mut Vec<NConstraint>) {
+    match c {
+        NConstraint::Or(a, b) => {
+            flatten_or(a, out);
+            flatten_or(b, out);
+        }
+        _ => out.push(c.clone()),
+    }
+}
+
+fn rebuild_and(mut parts: Vec<NConstraint>) -> NConstraint {
+    debug_assert!(!parts.is_empty());
+    let mut acc = parts.remove(0);
+    for p in parts {
+        acc = NConstraint::And(Box::new(acc), Box::new(p));
+    }
+    acc
+}
+
+fn rebuild_or(mut parts: Vec<NConstraint>) -> NConstraint {
+    debug_assert!(!parts.is_empty());
+    let mut acc = parts.remove(0);
+    for p in parts {
+        acc = NConstraint::Or(Box::new(acc), Box::new(p));
+    }
+    acc
 }
 
 /// Flatten nested `Sum`/`Times` and sort operands canonically.

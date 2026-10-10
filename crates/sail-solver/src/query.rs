@@ -1,10 +1,15 @@
 //! Minimale Constraint-Darstellung fuer Solver-Anfragen.
 //!
-//! Lane 04/05 liefern spaeter echte NExp-Constraints; bis dahin traegt
-//! [`Constraint::Atom`] die normalisierte S-Expr als String. Der Cache-Key
-//! ist die S-Expr plus Timeout, damit gleiche Anfragen gleiche Keys haben.
+//! Lane 04/05 liefern echte NExp-Constraints; [`Constraint::from_nconstraint`]
+//! bildet sie kanonisch (via `sail_nexp::normalize`) auf diese Struktur ab,
+//! sodass gleiche Formeln gleiche Cache-Keys haben. Daneben traegt
+//! [`Constraint::Atom`] weiterhin die normalisierte S-Expr als String. Der
+//! Cache-Key ist die S-Expr plus Timeout, damit gleiche Anfragen gleiche
+//! Keys haben.
 
 use std::fmt;
+
+use sail_nexp::{NConstraint as NC, NExp as NE};
 
 /// Einzelne Constraint-Formel (strukturiert, hashbar).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -27,6 +32,62 @@ impl Constraint {
     /// Opakes Atom aus normalisierter S-Expr.
     pub fn atom(s: impl Into<String>) -> Self {
         Constraint::Atom(s.into())
+    }
+
+    /// Strukturierte Bruecke aus `sail_nexp`: normalisiert erst mit
+    /// `sail_nexp::normalize_constraint` (kanonische Operandenordnung),
+    /// bildet `And`/`Or`/`Not` strukturell ab und alle Blaetter als
+    /// deterministische S-Expr-Atome. Gleiche NConstraint-Formeln geben
+    /// gleiche `Constraint`s (und damit gleiche Cache-Keys).
+    pub fn from_nconstraint(c: &NC) -> Self {
+        Self::from_normalized_nconstraint(&sail_nexp::normalize_constraint(c))
+    }
+
+    fn from_normalized_nconstraint(c: &NC) -> Self {
+        match c {
+            NC::True => Constraint::True,
+            NC::False => Constraint::False,
+            NC::Id(name) => Constraint::atom(format!("(bid {name})")),
+            NC::Var(kid) => Constraint::atom(format!("(bvar {kid})")),
+            NC::Equal(a, b) => {
+                Constraint::atom(format!("(= {} {})", nexp_key(a), nexp_key(b)))
+            }
+            NC::NotEqual(a, b) => {
+                Constraint::atom(format!("(!= {} {})", nexp_key(a), nexp_key(b)))
+            }
+            NC::Ge(a, b) => {
+                Constraint::atom(format!("(>= {} {})", nexp_key(a), nexp_key(b)))
+            }
+            NC::Gt(a, b) => {
+                Constraint::atom(format!("(> {} {})", nexp_key(a), nexp_key(b)))
+            }
+            NC::Le(a, b) => {
+                Constraint::atom(format!("(<= {} {})", nexp_key(a), nexp_key(b)))
+            }
+            NC::Lt(a, b) => {
+                Constraint::atom(format!("(< {} {})", nexp_key(a), nexp_key(b)))
+            }
+            NC::Set(n, vs) => {
+                let mut vs = vs.clone();
+                vs.sort();
+                vs.dedup();
+                let elems: Vec<String> = vs.iter().map(|v| v.to_string()).collect();
+                Constraint::atom(format!("(in {} {})", nexp_key(n), elems.join(" ")))
+            }
+            NC::App(f, args) => {
+                let argv: Vec<String> = args.iter().map(nexp_key).collect();
+                Constraint::atom(format!("(pred {f} {})", argv.join(" ")))
+            }
+            NC::And(a, b) => Constraint::And(vec![
+                Self::from_normalized_nconstraint(a),
+                Self::from_normalized_nconstraint(b),
+            ]),
+            NC::Or(a, b) => Constraint::Or(vec![
+                Self::from_normalized_nconstraint(a),
+                Self::from_normalized_nconstraint(b),
+            ]),
+            NC::Not(x) => Constraint::Not(Box::new(Self::from_normalized_nconstraint(x))),
+        }
     }
 
     /// S-Expr-Normalform als Cache-Key-Baustein.
@@ -61,6 +122,33 @@ impl Constraint {
 impl fmt::Display for Constraint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.cache_key())
+    }
+}
+
+/// Kanonischer S-Expr-Schluessel eines (bereits normalisierten)
+/// [`NExp`](sail_nexp::NExp): `sail_nexp::normalize` vorab anwenden, damit
+/// z. B. `b + a` und `a + b` denselben Schluessel erhalten.
+fn nexp_key(e: &NE) -> String {
+    let e = sail_nexp::normalize(e);
+    match &e {
+        NE::Id(name) => format!("(id {name})"),
+        NE::Var(kid) => format!("(var {kid})"),
+        NE::Constant(v) => format!("(const {v})"),
+        NE::App(f, args) => {
+            let argv: Vec<String> = args.iter().map(nexp_key).collect();
+            format!("(app {f} {})", argv.join(" "))
+        }
+        NE::If(c, t, b) => format!(
+            "(if {} {} {})",
+            Constraint::from_normalized_nconstraint(c).cache_key(),
+            nexp_key(t),
+            nexp_key(b)
+        ),
+        NE::Times(a, b) => format!("(* {} {})", nexp_key(a), nexp_key(b)),
+        NE::Sum(a, b) => format!("(+ {} {})", nexp_key(a), nexp_key(b)),
+        NE::Minus(a, b) => format!("(- {} {})", nexp_key(a), nexp_key(b)),
+        NE::Exp(x) => format!("(pow2 {})", nexp_key(x)),
+        NE::Neg(x) => format!("(neg {})", nexp_key(x)),
     }
 }
 

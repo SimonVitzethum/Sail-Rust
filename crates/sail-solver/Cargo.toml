@@ -11,6 +11,7 @@ default = []
 z3 = ["dep:z3"]
 
 [dependencies]
+sail-nexp = { path = "../sail-nexp" }
 z3 = { version = "0.21", optional = true }
 
 [dev-dependencies]

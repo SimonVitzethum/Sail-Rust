@@ -6,12 +6,22 @@
 //! total, side-effect-free functions:
 //!
 //! - `expr`: AST (`NExp`, `NConstraint`), constructors, substitution,
-//!   total-valuation evaluation.
-//! - `simplify`: constant folding, identities, canonical normal forms.
-//! - `pred`: syntactic provability predicates (`provably_nneg` and
-//!   friends), the pure equivalent of the Lean backend's
+//!   total-valuation evaluation. Covers all `Ast.ml` constructors:
+//!   `Nexp_id/var/constant/app/if/times/sum/minus/exp/neg` and
+//!   `NC_equal/not_equal/ge/gt/le/lt/set/and/or/app/id/var/true/false`
+//!   (`NC_app` with non-`NExp` `typ_arg`s must be abstracted by the
+//!   caller, see [`NConstraint::App`]).
+//! - `simplify`: constant folding, identities, canonical normal forms
+//!   (including sorted `And`/`Or` in [`normalize_constraint`]).
+//! - `pred`: syntactic provability predicates (the full `provably_*`
+//!   family: `nneg`, `pos`, `nonpos`, `neg`, `zero`, `nonzero`),
+//!   the pure equivalent of the Lean backend's
 //!   `provably_nneg ctx x = prove env (x >= 0)`.
 //! - `lean`: `Nat`-vs-`Int` mapping for Lean emission.
+//!
+//! Operator coverage for every backend (`eval`, `simplify`,
+//! sign analysis, Lean kinds, Z3 mapping) is tabulated in
+//! `docs/nexp-solver-operators.md` (Lane 80).
 //!
 //! There is deliberately no solver backend here: every predicate is
 //! conservative (it only answers `true` when the fact follows
