@@ -82,14 +82,14 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux new-window -d -t "$SESSION" -n "$WINDOW" "$WIN_CMD"
     echo "tmux-test: Fenster $SESSION:$WINDOW angelegt (cmd: $WIN_CMD)"
 else
-    # WICHTIG: tmux-Server als forking-Service-Unit (KillMode=process) starten, NICHT direkt.
-    # Hintergrund: jede Shell läuft in einer transienten Scope-Unit, deren Cleanup beim
-    # Befehlsende alle Restprozesse killt (verifiziert: direkter tmux-Start + Scope-Scope
-    # sterben reproduzierbar mit dem Aufruf). Die Service-Unit überlebt (linger=on),
-    # KillMode=process verschont den daemonisierten Server, MemoryMax deckt Rig gesamt ab.
+    # WICHTIG: Supervisor-Ansatz (kein forking, kein Scope): die Unit läuft `bash`,
+    # das tmux als Daemon startet und danach per `exec sleep infinity` ewig lebt. Dadurch
+    # bleibt die Unit aktiv, die Cgroup (inkl. MemoryMax) deckt Server + alle Fenster ab, und
+    # nichts hängt vom Lebenszyklus des Aufrufers ab. Verifiziert gegen: direkten Start
+    # (stirbt mit Caller-Scope), Scope-Start (stirbt lautlos), forking-Service (stirbt lautlos).
     RIG_UNIT="tmux-${SESSION}"
-    systemd-run --user --unit="$RIG_UNIT" --service-type=forking -p KillMode=process -p MemoryMax=24G -- \
-        tmux new-session -d -s "$SESSION" -n "$WINDOW" "$WIN_CMD"
+    systemd-run --user --unit="$RIG_UNIT" -p MemoryMax=24G -- \
+        bash -c "tmux new-session -d -s \"$SESSION\" -n \"$WINDOW\" $WIN_CMD; exec sleep infinity"
     echo "tmux-test: Session $SESSION mit Fenster $WINDOW angelegt (cmd: $WIN_CMD, unit: $RIG_UNIT)"
 fi
 echo "tmux-test: Reattach mit: tmux attach -t $SESSION   (Abhaengen: Ctrl-b d)"
