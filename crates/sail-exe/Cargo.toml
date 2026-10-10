@@ -1,0 +1,16 @@
+[package]
+name = "sail-exe"
+version = "0.1.0"
+edition = "2021"
+description = "Lean executable stub for the pure-Rust Sail compiler (lane 34): main_function_stub port gated by --lean-executable"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_exe"
+path = "src/lib.rs"
+
+[dev-dependencies]
+sail-lake = { path = "../../../../crates/sail-lake" }
+
+[lints]
+workspace = true
