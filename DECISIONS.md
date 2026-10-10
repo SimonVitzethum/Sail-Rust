@@ -26,3 +26,17 @@
   ohne Swap in den OOM-Killer, der dann den OpenCode-Desktop/Server trifft.
 - Verifikation nur per Code-Review + später zentral durch den Integrator mit Memory-Limits.
 - Done-Kriterium „Tests grün" ist bis dahin ausgesetzt; ersatzweise: saubere Typen, kleine Commits.
+
+## E4 — Out-of-core: nur Heißes in RAM, Rest in Cache (mmap/Disk)
+
+- **Heiß (RAM):** aktueller Shard-AST, aktiver Rewrite-State, heiße Memo-Einträge. Sonst nichts.
+- **Warm (mmap):** fertige Shards, Prelude/Builtins — per mmap eingeblendet, OS paget selbst.
+  Read-mostly, safe-API trotz `forbid(unsafe)`.
+- **Kalt (Disk-Cache):** Memo-Spills, inkrementelle Artefakte, alles mit Content-Hash als Schlüssel
+  (Z3-Ergebnisse unveränderlich → run-übergreifend wiederverwendbar; Inkremental-Story inklusive).
+- **Voraussetzungen:** stabile IDs per Content-Hash statt Zähler (Lane 37, sonst invalidiert jeder
+  Lauf den Cache); explizite Phasen-Barrieren (Shard typchecken → serialisieren + verwerfen → nächster).
+- **Alles-auf-einmal-Phasen** (globale Monomorphisierung, programmweite Const-Prop — Lanes 08/09)
+  brechen das: Cross-Shard nur als Summaries in RAM, Bodies auf Platte.
+- **Zugriffsmuster:** Pässe auf Shard-Streaming + Memo-Punktzugriffe ausrichten (kein wilder Random-Access).
+- Swap bleibt Airbag, ersetzt die Architektur nicht.
