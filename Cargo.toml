@@ -34,6 +34,7 @@ members = [
     "crates/sail-instrs-core",
     "crates/sail-exe",
     "crates/sail-diag",
+    "crates/sail-cache",
 ]
 resolver = "2"
 
