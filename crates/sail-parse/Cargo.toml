@@ -3,11 +3,7 @@ name = "sail-parse"
 version = "0.1.0"
 edition = "2021"
 description = "Sail2 source parser skeleton (hand-written, streaming per file, forbid(unsafe_code))"
-license = "BSD-2-Clause"
-
-[dependencies]
-sail-ast = { path = "../sail-ast" }
-sail-lex = { path = "../sail-lex" }
+license = "MIT OR Apache-2.0"
 
 [lib]
 name = "sail_parse"
@@ -15,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 sail-ast = { path = "../sail-ast" }
+sail-lex = { path = "../sail-lex" }
 
 [lints]
 workspace = true

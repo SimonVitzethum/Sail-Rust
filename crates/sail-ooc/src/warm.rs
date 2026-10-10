@@ -85,10 +85,12 @@ impl From<io::Error> for WarmError {
 /// Warme, dateigestuetzte Ablage fertiger Shards (read-mostly, safe).
 ///
 /// Nur [`WarmLayer::spill`] schreibt; [`WarmLayer::get`]/[`WarmLayer::prefetch`]
-/// lesen. Die Live-Menge (`Arc`-Cache) ist explizit begrenzt: Ueberschreitet
-/// [`WarmLayer::spill`] das Budget, muss der Aufrufer per [`WarmLayer::evict`]
-/// oder [`WarmLayer::evict_all`] Platz schaffen — kein implizites Raeumen
-/// hinter dem Ruecken der Phasen-Barriere (E4: explizite Drop-Punkte).
+/// lesen. Die Live-Menge (`Arc`-Cache) ist explizit begrenzt: Wuerde
+/// [`WarmLayer::spill`] *oder* ein Nachladen per [`WarmLayer::get`]/
+/// [`WarmLayer::prefetch`] das Budget sprengen, muss der Aufrufer per
+/// [`WarmLayer::evict`] oder [`WarmLayer::evict_all`] Platz schaffen — kein
+/// implizites Raeumen hinter dem Ruecken der Phasen-Barriere (E4: explizite
+/// Drop-Punkte).
 #[derive(Debug)]
 pub struct WarmLayer {
     dir: PathBuf,
@@ -181,6 +183,11 @@ impl WarmLayer {
 
     /// Holt den Blob zu `id` (geteilt, read-only). Laedt bei Bedarf von Platte
     /// (Page-Cache) und haelt ihn danach live. `None`, wenn nie gespillt.
+    ///
+    /// Prueft wie [`WarmLayer::spill`] das Live-Budget: Wuerde das Nachladen
+    /// das Budget sprengen, kommt `Err` (erst [`WarmLayer::evict`]/
+    /// [`WarmLayer::evict_all`], dann erneut holen) — sonst waere
+    /// `max_live_bytes` ueber Nachladen umgehbar. Die Datei bleibt liegen.
     pub fn get(&mut self, id: &ContentId) -> Result<Option<Arc<[u8]>>, WarmError> {
         if let Some(held) = self.live.get(id) {
             return Ok(Some(Arc::clone(held)));
@@ -188,6 +195,14 @@ impl WarmLayer {
         let path = self.blob_path(id);
         match std::fs::read(&path) {
             Ok(bytes) => {
+                let add = bytes.len() as u64;
+                if self.live_bytes.saturating_add(add) > self.max_live_bytes {
+                    return Err(WarmError::BudgetExceeded {
+                        live: self.live_bytes,
+                        add,
+                        max: self.max_live_bytes,
+                    });
+                }
                 let arc: Arc<[u8]> = Arc::from(bytes.into_boxed_slice());
                 self.live_bytes = self.live_bytes.saturating_add(arc.len() as u64);
                 self.live.insert(*id, Arc::clone(&arc));
@@ -200,7 +215,9 @@ impl WarmLayer {
 
     /// Streaming-Hilfe: laedt `ids` der Reihe nach (Shard-Streaming, kein
     /// wilder Random-Access). Gibt die Anzahl geladener Blobs zurueck;
-    /// unbekannte IDs werden uebersprungen.
+    /// unbekannte IDs werden uebersprungen. Das Live-Budget gilt wie in
+    /// [`WarmLayer::get`]: Passt ein Blob nicht mehr, bricht der Lauf mit
+    /// `Err` ab (bereits geladene bleiben live).
     pub fn prefetch(&mut self, ids: &[ContentId]) -> Result<usize, WarmError> {
         let mut loaded = 0usize;
         for id in ids {
@@ -380,5 +397,51 @@ mod tests {
         with_unknown.push(id_of(b"nie gespillt"));
         warm.evict_all();
         assert_eq!(warm.prefetch(&with_unknown).expect("mit unbekannt"), 5);
+    }
+
+    #[test]
+    fn get_prueft_budget_wie_spill() {
+        let t = TestDir::new("get-budget");
+        let mut warm = WarmLayer::open(t.path()).with_max_live_bytes(4);
+        let a = id_of(b"aaaa");
+        warm.spill(&a, b"aaaa").expect("spill");
+        assert_eq!(warm.live_bytes(), 4);
+        warm.evict(&a);
+        // Datei liegt noch auf Platte; live ist ein kleinerer Blob.
+        let c = id_of(b"cc");
+        warm.spill(&c, b"cc").expect("spill");
+        // Nachladen von `a` (4) ueber live 2 hinaus wuerde das Budget (4)
+        // sprengen — wie bei `spill` abgewiesen, Datei bleibt liegen.
+        let err = warm.get(&a).expect_err("Budget");
+        assert!(
+            matches!(err, WarmError::BudgetExceeded { .. }),
+            "unerwartet: {err}"
+        );
+        assert!(!warm.is_live(&a));
+        assert_eq!(warm.live_bytes(), 2);
+        // Nach Evict passt es wieder.
+        warm.evict(&c);
+        let got = warm.get(&a).expect("reload").expect("datei bleibt");
+        assert_eq!(got.as_ref(), b"aaaa");
+    }
+
+    #[test]
+    fn prefetch_prueft_budget() {
+        let t = TestDir::new("prefetch-budget");
+        let mut warm = WarmLayer::open(t.path());
+        let ids: Vec<ContentId> = (0u8..3).map(|i| id_of(&[i])).collect();
+        for (i, id) in ids.iter().enumerate() {
+            warm.spill(id, &[i as u8]).expect("spill");
+        }
+        warm.evict_all();
+        warm.max_live_bytes = 1;
+        let err = warm.prefetch(&ids).expect_err("Budget");
+        assert!(
+            matches!(err, WarmError::BudgetExceeded { .. }),
+            "unerwartet: {err}"
+        );
+        // Genau der erste Blob wurde noch geladen, dann abgebrochen.
+        assert_eq!(warm.live_count(), 1);
+        assert_eq!(warm.live_bytes(), 1);
     }
 }

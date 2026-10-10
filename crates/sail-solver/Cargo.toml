@@ -11,7 +11,7 @@ default = []
 z3 = ["dep:z3"]
 
 [dependencies]
-z3 = { version = "0.12", optional = true }
+z3 = { version = "0.21", optional = true }
 
 [dev-dependencies]
 
