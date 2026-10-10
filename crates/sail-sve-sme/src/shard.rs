@@ -186,7 +186,7 @@ mod tests {
     fn renders_counts_and_spans() {
         let r = analyze_file("mini.sail", MINI).unwrap();
         let md = render_failures_md(std::slice::from_ref(&r), &[], None, "test");
-        assert!(md.contains("| `throw` | 1 | 1 | Lane 28 (early-return-except) |"));
+        assert!(md.contains("| `exception_semantics` | 1 | 1 | Lane 28 (early-return-except) |"));
         assert!(md.contains("mini.sail:4:5-4:10"));
         assert!(md.contains("Total fail sites: **1**."));
     }
