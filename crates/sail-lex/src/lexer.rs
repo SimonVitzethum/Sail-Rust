@@ -647,7 +647,6 @@ impl<'a> Lexer<'a> {
         if self.at(0) == Some(b'[') {
             self.pos += 1;
             if self.src.get(self.pos).is_some_and(|&b| is_ident_start(b)) {
-                self.pos += 1;
                 let name = self.scan_ident().to_string();
                 self.push(TokenKind::Attribute(name), start);
             } else {
@@ -669,7 +668,6 @@ impl<'a> Lexer<'a> {
             self.push_error(start, self.pos, "Expected directive name after `$`");
             return;
         }
-        self.pos += 1;
         let name = self.scan_ident().to_string();
         // `$name {` → structured pragma (the `{` is consumed, not emitted).
         let mut ahead = self.pos;
@@ -787,8 +785,12 @@ impl<'a> Lexer<'a> {
 
     /// `infix[l|r] N op` fixity or keyword/identifier.
     fn lex_word(&mut self, start: usize) {
-        self.pos += 1;
         let word = self.scan_ident().to_string();
+        if word == "_" {
+            // Tie with the identifier rule goes to `Under` (rule order).
+            self.push(TokenKind::Under, start);
+            return;
+        }
         if word == "infix" || word == "infixl" || word == "infixr" {
             if let Some(fix) = self.try_fixity_suffix(&word) {
                 self.push(fix, start);
@@ -847,12 +849,7 @@ impl<'a> Lexer<'a> {
         debug_assert!(self.src[self.pos] == b'\'');
         match self.at(1) {
             Some(b) if is_ident_start(b) => {
-                self.pos += 2; // `'` + first char
-                let rest = self.scan_ident();
-                let mut text = String::with_capacity(rest.len() + 2);
-                text.push('\'');
-                text.push(b as char);
-                text.push_str(rest);
+                let text = self.scan_ident().to_string();
                 self.push(TokenKind::TyVar(text), start);
             }
             _ => {
@@ -929,9 +926,15 @@ impl<'a> Lexer<'a> {
 
     /// Operator entry: `Bidir`/`MinusGt`/`EqGt` take precedence over a longer
     /// operator match only when no further operator char follows (longest
-    /// match wins, as in `ocamllex`).
+    /// match wins, as in `ocamllex`). Single `.`/`..`/`*`/`:`/`::`/`|` and the
+    /// `|]`/`|}` brackets beat the operator rule on ties (rule order).
     fn lex_operator(&mut self, start: usize) {
         let rest = &self.text[self.pos..];
+        if rest.starts_with("*/") {
+            self.pos += 2;
+            self.push_error(start, self.pos, "Unbalanced comment: stray `*/`");
+            return;
+        }
         if rest.starts_with("<->") && !rest[3..].starts_with_oper_char() {
             self.pos += 3;
             self.push(TokenKind::Bidir, start);
@@ -946,6 +949,41 @@ impl<'a> Lexer<'a> {
             self.pos += 2;
             self.push(TokenKind::EqGt, start);
             return;
+        }
+        for (pat, kind) in [
+            ("|]", TokenKind::RsquareBar),
+            ("|}", TokenKind::RcurlyBar),
+        ] {
+            if rest.starts_with(pat) {
+                self.pos += pat.len();
+                self.push(kind, start);
+                return;
+            }
+        }
+        if rest.starts_with("::") && !rest[2..].starts_with_oper_char() {
+            self.pos += 2;
+            self.push(TokenKind::ColonColon, start);
+            return;
+        }
+        if rest.starts_with("..") && !rest[2..].starts_with_oper_char() {
+            self.pos += 2;
+            self.push(TokenKind::DotDot, start);
+            return;
+        }
+        // Single-char punctuation that is also an operator char.
+        if rest.len() >= 1 && !rest[1..].starts_with_oper_char() {
+            let kind = match rest.as_bytes()[0] {
+                b':' => Some(TokenKind::Colon),
+                b'.' => Some(TokenKind::Dot),
+                b'*' => Some(TokenKind::Star),
+                b'|' => Some(TokenKind::Bar),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                self.pos += 1;
+                self.push(kind, start);
+                return;
+            }
         }
         let op = self.scan_operator_text();
         let kind = match op.as_str() {
