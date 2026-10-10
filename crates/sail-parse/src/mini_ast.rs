@@ -49,7 +49,12 @@ pub enum Def {
     /// `impl name ... = ...` (function clause instance).
     Impl { name: String, head_src: String, body_src: String },
     /// `type name ... = ...` / `struct` / `union` / `enum` / `bitfield` RHS.
-    Type { name: String, body_src: String },
+    /// `keyword` keeps the starter word (`type`/`struct`/`enum`/`union`/
+    /// `bitfield`/`newtype`) so the bridge can pick the `TypeDefKind`
+    /// without guessing; `head_src` is the header before `=`/`{`,
+    /// `body_src` the RHS (or a clone of the header when the def carries
+    /// no `=`/`{` body, e.g. abstract `type foo : Type`).
+    Type { name: String, keyword: String, head_src: String, body_src: String },
     /// `let pat = exp`.
     Let { pat_src: String, body_src: String },
     /// `constraint ...` (kind/typ-side constraint decl, raw).

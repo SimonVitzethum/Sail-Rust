@@ -775,8 +775,7 @@ fn parse_keyword_def(
             let name = first_ident(&head).unwrap_or_default();
             let (head_src, body_src) = finish_eq_body(sc, head, end_kind)?;
             let body_src = if body_src.is_empty() { head_src.clone() } else { body_src };
-            let _ = head_src;
-            Ok((Def::Type { name, body_src }, sc.cur()))
+            Ok((Def::Type { name, keyword: kw.to_owned(), head_src, body_src }, sc.cur()))
         }
         "let" => {
             sc.skip_trivia_all()?;

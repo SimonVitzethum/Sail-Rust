@@ -5,11 +5,14 @@
 //!   Knoten-Spans = Fragment-Span, da [`sail_grammar::ast`] keine Locations
 //!   trägt). Fehler sind [`ParseError`] mit Span.
 //! * [`parse_file_real`]: ganze Datei → [`BridgeOut`], wie
-//!   [`crate::bridge_file`], aber `let`/`register`/`constraint` werden
-//!   zusätzlich über die neuen Einstiege echt gesenkt (statt deferred).
-//!   Alles Übrige delegiert an die Brücke; was die Einstiege (noch)
-//!   ablehnen, bleibt verlustfrei in `deferred` liegen — Datei-Ebene
-//!   schlägt nie wegen Fragment-Lücken fehl.
+//!   [`crate::bridge_file`], aber `let`/`register`/`constraint`/`type`/
+//!   `measure`/`outcome`/`instantiation` laufen zusätzlich über die neuen
+//!   Einstiege (Knoten-Span = Def-Span), alles Übrige delegiert an
+//!   [`crate::bridge`]. Was die Einstiege (noch) ablehnen, fällt auf das
+//!   ehrliche Brücken-Skelett zurück ([`crate::bridge`]: echte Namen,
+//!   `Unknown`/`Wild`/`Undef`-Rümpfe, Rohtext im `unparsed`-Sidecar) —
+//!   Datei-Ebene schlägt nie wegen Fragment-Lücken fehl, `deferred` bleibt
+//!   nur für wirklich Unbekanntes (`Other`).
 //!
 //! Skelett-Stand der Grammatik (keine LALRPOP-Tabellen, siehe `ADAPTER.md`):
 //! Die Einstiege rufen `sail_grammar::parse_*` gegen die Schnittstelle und
@@ -170,9 +173,11 @@ pub fn parse_def(src: &str) -> Result<ParseOut<Def>, ParseError> {
 /// Eine `.sail`-Datei parsen und echt auf `sail-ast` senken.
 ///
 /// Ablauf: [`crate::parse_file`] spaltet streaming in [`SpannedDef`]s mit
-/// Spans; `let`/`register`/`constraint` laufen über die neuen Einstiege
-/// (Knoten-Span = Def-Span), alles Übrige delegiert an [`crate::bridge`].
-/// Einstieg-Fehler parken die Def verlustfrei in `deferred` (Brücken-Philosophie).
+/// Spans; `let`/`register`/`constraint`/`type`/`measure`/`outcome`/
+/// `instantiation` laufen über die neuen Einstiege (Knoten-Span = Def-Span),
+/// alles Übrige delegiert an [`crate::bridge`]. Einstieg-Fehler fallen auf
+/// das Brücken-Skelett zurück (Brücken-Philosophie: echte Namen, Rohtext im
+/// `unparsed`-Sidecar für Lane 02).
 pub fn parse_file_real(path: &str, src: &str) -> Result<BridgeOut, ParseError> {
     let parsed = crate::parse_file(path, src)?;
     let mut b = Bridge::new();
@@ -185,7 +190,7 @@ pub fn parse_file_real(path: &str, src: &str) -> Result<BridgeOut, ParseError> {
 }
 
 /// `true`, wenn die Def vom Echt-Pfad behandelt wurde (Erfolg oder
-/// ehrliches `deferred`-Parken); `false` → Brücke rufen.
+/// ehrliches Brücken-Skelett); `false` → Brücke rufen.
 fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
     let span = sd.span;
     match &sd.def {
@@ -202,7 +207,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                     let id = b.ids.fresh();
                     b.defs.push(Node::new(id, span, kind));
                 }
-                Err(_) => b.deferred.push(sd.clone()),
+                Err(_) => b.let_skeleton(span, pat_src, body_src),
             }
             true
         }
@@ -223,7 +228,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                     let id = b.ids.fresh();
                     b.defs.push(Node::new(id, span, kind));
                 }
-                Err(_) => b.deferred.push(sd.clone()),
+                Err(_) => b.register_skeleton(span, name, type_src, init_src),
             }
             true
         }
@@ -240,10 +245,65 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                     let id = b.ids.fresh();
                     b.defs.push(Node::new(id, span, kind));
                 }
-                Err(_) => b.deferred.push(sd.clone()),
+                Err(_) => b.constraint_skeleton(span, src),
             }
             true
         }
+        MiniDef::Type { name, keyword, head_src, body_src } => {
+            let full = if body_src == head_src {
+                format!("{keyword} {head_src}")
+            } else {
+                format!("{keyword} {head_src} = {body_src}")
+            };
+            lower_def_text(b, span, &full, |b| {
+                b.typedef_skeleton(span, name, keyword, head_src, body_src, sd);
+            });
+            true
+        }
+        MiniDef::Measure { src } => {
+            let full = format!("termination_measure {src}");
+            lower_def_text(b, span, &full, |b| {
+                b.measure_skeleton(span, src, sd);
+            });
+            true
+        }
+        MiniDef::Outcome { src } => {
+            let full = format!("outcome {src}");
+            lower_def_text(b, span, &full, |b| {
+                b.outcome_skeleton(span, src, sd);
+            });
+            true
+        }
+        MiniDef::Instantiation { src } => {
+            let full = format!("instantiation {src}");
+            lower_def_text(b, span, &full, |b| {
+                b.instantiation_skeleton(span, src, sd);
+            });
+            true
+        }
         _ => false,
+    }
+}
+
+/// Volltext über `parse_def_src` senken (Grammatik-Tabellen, sobald
+/// generiert); bei Fehler das Brücken-Skelett bauen — nie `deferred`.
+/// Der rekonstruierte Volltext braucht das Schlüsselwort (Lane 110:
+/// `MiniDef::Type` trägt es, sonst wäre Rekonstruktion Ratespiel).
+fn lower_def_text(
+    b: &mut Bridge,
+    span: Span,
+    full: &str,
+    fallback: impl FnOnce(&mut Bridge),
+) {
+    let res = {
+        let mut ctx = Ctx {
+            ids: &mut b.ids,
+            interner: &mut b.interner,
+        };
+        crate::convert::parse_def_src(&mut ctx, span, full)
+    };
+    match res {
+        Ok(def) => b.defs.push(def),
+        Err(_) => fallback(b),
     }
 }

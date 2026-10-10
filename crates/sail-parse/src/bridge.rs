@@ -9,8 +9,12 @@
 //! (inkl. der Lane-11-Shard-Marker `file_start`/`file_end`, Blockade #42)
 //! landen auf echten `sail_ast`-Knoten. Ungeparste Bodies bleiben als
 //! Rohtext im [`BridgeOut::unparsed`]-Sidecar für den Lane-02-Vollausbau;
-//! alle übrigen Def-Arten bleiben verlustfrei als `mini_ast`-Defs in
-//! [`BridgeOut::deferred`] liegen.
+//! Lane 110 hebt zusätzlich die Bridge-`deferred`-Reste (`Type`/`Let`/
+//! `Constraint`/`Register`/`Measure`/`Outcome`/`Instantiation`) als
+//! Skelett-Knoten auf `sail_ast::DefKind`: echte Namen, unbekannte Rümpfe
+//! als `Unknown`/`Wild`/`Undef`-Platzhalter (vgl. `Val`-Skelett, leere
+//! `Mapdef`-Klauseln statt Fake-Klauseln). In [`BridgeOut::deferred`]
+//! liegt nur noch wirklich Unbekanntes (`Other`, z.B. `mutual`).
 //!
 //! Namens-/Dispatch-Infos stammen aus dem Branch-Stand-Lexer (`sail-lex`,
 //! fehlertolerant): `scattered`-Unterart, `rec`-Flag und Operator-Erkennung
@@ -25,10 +29,10 @@
 //! `and`-Kette, vgl. `AST_NEEDED.md`).
 
 use sail_ast::{
-    Ast, Def, DefKind, ExpKind, FileId, Fixity as AstFixity, Funcl, IdGen, Interner as _,
-    Mapcl, MapclKind, Name, Node, NodeId, Order, PExp, PExpKind, PatKind, RecOpt,
-    ScatteredDef, SimpleInterner, Span as AstSpan, Symbol, TAnnotOpt, TypKind, TypSchm,
-    ValSpec,
+    Ast, ConstraintKind, DecSpec, Def, DefKind, Exp, ExpKind, FileId, Fixity as AstFixity,
+    Funcl, IdGen, Interner as _, Mapcl, MapclKind, Name, Node, NodeId, Order, PExp, PExpKind,
+    Pat, PatKind, RecOpt, ScatteredDef, SimpleInterner, Span as AstSpan, Subst, Symbol,
+    TAnnotOpt, Typ, TypArgKind, TypKind, TypSchm, TypeDefKind, ValSpec,
 };
 use sail_lex::{FileId as LexFileId, TokenKind, lex};
 
@@ -46,7 +50,7 @@ pub struct Unparsed {
 }
 
 /// Ergebnis der Brücke: `sail-ast` + Interner + Datei-Tabelle + Rohtext-Sidecar
-/// + verlustfrei aufbewahrte `mini_ast`-Rest-Defs (spätere Lanes).
+/// + nur noch wirklich unbekannte `mini_ast`-Rest-Defs (`Other`, spätere Lanes).
 #[derive(Debug, Clone)]
 pub struct BridgeOut {
     pub ast: Ast,
@@ -161,6 +165,151 @@ fn join_body(head: &str, body: &str) -> String {
     }
 }
 
+/// Erstes Ident-ähnliches Wort (vgl. Parser-`first_ident`):
+/// `Reduce__1(op, ...)` → `Reduce__1`. `None` ohne Treffer.
+fn first_word(text: &str) -> Option<&str> {
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let mut j = i + 1;
+            while j < b.len()
+                && (b[j].is_ascii_alphanumeric() || b[j] == b'_' || b[j] == b'\'')
+            {
+                j += 1;
+            }
+            return Some(&text[i..j]);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Erster Top-Level-`=` außerhalb von Klammern/Strings/Kommentaren
+/// (`==`/`=>`/`<=`/`>=`/`!=` zählen nicht). `None` ohne Treffer
+/// (Loop-Measures-Form). Schnittstellen sind ASCII (`=`), daher sind die
+/// Schnitt-Offsets immer UTF-8-Grenzen.
+fn split_top_eq(src: &str) -> Option<(&str, &str)> {
+    let b = src.as_bytes();
+    let mut depth: u32 = 0;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'"' => {
+                i += 1;
+                while i < b.len() {
+                    match b[i] {
+                        b'\\' => i += 2,
+                        b'"' => {
+                            i += 1;
+                            break;
+                        }
+                        _ => i += 1,
+                    }
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let mut nested: u32 = 1;
+                i += 2;
+                while i < b.len() && nested > 0 {
+                    if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+                        nested += 1;
+                        i += 2;
+                    } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+                        nested -= 1;
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            b'=' if depth == 0 => {
+                let prev = if i > 0 { b[i - 1] } else { b' ' };
+                let next = b.get(i + 1).copied().unwrap_or(b' ');
+                if matches!(prev, b'<' | b'>' | b'=' | b'!')
+                    || matches!(next, b'=' | b'>')
+                {
+                    i += 1;
+                } else {
+                    return Some((src[..i].trim_end(), src[i + 1..].trim_start()));
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// `with`-Substitutionen einer `instantiation`-Rumpfzeile (`NAME with
+/// a = b, c = d`): nur reine `Id = Id`-Paare werden übernommen
+/// (`TyVar`-Seiten = Typsubstis bleiben Lane 02); fehlende `with`-Liste,
+/// Fehlertoken oder Form-Abweichung → leere Liste (ehrliches Skelett).
+/// Ein trailing Komma (`with a = b,`) akzeptiert die Grammatik ebenfalls.
+fn instantiation_substs(
+    src: &str,
+    span: AstSpan,
+    ids: &mut IdGen,
+    interner: &mut SimpleInterner,
+) -> Vec<Subst> {
+    let kinds = lex_kinds(src, interner);
+    let toks: Vec<&TokenKind> = kinds
+        .iter()
+        .filter(|k| !matches!(k, TokenKind::Eof | TokenKind::Error(_)))
+        .collect();
+    let Some(with) = toks.iter().position(|k| matches!(k, TokenKind::With)) else {
+        return Vec::new();
+    };
+    let rest = &toks[with + 1..];
+    if rest.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < rest.len() {
+        let from = match rest.get(i) {
+            Some(TokenKind::Id(s)) => *s,
+            _ => return Vec::new(),
+        };
+        if !matches!(rest.get(i + 1), Some(TokenKind::Eq)) {
+            return Vec::new();
+        }
+        let to = match rest.get(i + 2) {
+            Some(TokenKind::Id(s)) => *s,
+            _ => return Vec::new(),
+        };
+        out.push(Subst::Id {
+            from: Name::new(ids.fresh(), span, from, false),
+            to: Name::new(ids.fresh(), span, to, false),
+        });
+        i += 3;
+        match rest.get(i) {
+            None => break,
+            Some(TokenKind::Comma) => {
+                i += 1;
+                if i >= rest.len() {
+                    break;
+                }
+            }
+            _ => return Vec::new(),
+        }
+    }
+    out
+}
+
 /// Keyword-Token → kanonisches Wort; `variant` ist im Lexer kein Keyword
 /// (fällt dort auf `Id`), der Aufrufer behandelt es separat.
 fn kw_of(k: &TokenKind) -> Option<&'static str> {
@@ -223,6 +372,208 @@ impl Bridge {
         let id = self.ids.fresh();
         self.unparsed.push(Unparsed { id, kind, src });
         id
+    }
+
+    /// Unbekannter Typ-Rumpf: `Unknown`-Platzhalter wie im `Val`-Skelett
+    /// (füllt der Typechecker / Lane 02).
+    pub(crate) fn unknown_typ(&mut self, span: AstSpan) -> Typ {
+        Node::new(self.ids.fresh(), span, TypKind::Unknown)
+    }
+
+    /// Unbekannter Ausdrucks-Rumpf (vgl. Brücken-`dummy_arm`).
+    pub(crate) fn undef_exp(&mut self, span: AstSpan) -> Exp {
+        Node::new(self.ids.fresh(), span, ExpKind::Undef)
+    }
+
+    /// Unbekanntes Muster (vgl. Brücken-`dummy_arm`).
+    pub(crate) fn wild_pat(&mut self, span: AstSpan) -> Pat {
+        Node::new(self.ids.fresh(), span, PatKind::Wild)
+    }
+
+    /// `type`/`struct`/`enum`/`union`/`bitfield`/`newtype`-Rumpf (Lane 110):
+    /// Schlüsselwort → `TypeDefKind`, Name echt, Inhalte leer/`Unknown`
+    /// (Mitglieder/Felder/Ctors brauchen die Vollgrammatik, Lane 02).
+    /// Rohtext ins Sidecar; unbekanntes Schlüsselwort → `deferred`.
+    pub(crate) fn typedef_skeleton(
+        &mut self,
+        span: AstSpan,
+        name_text: &str,
+        keyword: &str,
+        head_src: &str,
+        body_src: &str,
+        sd: &SpannedDef,
+    ) {
+        let name = self.name(span, name_text, name_text);
+        let kind = match keyword {
+            "type" | "newtype" => {
+                let typ = self.unknown_typ(span);
+                let arg = Node::new(self.ids.fresh(), span, TypArgKind::Typ(typ));
+                TypeDefKind::Abbrev {
+                    name,
+                    quant: Vec::new(),
+                    arg,
+                }
+            }
+            "struct" => TypeDefKind::Record {
+                name,
+                quant: Vec::new(),
+                fields: Vec::new(),
+                wf: true,
+            },
+            "enum" => TypeDefKind::Enum {
+                name,
+                members: Vec::new(),
+                wf: true,
+            },
+            "union" => TypeDefKind::Variant {
+                name,
+                quant: Vec::new(),
+                ctors: Vec::new(),
+                wf: true,
+            },
+            "bitfield" => TypeDefKind::Bitfield {
+                name,
+                typ: self.unknown_typ(span),
+                fields: Vec::new(),
+            },
+            _ => {
+                self.deferred.push(sd.clone());
+                return;
+            }
+        };
+        let src = if body_src == head_src {
+            head_src.to_owned()
+        } else {
+            join_body(head_src, body_src)
+        };
+        let id = self.push_unparsed("type", src);
+        let typedef = Node::new(id, span, kind);
+        self.defs.push(Node::new(id, span, DefKind::Type(typedef)));
+    }
+
+    /// `let`-Rumpf (Lane 110): Muster/Rumpf brauchen die Vollgrammatik →
+    /// `Wild`/`Undef`, Rohtext ins Sidecar.
+    pub(crate) fn let_skeleton(&mut self, span: AstSpan, pat_src: &str, body_src: &str) {
+        let pat = self.wild_pat(span);
+        let exp = self.undef_exp(span);
+        let id = self.push_unparsed("let", join_body(pat_src, body_src));
+        self.defs.push(Node::new(id, span, DefKind::Let { pat, exp }));
+    }
+
+    /// `constraint`-Rumpf (Lane 110): Platzhalter `True` (schwächste
+    /// Annahme — Lane 02 ersetzt ihn durch den echten Constraint, Rohtext
+    /// liegt im Sidecar).
+    pub(crate) fn constraint_skeleton(&mut self, span: AstSpan, src: &str) {
+        let constraint = Node::new(self.ids.fresh(), span, ConstraintKind::True);
+        let id = self.push_unparsed("constraint", src.to_owned());
+        self.defs
+            .push(Node::new(id, span, DefKind::Constraint(constraint)));
+    }
+
+    /// `register`-Rumpf (Lane 110): Name echt, Typ `Unknown`, Init-Präsenz
+    /// als `Some(Undef)`/`None` erhalten (Wert füllt Lane 02).
+    pub(crate) fn register_skeleton(
+        &mut self,
+        span: AstSpan,
+        name_text: &str,
+        type_src: &str,
+        init_src: &Option<String>,
+    ) {
+        let typ = self.unknown_typ(span);
+        let init = init_src.as_ref().map(|_| self.undef_exp(span));
+        let src = match init_src {
+            Some(init) => format!("{type_src} = {init}"),
+            None => type_src.to_owned(),
+        };
+        let id = self.push_unparsed("register", src);
+        let name = self.name(span, name_text, name_text);
+        let spec = DecSpec {
+            id,
+            span,
+            typ,
+            name,
+            init,
+        };
+        self.defs.push(Node::new(id, span, DefKind::Register(spec)));
+    }
+
+    /// `termination_measure`-Rumpf (Lane 110): mit Top-Level-`=` →
+    /// `Measure` (Name echt, Muster/Rumpf `Wild`/`Undef`), sonst →
+    /// `LoopMeasures` mit leerer Liste (Schleifenmaße brauchen die
+    /// Vollgrammatik). Ohne Namen → `deferred`.
+    pub(crate) fn measure_skeleton(&mut self, span: AstSpan, src: &str, sd: &SpannedDef) {
+        let (head, is_fun) = match split_top_eq(src) {
+            Some((head, _)) => (head, true),
+            None => (src, false),
+        };
+        let Some(name_text) = first_word(head) else {
+            self.deferred.push(sd.clone());
+            return;
+        };
+        let name = self.name(span, name_text, head);
+        let id = self.push_unparsed("termination_measure", src.to_owned());
+        if is_fun {
+            self.defs.push(Node::new(
+                id,
+                span,
+                DefKind::Measure {
+                    name,
+                    pat: self.wild_pat(span),
+                    exp: self.undef_exp(span),
+                },
+            ));
+        } else {
+            self.defs.push(Node::new(
+                id,
+                span,
+                DefKind::LoopMeasures {
+                    name,
+                    measures: Vec::new(),
+                },
+            ));
+        }
+    }
+
+    /// `outcome`-Rumpf (Lane 110): Name echt, Typschema/Quantor Skelett
+    /// (`Unknown`, leer — `with`-Parameter und Rümpfe brauchen die
+    /// Vollgrammatik). Ohne Namen → `deferred`.
+    pub(crate) fn outcome_skeleton(&mut self, span: AstSpan, src: &str, sd: &SpannedDef) {
+        let Some(name_text) = first_word(src) else {
+            self.deferred.push(sd.clone());
+            return;
+        };
+        let name = self.name(span, name_text, src);
+        let id = self.push_unparsed("outcome", src.to_owned());
+        self.defs.push(Node::new(
+            id,
+            span,
+            DefKind::Outcome {
+                name,
+                typschm: TypSchm {
+                    quant: Vec::new(),
+                    typ: self.unknown_typ(span),
+                },
+                quant: Vec::new(),
+            },
+        ));
+    }
+
+    /// `instantiation`-Rumpf (Lane 110): Name echt; `with`-Liste mit reinen
+    /// `Id = Id`-Paaren → `Subst::Id` (direkt abgelesen, keine Erfindung);
+    /// Typsubstis/Unförmiges → leere Liste (Volltext im Sidecar).
+    pub(crate) fn instantiation_skeleton(&mut self, span: AstSpan, src: &str, sd: &SpannedDef) {
+        let Some(name_text) = first_word(src) else {
+            self.deferred.push(sd.clone());
+            return;
+        };
+        let name = self.name(span, name_text, src);
+        let substs = instantiation_substs(src, span, &mut self.ids, &mut self.interner);
+        let id = self.push_unparsed("instantiation", src.to_owned());
+        self.defs.push(Node::new(
+            id,
+            span,
+            DefKind::Instantiation { name, substs },
+        ));
     }
 
     pub(crate) fn def(&mut self, sd: &SpannedDef) {
@@ -360,14 +711,28 @@ impl Bridge {
                     },
                 ));
             }
-            MiniDef::Type { .. }
-            | MiniDef::Let { .. }
-            | MiniDef::Constraint { .. }
-            | MiniDef::Register { .. }
-            | MiniDef::Measure { .. }
-            | MiniDef::Outcome { .. }
-            | MiniDef::Instantiation { .. }
-            | MiniDef::Other { .. } => self.deferred.push(sd.clone()),
+            MiniDef::Type { name, keyword, head_src, body_src } => {
+                self.typedef_skeleton(span, name, keyword, head_src, body_src, sd);
+            }
+            MiniDef::Let { pat_src, body_src } => {
+                self.let_skeleton(span, pat_src, body_src);
+            }
+            MiniDef::Constraint { src } => {
+                self.constraint_skeleton(span, src);
+            }
+            MiniDef::Register { name, type_src, init_src } => {
+                self.register_skeleton(span, name, type_src, init_src);
+            }
+            MiniDef::Measure { src } => {
+                self.measure_skeleton(span, src, sd);
+            }
+            MiniDef::Outcome { src } => {
+                self.outcome_skeleton(span, src, sd);
+            }
+            MiniDef::Instantiation { src } => {
+                self.instantiation_skeleton(span, src, sd);
+            }
+            MiniDef::Other { .. } => self.deferred.push(sd.clone()),
         }
     }
 
