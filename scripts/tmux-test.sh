@@ -16,7 +16,7 @@
 # Verhalten:
 #   - Session existiert noch nicht  -> eigene oneshot-Unit (remain-after-exit) + tmux new-session.
 #   - Session existiert bereits      -> tmux new-window.
-#   - Der Fenster-Befehl lautet: ./scripts/limited-run.sh -m MEM -- <befehl...>
+#   - Der Fenster-Befehl lautet: $SCRIPT_DIR/limited-run.sh -m MEM -- <befehl...>
 #     (ohne <befehl...> öffnet das Fenster nur eine Shell).
 #   - "$@" wird als Array durchgereicht, nie re-quotet (ein %q-Join hat -c-Skripte
 #     zerlegt -> Fenster starben instant, Server ohne Fenster beendet sich).
@@ -30,6 +30,9 @@
 #   tmux kill-session -t SESSION              # ganze Session beenden
 set -euo pipefail
 cd "$(dirname "$0")/.."
+SCRIPT_DIR="$(pwd)/scripts"
+# HINWEIS: tmux-Server erbt NICHT unser CWD (Service startet in /) — daher überall
+# absolute Pfade ($SCRIPT_DIR), sonst stirbt das Fenster instant (relatives ./scripts/...).
 
 SESSION="sail-test"
 WINDOW=""
@@ -82,7 +85,7 @@ fi
 # -c-Skripte zerlegt und Fenster instant gekillt). tmux execvp't Mehrfach-Args direkt.
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     if [ "$HAVE_CMD" -eq 1 ]; then
-        tmux new-window -d -t "$SESSION" -n "$WINDOW" ./scripts/limited-run.sh -m "$MEM" -- "$@"
+        tmux new-window -d -t "$SESSION" -n "$WINDOW" $SCRIPT_DIR/limited-run.sh -m "$MEM" -- "$@"
     else
         tmux new-window -d -t "$SESSION" -n "$WINDOW"
     fi
@@ -96,7 +99,7 @@ else
         # shellcheck disable=SC2086
         systemd-run --user --unit="$RIG_UNIT" --service-type=oneshot --remain-after-exit \
             -p MemoryMax=24G -- tmux new-session -d -s "$SESSION" -n "$WINDOW" \
-            ./scripts/limited-run.sh -m "$MEM" -- "$@"
+            $SCRIPT_DIR/limited-run.sh -m "$MEM" -- "$@"
     else
         systemd-run --user --unit="$RIG_UNIT" --service-type=oneshot --remain-after-exit \
             -p MemoryMax=24G -- tmux new-session -d -s "$SESSION" -n "$WINDOW"
