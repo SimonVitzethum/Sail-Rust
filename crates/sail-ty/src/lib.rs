@@ -16,6 +16,7 @@
 //! AST/nexp types are local minimals; see `TY_NEEDED.md` for the mapping to
 //! the future `sail-ast` / `sail-nexp` crates.
 
+pub mod advanced;
 pub mod ast_env;
 pub mod check;
 pub mod conv;
@@ -29,6 +30,11 @@ pub mod rules;
 pub mod solver;
 pub mod subsume;
 
+pub use advanced::{
+    AdvTyp, AdvTypArg, ARM_BITVEC_WIDTHS, adv_arg_to_ast, adv_from_ast, adv_to_ast,
+    arm_exist_bits, arm_width_obligation, check_adv_kind, check_bidir_sub, erase_to_mini,
+    freshen_exist, is_arm_exist_bits, open_exist, prove_exist_open, subst_adv_typ,
+};
 pub use ast_env::{kenv_from_kopts, kenv_to_kopts};
 pub use check::{BidirectionalChecker, CheckLimits, TypedDefSummary};
 pub use env::TypeEnv;
