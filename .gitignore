@@ -1,0 +1,5 @@
+# Rust build output (nie committen: groß, regenerierbar)
+target/
+
+# Lockfile: reiner Lib-Workspace ohne Binaries
+Cargo.lock
