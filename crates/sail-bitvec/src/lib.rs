@@ -18,6 +18,7 @@
 //! truncated or padded.
 
 pub mod bitfield;
+pub mod conv;
 pub mod error;
 pub mod expr;
 pub mod lit;

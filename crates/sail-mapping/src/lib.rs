@@ -38,6 +38,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ast;
+pub mod conv;
 pub mod encdec;
 pub mod patterns;
 pub mod realize;
