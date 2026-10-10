@@ -23,6 +23,7 @@ members = [
     "crates/sail-bitvec",
     "crates/sail-int",
     "crates/sail-real",
+    "crates/sail-extern",
 ]
 resolver = "2"
 
