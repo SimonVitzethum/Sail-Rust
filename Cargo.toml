@@ -43,3 +43,8 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "allow"
+
+# Lane 51 (test-rig): CI-nahes Profil für reproduzierbare Testläufe.
+# Aufruf: cargo test --profile ci --workspace --all-targets
+[profile.ci]
+inherits = "dev"
