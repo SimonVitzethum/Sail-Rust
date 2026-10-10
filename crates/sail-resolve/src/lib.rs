@@ -20,6 +20,10 @@ pub mod env;
 pub mod renames;
 pub mod resolve;
 
-pub use env::{CtorEntry, Env, MappingEntry, RegisterEntry, ResolveError, TypeEntry, ValSpecEntry};
+pub use env::{
+    CtorEntry, Env, FixityEntry, FunctionEntry, ImplEntry, InstantiationEntry, MappingEntry,
+    MeasureEntry, OutcomeEntry, OverloadEntry, PragmaEntry, RegisterEntry, ResolveError,
+    ResolveErrorKind, ScatteredEntry, ScatteredNamespace, TypeEntry, ValSpecEntry, ValueEntry,
+};
 pub use renames::compute_ctor_renames;
 pub use resolve::{ResolvedProgram, Resolver};
