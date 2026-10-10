@@ -105,6 +105,23 @@ fn subst_unary<'a>(
     }
 }
 
+/// Rebuild a binary [`NConstraint`]-over-constraints node only when at least
+/// one side changed (boolean connectives hold `Box<NConstraint>`, unlike the
+/// [`NExp`] operands handled by [`subst_constraint_binary`]).
+fn subst_constraint_pair<'a>(
+    subst: &BTreeMap<Kid, NExp>,
+    orig: &'a NConstraint,
+    a: &'a NConstraint,
+    b: &'a NConstraint,
+    rebuild: fn(Box<NConstraint>, Box<NConstraint>) -> NConstraint,
+) -> Cow<'a, NConstraint> {
+    let (ra, rb) = (a.subst_cow(subst), b.subst_cow(subst));
+    if matches!(ra, Cow::Borrowed(_)) && matches!(rb, Cow::Borrowed(_)) {
+        Cow::Borrowed(orig)
+    } else {
+        Cow::Owned(rebuild(Box::new(ra.into_owned()), Box::new(rb.into_owned())))
+    }
+}
 /// Rebuild a binary [`NConstraint`] node only when at least one side changed.
 fn subst_constraint_binary<'a>(
     subst: &BTreeMap<Kid, NExp>,
@@ -396,10 +413,10 @@ impl NConstraint {
                 }
             }
             NConstraint::And(a, b) => {
-                subst_constraint_binary(subst, self, a, b, NConstraint::And)
+                subst_constraint_pair(subst, self, a, b, NConstraint::And)
             }
             NConstraint::Or(a, b) => {
-                subst_constraint_binary(subst, self, a, b, NConstraint::Or)
+                subst_constraint_pair(subst, self, a, b, NConstraint::Or)
             }
             NConstraint::Not(c) => {
                 let rewritten = c.subst_cow(subst);
