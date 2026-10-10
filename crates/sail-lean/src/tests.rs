@@ -122,7 +122,7 @@ fn prints_literals_like_ocaml_backend() {
 #[test]
 fn prints_fun_signatures_with_monad_mapping() {
     let p = printer();
-    let span = Span::new(1, 1);
+    let span = Span::new(FileId(0), 1, 1);
     // Pure: no monad.
     let pure = FunSig {
         name: "add".into(),
@@ -168,17 +168,17 @@ fn untranslatable_is_hard_error_with_span() {
         args: vec![],
         ret: Typ::Nat,
         effect: Effect::Pure,
-        span: Span::new(7, 3),
+        span: Span::new(FileId(0), 7, 3),
     };
     let err = p.render_fun_stub(&sig, None).unwrap_err();
     assert_eq!(
         err,
         Error::Unsupported {
             msg: "function `bad` body is not translatable (no silent sorry)".into(),
-            span: Span::new(7, 3),
+            span: Span::new(FileId(0), 7, 3),
         }
     );
-    assert!(err.to_string().contains("7:3"));
+    assert!(err.to_string().contains("file0:7-3"));
     assert!(!err.to_string().contains("sorry") || err.to_string().contains("no silent sorry"));
 
     // Anonymous named type is also a hard error.
@@ -186,7 +186,7 @@ fn untranslatable_is_hard_error_with_span() {
     let ty = Typ::Named {
         name: String::new(),
         args: vec![],
-        span: Span::new(2, 9),
+        span: Span::new(FileId(0), 2, 9),
     };
     let err = p.print_typ(&mut buf, &ty).unwrap_err();
     assert!(matches!(err, Error::Unsupported { .. }));
@@ -195,7 +195,7 @@ fn untranslatable_is_hard_error_with_span() {
 #[test]
 fn parallel_defs_keep_order_and_stream() {
     let p = printer();
-    let span = Span::new(1, 1);
+    let span = Span::new(FileId(0), 1, 1);
     let sigs: Vec<FunSig> = (0..8)
         .map(|i| FunSig {
             name: format!("f{i}"),
@@ -236,7 +236,7 @@ fn options_drive_prefixes() {
         args: vec![],
         ret: Typ::Nat,
         effect: Effect::Pure,
-        span: Span::new(1, 1),
+        span: Span::new(FileId(0), 1, 1),
     };
     let got = p.render_fun_stub(&sig, Some("0")).unwrap();
     assert_eq!(got, "noncomputable partial def nc : Nat := 0\n");

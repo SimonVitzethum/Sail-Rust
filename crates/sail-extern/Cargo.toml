@@ -9,5 +9,8 @@ license = "BSD-2-Clause"
 name = "sail_extern"
 path = "src/lib.rs"
 
+[dependencies]
+sail-ast = { path = "../sail-ast" }
+
 [lints]
 workspace = true

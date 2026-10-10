@@ -36,27 +36,10 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
-/// Source position for hard errors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Span {
-    /// 1-based line.
-    pub line: u32,
-    /// 1-based column.
-    pub col: u32,
-}
-
-impl Span {
-    #[must_use]
-    pub const fn new(line: u32, col: u32) -> Self {
-        Self { line, col }
-    }
-}
-
-impl fmt::Display for Span {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.line, self.col)
-    }
-}
+/// Source position for hard errors: the canonical `sail-ast` span
+/// (Lane 61 unification of MIGRATION.md #28; previously a line/col-only
+/// local copy, removed).
+pub use sail_ast::{FileId, Span};
 
 /// Printer failure.
 #[derive(Debug, Clone, PartialEq, Eq)]

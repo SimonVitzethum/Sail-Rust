@@ -1,12 +1,17 @@
 //! Integration tests: collision case + happy path + distincto errors.
 
 use sail_resolve::mini_ast::{
-    Ast, CtorDecl, Def, MappingDef, RegisterDef, Span, TypeDef, TypeDefKind, ValSpec,
+    Ast, CtorDecl, Def, FileId, MappingDef, RegisterDef, Span, TypeDef, TypeDefKind, ValSpec,
 };
 use sail_resolve::resolve::resolve;
 
-const S: Span = Span::new(1, 1);
-const S2: Span = Span::new(2, 5);
+fn s() -> Span {
+    Span::new(FileId(0), 1, 1)
+}
+
+fn s2() -> Span {
+    Span::new(FileId(0), 2, 5)
+}
 
 fn union_def(owner: &str, ctors: &[&str]) -> Def {
     Def::Type(TypeDef::new(
@@ -14,27 +19,27 @@ fn union_def(owner: &str, ctors: &[&str]) -> Def {
         TypeDefKind::Union(
             ctors
                 .iter()
-                .map(|c| CtorDecl::new((*c).to_owned(), S))
+                .map(|c| CtorDecl::new((*c).to_owned(), s()))
                 .collect(),
         ),
-        S,
+        s(),
     ))
 }
 
 #[test]
 fn happy_path_no_errors_no_renames() {
     let ast = Ast::new(vec![
-        Def::Type(TypeDef::new("U", TypeDefKind::Struct, S)),
+        Def::Type(TypeDef::new("U", TypeDefKind::Struct, s())),
         union_def("V", &["A", "B"]),
         Def::Type(TypeDef::new(
             "E",
-            TypeDefKind::Enum(vec![CtorDecl::new("X", S), CtorDecl::new("Y", S)]),
-            S,
+            TypeDefKind::Enum(vec![CtorDecl::new("X", s()), CtorDecl::new("Y", s())]),
+            s(),
         )),
-        Def::Type(TypeDef::new("N", TypeDefKind::Abbrev, S)),
-        Def::ValSpec(ValSpec::new("f", S)),
-        Def::Register(RegisterDef::new("sp", S)),
-        Def::Mapping(MappingDef::new("decode", S)),
+        Def::Type(TypeDef::new("N", TypeDefKind::Abbrev, s())),
+        Def::ValSpec(ValSpec::new("f", s())),
+        Def::Register(RegisterDef::new("sp", s())),
+        Def::Mapping(MappingDef::new("decode", s())),
     ]);
     let r = resolve(&ast);
     assert!(r.errors.is_empty(), " {:?}", r.errors);
@@ -50,7 +55,7 @@ fn collision_typename_equals_ctorname() {
     // Mirrors the Lean-backend failure: `union U { ... }` where a ctor
     // is also a type name.
     let ast = Ast::new(vec![
-        Def::Type(TypeDef::new("Result", TypeDefKind::Struct, S)),
+        Def::Type(TypeDef::new("Result", TypeDefKind::Struct, s())),
         union_def("Outcome", &["Result", "Ok"]),
     ]);
     let r = resolve(&ast);
@@ -76,25 +81,25 @@ fn self_collision_union_named_like_its_ctor() {
 #[test]
 fn distinct_duplicate_type_is_error() {
     let ast = Ast::new(vec![
-        Def::Type(TypeDef::new("U", TypeDefKind::Struct, S)),
-        Def::Type(TypeDef::new("U", TypeDefKind::Struct, S2)),
+        Def::Type(TypeDef::new("U", TypeDefKind::Struct, s())),
+        Def::Type(TypeDef::new("U", TypeDefKind::Struct, s2())),
     ]);
     let r = resolve(&ast);
     assert_eq!(r.errors.len(), 1);
     assert_eq!(r.errors[0].name, "U");
     // First binding wins and stays queryable.
-    assert_eq!(r.env.lookup_type("U").map(|t| t.span), Some(S));
+    assert_eq!(r.env.lookup_type("U").map(|t| t.span), Some(s()));
 }
 
 #[test]
 fn distinct_errors_per_namespace() {
     let ast = Ast::new(vec![
-        Def::ValSpec(ValSpec::new("f", S)),
-        Def::ValSpec(ValSpec::new("f", S2)),
-        Def::Register(RegisterDef::new("r", S)),
-        Def::Register(RegisterDef::new("r", S2)),
-        Def::Mapping(MappingDef::new("m", S)),
-        Def::Mapping(MappingDef::new("m", S2)),
+        Def::ValSpec(ValSpec::new("f", s())),
+        Def::ValSpec(ValSpec::new("f", s2())),
+        Def::Register(RegisterDef::new("r", s())),
+        Def::Register(RegisterDef::new("r", s2())),
+        Def::Mapping(MappingDef::new("m", s())),
+        Def::Mapping(MappingDef::new("m", s2())),
         union_def("U", &["A"]),
         union_def("V", &["A"]),
     ]);
@@ -103,8 +108,8 @@ fn distinct_errors_per_namespace() {
     assert_eq!(r.errors.len(), 4, " {:?}", r.errors);
     // Same name in *different* namespaces is fine: add a type `f`.
     let ast2 = Ast::new(vec![
-        Def::Type(TypeDef::new("f", TypeDefKind::Struct, S)),
-        Def::ValSpec(ValSpec::new("f", S)),
+        Def::Type(TypeDef::new("f", TypeDefKind::Struct, s())),
+        Def::ValSpec(ValSpec::new("f", s())),
     ]);
     let r2 = resolve(&ast2);
     assert!(r2.errors.is_empty(), " {:?}", r2.errors);
@@ -125,7 +130,7 @@ fn order_independent_top_level() {
     // Use-before-def at top level must resolve (Sail is order-independent).
     let ast = Ast::new(vec![
         union_def("V", &["U"]),
-        Def::Type(TypeDef::new("U", TypeDefKind::Struct, S2)),
+        Def::Type(TypeDef::new("U", TypeDefKind::Struct, s2())),
     ]);
     let r = resolve(&ast);
     assert!(r.errors.is_empty(), " {:?}", r.errors);

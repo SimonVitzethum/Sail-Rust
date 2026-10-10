@@ -189,7 +189,7 @@ fn stub_sig(name: &str) -> sail_lean::FunSig {
         } else {
             sail_lean::Effect::Pure
         },
-        span: sail_lean::Span::new(0, 0),
+        span: sail_lean::Span::new(sail_lean::FileId(0), 0, 0),
     }
 }
 

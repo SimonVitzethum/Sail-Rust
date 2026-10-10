@@ -9,5 +9,8 @@ license = "MIT OR Apache-2.0"
 name = "sail_ty"
 path = "src/lib.rs"
 
+[dependencies]
+sail-ast = { path = "../sail-ast" }
+
 [lints]
 workspace = true

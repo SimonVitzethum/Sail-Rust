@@ -18,28 +18,10 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-/// 1-based source position for hard errors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct Span {
-    /// 1-based line.
-    pub line: u32,
-    /// 1-based column.
-    pub col: u32,
-}
-
-impl Span {
-    /// Create a span.
-    #[must_use]
-    pub const fn new(line: u32, col: u32) -> Self {
-        Self { line, col }
-    }
-}
-
-impl fmt::Display for Span {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.line, self.col)
-    }
-}
+/// 1-based source position for hard errors: the canonical `sail-ast`
+/// span (Lane 61 unification of MIGRATION.md #41; previously a
+/// line/col-only local copy, removed).
+pub use sail_ast::{FileId, Span};
 
 /// Failure modes. Missing externs are always hard errors.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -407,7 +389,9 @@ impl ValSpec {
 mod tests {
     use super::*;
 
-    const SPAN: Span = Span::new(1, 1);
+    fn span() -> Span {
+        Span::new(FileId(0), 1, 1)
+    }
 
     #[test]
     fn full_op_table_matches_ocaml_reference() {
@@ -485,7 +469,7 @@ mod tests {
         ];
         for (sail, code, args, want) in cases {
             assert_eq!(
-                render_extern_call(sail, Some(code), args, SPAN).unwrap(),
+                render_extern_call(sail, Some(code), args, span()).unwrap(),
                 (*want).to_owned(),
                 "call {sail} via {code}"
             );
@@ -536,7 +520,7 @@ mod tests {
         ];
         for (sail, code, args, want) in cases {
             assert_eq!(
-                render_extern_call(sail, Some(code), args, SPAN).unwrap(),
+                render_extern_call(sail, Some(code), args, span()).unwrap(),
                 (*want).to_owned(),
                 "call {sail} via {code}"
             );
@@ -576,11 +560,11 @@ mod tests {
         // a lean mapping exists; otherwise it is a hard error.
         let with = ValSpec::new("add_int", vec![("lean", "_lean_addi")]);
         assert!(!should_emit_fundef(with.has_lean_mapping()));
-        assert!(check_extern_fundef("add_int", with.lean_mapping(), false, SPAN).is_ok());
+        assert!(check_extern_fundef("add_int", with.lean_mapping(), false, span()).is_ok());
 
         let without = ValSpec::new("my_device_read", vec![("_", "my_device_read")]);
         assert!(should_emit_fundef(without.has_lean_mapping()));
-        let err = check_extern_fundef("my_device_read", without.lean_mapping(), false, SPAN)
+        let err = check_extern_fundef("my_device_read", without.lean_mapping(), false, span())
             .expect_err("missing lean mapping must fail");
         match &err {
             Error::MissingExtern { suggestion, .. } => {
@@ -589,16 +573,16 @@ mod tests {
             other => panic!("wrong error kind: {other:?}"),
         }
         // A locally defined function never needs a mapping.
-        assert!(check_extern_fundef("local_fn", None, true, SPAN).is_ok());
+        assert!(check_extern_fundef("local_fn", None, true, span()).is_ok());
     }
 
     #[test]
     fn missing_extern_is_hard_error_with_arm_extras_hint() {
-        let err = render_extern_call("my_device_read", None, &["x"], Span::new(3, 7))
+        let err = render_extern_call("my_device_read", None, &["x"], Span::new(FileId(0), 3, 7))
             .expect_err("must be a hard error");
         let msg = err.to_string();
         assert!(msg.contains("my_device_read"), "{msg}");
-        assert!(msg.contains("3:7"), "{msg}");
+        assert!(msg.contains("file0:3-7"), "{msg}");
         assert!(msg.contains("ArmExtras"), "{msg}");
         assert!(msg.contains("--lean-extern-type"), "{msg}");
         assert!(!msg.to_lowercase().contains("sorry"), "never suggest sorry: {msg}");
@@ -606,10 +590,10 @@ mod tests {
 
     #[test]
     fn operator_arity_mismatch_is_unsupported_not_sorry() {
-        let err = render_extern_call("and_bool", Some("_lean_and"), &["only_one"], SPAN)
+        let err = render_extern_call("and_bool", Some("_lean_and"), &["only_one"], span())
             .expect_err("binop needs 2 args");
         assert!(matches!(err, Error::Unsupported { .. }));
-        let err = render_extern_call("not_bool", Some("_lean_not"), &["a", "b"], SPAN)
+        let err = render_extern_call("not_bool", Some("_lean_not"), &["a", "b"], span())
             .expect_err("unop needs 1 arg");
         assert!(matches!(err, Error::Unsupported { .. }));
     }

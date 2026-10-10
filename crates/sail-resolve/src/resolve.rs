@@ -190,9 +190,13 @@ pub fn resolve(ast: &Ast) -> ResolvedProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mini_ast::{CtorDecl, MappingDef, RegisterDef, Span, TypeDef, TypeDefKind, ValSpec};
+    use crate::mini_ast::{
+        CtorDecl, FileId, MappingDef, RegisterDef, Span, TypeDef, TypeDefKind, ValSpec,
+    };
 
-    const S: Span = Span::new(1, 1);
+    fn s() -> Span {
+        Span::new(FileId(0), 1, 1)
+    }
 
     fn union_def(owner: &str, ctors: &[&str]) -> Def {
         Def::Type(TypeDef::new(
@@ -200,21 +204,21 @@ mod tests {
             TypeDefKind::Union(
                 ctors
                     .iter()
-                    .map(|c| CtorDecl::new((*c).to_owned(), S))
+                    .map(|c| CtorDecl::new((*c).to_owned(), s()))
                     .collect(),
             ),
-            S,
+            s(),
         ))
     }
 
     #[test]
     fn happy_path_tables_fill() {
         let ast = Ast::new(vec![
-            Def::Type(TypeDef::new("U", TypeDefKind::Struct, S)),
+            Def::Type(TypeDef::new("U", TypeDefKind::Struct, s())),
             union_def("V", &["A", "B"]),
-            Def::ValSpec(ValSpec::new("f", S)),
-            Def::Register(RegisterDef::new("x1", S)),
-            Def::Mapping(MappingDef::new("enc", S)),
+            Def::ValSpec(ValSpec::new("f", s())),
+            Def::Register(RegisterDef::new("x1", s())),
+            Def::Mapping(MappingDef::new("enc", s())),
         ]);
         let r = resolve(&ast);
         assert!(r.is_ok(), "errors: {:?}", r.errors);
@@ -231,7 +235,7 @@ mod tests {
     fn union_ctor_vs_typename_collision() {
         // `union V { U }` + `struct U`: ctor `U` collides with type `U`.
         let ast = Ast::new(vec![
-            Def::Type(TypeDef::new("U", TypeDefKind::Struct, S)),
+            Def::Type(TypeDef::new("U", TypeDefKind::Struct, s())),
             union_def("V", &["U", "W"]),
         ]);
         let r = resolve(&ast);

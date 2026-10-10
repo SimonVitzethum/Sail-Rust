@@ -79,8 +79,8 @@ impl std::fmt::Display for ResolveError {
         };
         write!(
             f,
-            "{what} '{}' (first at {}:{}, again at {}:{})",
-            self.name, self.first.line, self.first.col, self.second.line, self.second.col
+            "{what} '{}' (first at {}, again at {})",
+            self.name, self.first, self.second
         )
     }
 }

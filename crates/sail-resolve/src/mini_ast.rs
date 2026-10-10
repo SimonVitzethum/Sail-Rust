@@ -4,22 +4,14 @@
 //! They cover exactly what name resolution needs: top-level definitions
 //! with names, union/enum constructors, and use-sites for scope checks.
 //! See `RESOLVE_NEEDED.md` for the mapping onto the future real AST.
+//!
+//! Locations are the canonical `sail-ast` type (Lane 61 unification of
+//! MIGRATION.md #8; previously a line/col-only local copy, removed).
 
 #![forbid(unsafe_code)]
 
-/// 1-based source location. Kept tiny on purpose (low-RAM goal).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct Span {
-    pub line: u32,
-    pub col: u32,
-}
-
-impl Span {
-    #[must_use]
-    pub const fn new(line: u32, col: u32) -> Self {
-        Self { line, col }
-    }
-}
+/// Canonical source span (re-exported from `sail-ast`).
+pub use sail_ast::{FileId, Span};
 
 /// What a union/enum member carries. Payload types are intentionally
 /// opaque strings here: resolution only needs the *names*.
