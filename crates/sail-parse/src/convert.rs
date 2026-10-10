@@ -55,13 +55,13 @@ impl Ctx<'_> {
             g::Lit::True => LitKind::True,
             g::Lit::False => LitKind::False,
             g::Lit::Unit => LitKind::Unit,
-            g::Lit::Num(s) => LitKind::Num(s.clone()),
-            g::Lit::Zero => LitKind::Num("0".to_owned()),
-            g::Lit::One => LitKind::Num("1".to_owned()),
-            g::Lit::Bin(s) => LitKind::Bin(s.clone()),
-            g::Lit::Hex(s) => LitKind::Hex(s.clone()),
-            g::Lit::Str(s) => LitKind::String(s.clone()),
-            g::Lit::Real(s) => LitKind::Real(s.clone()),
+            g::Lit::Num(s) => LitKind::Num(self.interner.intern(s)),
+            g::Lit::Zero => LitKind::Num(self.interner.intern("0")),
+            g::Lit::One => LitKind::Num(self.interner.intern("1")),
+            g::Lit::Bin(s) => LitKind::Bin(self.interner.intern(s)),
+            g::Lit::Hex(s) => LitKind::Hex(self.interner.intern(s)),
+            g::Lit::Str(s) => LitKind::String(self.interner.intern(s)),
+            g::Lit::Real(s) => LitKind::Real(self.interner.intern(s)),
         };
         self.node(span, kind)
     }
@@ -211,14 +211,22 @@ fn conv_typschm(c: &mut Ctx, span: Span, s: &g::TypSchm) -> Result<TypSchm, Stri
     let quant = conv_quant_items(c, span, &s.quant)?;
     // Binär abbilden (rechtsgenestete Pfeile bleiben curried `Fn`-Knoten).
     let typ = match &s.arrow {
-        g::Arrow::Fn => c.node(span, TypKind::Fn {
-            args: vec![conv_typ(c, span, &s.lhs)?],
-            ret: Box::new(conv_typ(c, span, &s.rhs)?),
-        }),
-        g::Arrow::Bidir => c.node(span, TypKind::Bidir {
-            lhs: Box::new(conv_typ(c, span, &s.lhs)?),
-            rhs: Box::new(conv_typ(c, span, &s.rhs)?),
-        }),
+        g::Arrow::Fn => {
+            let arg = conv_typ(c, span, &s.lhs)?;
+            let ret = conv_typ(c, span, &s.rhs)?;
+            c.node(span, TypKind::Fn {
+                args: vec![arg],
+                ret: Box::new(ret),
+            })
+        }
+        g::Arrow::Bidir => {
+            let lhs = conv_typ(c, span, &s.lhs)?;
+            let rhs = conv_typ(c, span, &s.rhs)?;
+            c.node(span, TypKind::Bidir {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            })
+        }
     };
     Ok(TypSchm { quant, typ })
 }
@@ -292,7 +300,10 @@ fn conv_typarg(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<TypArg, String> {
         g::Typ::Lit(g::Lit::One) => {
             TypArgKind::NExp(c.node(span, NExpKind::Constant("1".to_owned())))
         }
-        g::Typ::Var(s) => TypArgKind::NExp(c.node(span, NExpKind::Var(c.interner.intern(s)))),
+        g::Typ::Var(s) => {
+            let sym = c.interner.intern(s);
+            TypArgKind::NExp(c.node(span, NExpKind::Var(sym)))
+        }
         g::Typ::Id(_) | g::Typ::App(..) | g::Typ::Infix(_) | g::Typ::If(..) => {
             match conv_nexp(c, span, t) {
                 Ok(n) => TypArgKind::NExp(n),
@@ -456,10 +467,15 @@ fn conv_pat(c: &mut Ctx, span: Span, p: &g::Pat) -> Result<Pat, String> {
         g::Pat::Wild => PatKind::Wild,
         g::Pat::Lit(l) => PatKind::Lit(c.lit(span, l)),
         g::Pat::Id(s) => PatKind::Id(c.name(span, s)),
-        g::Pat::KidVar(s) => PatKind::Var {
-            pat: Box::new(c.node(span, PatKind::Wild)),
-            typ_pat: c.node(span, TypPatKind::Var(c.interner.intern(s))),
-        },
+        g::Pat::KidVar(s) => {
+            let sym = c.interner.intern(s);
+            let pat = c.node(span, PatKind::Wild);
+            let typ_pat = c.node(span, TypPatKind::Var(sym));
+            PatKind::Var {
+                pat: Box::new(pat),
+                typ_pat,
+            }
+        }
         g::Pat::App(f, args) => {
             let mut cargs = Vec::with_capacity(args.len());
             for a in args {
@@ -734,12 +750,18 @@ fn conv_fexp_field(c: &mut Ctx, span: Span, f: &g::FieldExp) -> Result<FExp, Str
             })
         }
         // Punning `f` = `{ f = f }` (Desugar, dokumentiert).
-        g::FieldExp::Punning(n) => Ok(FExp {
-            id: c.ids.fresh(),
-            span,
-            field: c.name(span, n),
-            value: c.node(span, ExpKind::Id(c.name(span, n))),
-        }),
+        g::FieldExp::Punning(n) => {
+            let id = c.ids.fresh();
+            let field = c.name(span, n);
+            let id_name = c.name(span, n);
+            let value = c.node(span, ExpKind::Id(id_name));
+            Ok(FExp {
+                id,
+                span,
+                field,
+                value,
+            })
+        }
     }
 }
 
@@ -863,7 +885,11 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
         g::Exp::For(head, body) => {
             let step = match &head.step {
                 // Ohne Schritt: `1` (Sail-Default, dokumentiert).
-                None => c.node(span, ExpKind::Lit(c.node(span, LitKind::Num("1".to_owned())))),
+                None => {
+                    let one = c.interner.intern("1");
+                    let lit = c.node(span, LitKind::Num(one));
+                    c.node(span, ExpKind::Lit(lit))
+                }
                 Some(s) => conv_exp(c, span, s)?,
             };
             let order = match &head.order {
@@ -1074,7 +1100,7 @@ fn conv_mapcl(c: &mut Ctx, span: Span, m: &g::MapCl) -> Result<Mapcl, String> {
         g::MapCl::When(inner, guard) => {
             let guard = conv_exp(c, span, guard)?;
             let inner = conv_mapcl(c, span, inner)?;
-            let attach = |arm: PExp| -> Result<PExp, String> {
+            let mut attach = |arm: PExp| -> Result<PExp, String> {
                 match arm.kind {
                     PExpKind::PatExp { pat, body } => Ok(PExp {
                         id: c.ids.fresh(),
@@ -1226,12 +1252,14 @@ fn conv_reg_field(
 
 fn conv_typedef(c: &mut Ctx, span: Span, t: &g::TypeDef) -> Result<TypeDefKind, String> {
     match t {
-        g::TypeDef::Abbrev(name, quant, _kind, body) => Ok(TypeDefKind::Abbrev {
-            name: c.name(span, name),
-            quant: conv_quant_items(c, span, &Some(quant.clone()))?,
+        g::TypeDef::Abbrev(name, quant, _kind, body) => {
+            let name = c.name(span, name);
+            let quant = conv_quant_items(c, span, &Some(quant.clone()))?;
             // Kind-Annotation entfällt (Core hat keinen Slot).
-            arg: c.node(span, TypArgKind::Typ(conv_typ(c, span, body)?)),
-        }),
+            let body_typ = conv_typ(c, span, body)?;
+            let arg = c.node(span, TypArgKind::Typ(body_typ));
+            Ok(TypeDefKind::Abbrev { name, quant, arg })
+        }
         g::TypeDef::Abstract(name, kind, _aliases) => Ok(TypeDefKind::Abstract {
             name: c.name(span, name),
             kind: conv_kind(kind)?,
@@ -1363,10 +1391,12 @@ fn conv_scattered(c: &mut Ctx, span: Span, s: &g::ScatteredDef) -> Result<Scatte
 
 fn conv_subst(c: &mut Ctx, span: Span, s: &g::Subst) -> Result<Subst, String> {
     match s {
-        g::Subst::Typ(kid, t) => Ok(Subst::Typ {
-            kid: c.interner.intern(kid),
-            arg: c.node(span, TypArgKind::Typ(conv_typ(c, span, t)?)),
-        }),
+        g::Subst::Typ(kid, t) => {
+            let kid = c.interner.intern(kid);
+            let typ = conv_typ(c, span, t)?;
+            let arg = c.node(span, TypArgKind::Typ(typ));
+            Ok(Subst::Typ { kid, arg })
+        }
         g::Subst::Id(from, to) => Ok(Subst::Id {
             from: c.name(span, from),
             to: c.name(span, to),
@@ -1456,7 +1486,10 @@ fn conv_defaux(c: &mut Ctx, span: Span, d: &g::DefAux) -> Result<DefKind, String
                 substs: csubsts,
             })
         }
-        g::DefAux::Type(t) => Ok(DefKind::Type(c.node(span, conv_typedef(c, span, t)?))),
+        g::DefAux::Type(t) => {
+            let typedef = conv_typedef(c, span, t)?;
+            Ok(DefKind::Type(c.node(span, typedef)))
+        }
         g::DefAux::Let(p, e) => Ok(DefKind::Let {
             pat: conv_pat(c, span, p)?,
             exp: conv_exp(c, span, e)?,
@@ -1520,5 +1553,151 @@ fn conv_def(c: &mut Ctx, span: Span, d: &g::Def) -> Result<DefKind, String> {
         g::Def::Private(inner) => conv_def(c, span, inner),
         g::Def::Attr(_, inner) => conv_def(c, span, inner),
         g::Def::Doc(_, inner) => conv_def(c, span, inner),
+    }
+}
+
+#[cfg(test)]
+mod symbol_threading_tests {
+    //! Lane 121: Literale tragen `Symbol`-Payloads (Lane 71), über den
+    //! geliehenen Interner an der Konversionsgrenze interniert; Borrow-
+    //! Hoists ändern kein Verhalten (E3: Code ohne Run).
+
+    use super::*;
+    use sail_ast::Interner as _;
+
+    fn ctx<'a>(ids: &'a mut IdGen, interner: &'a mut SimpleInterner) -> Ctx<'a> {
+        Ctx { ids, interner }
+    }
+
+    #[test]
+    fn lit_payloads_are_interned_symbols() {
+        let mut ids = IdGen::new();
+        let mut interner = SimpleInterner::new();
+        let span = Span::DUMMY;
+        for (lit, expect) in [
+            (g::Lit::Num("42".to_owned()), "42"),
+            (g::Lit::Zero, "0"),
+            (g::Lit::One, "1"),
+            (g::Lit::Bin("101".to_owned()), "101"),
+            (g::Lit::Hex("FF".to_owned()), "FF"),
+            (g::Lit::Str("hi".to_owned()), "hi"),
+            (g::Lit::Real("1.5".to_owned()), "1.5"),
+        ] {
+            let node = {
+                let mut c = ctx(&mut ids, &mut interner);
+                c.lit(span, &lit)
+            };
+            let sym = match node.kind {
+                LitKind::Num(s) | LitKind::Bin(s) | LitKind::Hex(s) | LitKind::String(s) | LitKind::Real(s) => s,
+                other => panic!("erwarte Symbol-Payload, got {other:?}"),
+            };
+            assert_eq!(interner.resolve(sym), Some(expect));
+        }
+    }
+
+    #[test]
+    fn lit_interning_deduplicates() {
+        let mut ids = IdGen::new();
+        let mut interner = SimpleInterner::new();
+        let span = Span::DUMMY;
+        let lit = g::Lit::Num("7".to_owned());
+        let a = {
+            let mut c = ctx(&mut ids, &mut interner);
+            c.lit(span, &lit)
+        };
+        let b = {
+            let mut c = ctx(&mut ids, &mut interner);
+            c.lit(span, &lit)
+        };
+        let sym = |n: &Lit| match n.kind {
+            LitKind::Num(s) => s,
+            _ => panic!("erwarte Num"),
+        };
+        assert_eq!(sym(&a), sym(&b));
+        assert_eq!(interner.resolve(sym(&a)), Some("7"));
+    }
+
+    #[test]
+    fn typschm_fn_and_bidir_lower() {
+        // Übte den E0499-Hoist in `conv_typschm` (Fn + Bidir).
+        let mut ids = IdGen::new();
+        let mut interner = SimpleInterner::new();
+        let span = Span::DUMMY;
+        for arrow in [g::Arrow::Fn, g::Arrow::Bidir] {
+            let is_fn = arrow == g::Arrow::Fn;
+            let schm = g::TypSchm {
+                quant: None,
+                lhs: g::Typ::Id("int".to_owned()),
+                arrow,
+                rhs: g::Typ::Id("bool".to_owned()),
+                effect: None,
+            };
+            let out = {
+                let mut c = ctx(&mut ids, &mut interner);
+                conv_typschm(&mut c, span, &schm).expect("senkbar")
+            };
+            assert!(out.quant.is_empty());
+            match &out.typ.kind {
+                TypKind::Fn { args, ret } if is_fn => {
+                    assert_eq!(args.len(), 1);
+                    assert!(matches!(ret.kind, TypKind::Id(_)));
+                }
+                TypKind::Bidir { lhs, rhs } if !is_fn => {
+                    assert!(matches!(lhs.kind, TypKind::Id(_)));
+                    assert!(matches!(rhs.kind, TypKind::Id(_)));
+                }
+                other => panic!("unerwartete Typschm-Form: {other:?}"),
+            }
+        }
+        let sym = interner.intern("int");
+        assert_eq!(interner.resolve(sym), Some("int"));
+    }
+
+    #[test]
+    fn subst_typ_threads_interner() {
+        // Übte den E0499-Hoist in `conv_subst`.
+        let mut ids = IdGen::new();
+        let mut interner = SimpleInterner::new();
+        let span = Span::DUMMY;
+        let s = g::Subst::Typ("n".to_owned(), g::Typ::Id("int".to_owned()));
+        let out = {
+            let mut c = ctx(&mut ids, &mut interner);
+            conv_subst(&mut c, span, &s).expect("senkbar")
+        };
+        match out {
+            Subst::Typ { kid, arg } => {
+                assert_eq!(interner.resolve(kid), Some("n"));
+                assert!(matches!(arg.kind, TypArgKind::Typ(_)));
+            }
+            other => panic!("erwarte Typ-Subst, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn typedef_abbrev_threads_interner() {
+        // Übte den E0499-Hoist in `conv_typedef` (Abbrev-Arg).
+        let mut ids = IdGen::new();
+        let mut interner = SimpleInterner::new();
+        let span = Span::DUMMY;
+        let t = g::TypeDef::Abbrev(
+            "t".to_owned(),
+            g::TypQuant {
+                kopts: Vec::new(),
+                constraint: None,
+            },
+            None,
+            g::Typ::Id("int".to_owned()),
+        );
+        let out = {
+            let mut c = ctx(&mut ids, &mut interner);
+            conv_typedef(&mut c, span, &t).expect("senkbar")
+        };
+        match out {
+            TypeDefKind::Abbrev { name, arg, .. } => {
+                assert_eq!(interner.resolve(name.symbol), Some("t"));
+                assert!(matches!(arg.kind, TypArgKind::Typ(_)));
+            }
+            other => panic!("erwarte Abbrev, got {other:?}"),
+        }
     }
 }

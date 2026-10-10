@@ -509,14 +509,12 @@ impl Bridge {
         let name = self.name(span, name_text, head);
         let id = self.push_unparsed("termination_measure", src.to_owned());
         if is_fun {
+            let pat = self.wild_pat(span);
+            let exp = self.undef_exp(span);
             self.defs.push(Node::new(
                 id,
                 span,
-                DefKind::Measure {
-                    name,
-                    pat: self.wild_pat(span),
-                    exp: self.undef_exp(span),
-                },
+                DefKind::Measure { name, pat, exp },
             ));
         } else {
             self.defs.push(Node::new(
@@ -540,6 +538,7 @@ impl Bridge {
         };
         let name = self.name(span, name_text, src);
         let id = self.push_unparsed("outcome", src.to_owned());
+        let typ = self.unknown_typ(span);
         self.defs.push(Node::new(
             id,
             span,
@@ -547,7 +546,7 @@ impl Bridge {
                 name,
                 typschm: TypSchm {
                     quant: Vec::new(),
-                    typ: self.unknown_typ(span),
+                    typ,
                 },
                 quant: Vec::new(),
             },
@@ -844,5 +843,61 @@ impl Bridge {
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod symbol_threading_tests {
+    //! Lane 121: Brücken-Skelette nach Borrow-Hoist (E0499) — Verhalten
+    //! identisch (E3: Code ohne Run).
+
+    use super::*;
+    use sail_ast::Interner as _;
+
+    fn span() -> AstSpan {
+        AstSpan::new(FileId(0), 0, 1)
+    }
+
+    #[test]
+    fn measure_fun_skeleton_keeps_name_and_placeholders() {
+        let mut b = Bridge::new();
+        let sd = crate::mini_ast::SpannedDef::new(
+            crate::mini_ast::Def::Measure {
+                src: "f(x) = x".to_owned(),
+            },
+            crate::span::Span::new(crate::span::FileId(0), 0, 8),
+        );
+        b.measure_skeleton(span(), "f(x) = x", &sd);
+        let def = b.defs.last().expect("Measure fehlt");
+        match &def.kind {
+            DefKind::Measure { name, pat, exp } => {
+                assert_eq!(b.interner.resolve(name.symbol), Some("f"));
+                assert!(matches!(pat.kind, PatKind::Wild));
+                assert!(matches!(exp.kind, ExpKind::Undef));
+            }
+            other => panic!("erwarte Measure, got {other:?}"),
+        }
+        assert!(b.deferred.is_empty());
+    }
+
+    #[test]
+    fn outcome_skeleton_keeps_name_and_unknown_typ() {
+        let mut b = Bridge::new();
+        let sd = crate::mini_ast::SpannedDef::new(
+            crate::mini_ast::Def::Outcome {
+                src: "o : int".to_owned(),
+            },
+            crate::span::Span::new(crate::span::FileId(0), 0, 7),
+        );
+        b.outcome_skeleton(span(), "o : int", &sd);
+        let def = b.defs.last().expect("Outcome fehlt");
+        match &def.kind {
+            DefKind::Outcome { name, typschm, .. } => {
+                assert_eq!(b.interner.resolve(name.symbol), Some("o"));
+                assert!(matches!(typschm.typ.kind, TypKind::Unknown));
+            }
+            other => panic!("erwarte Outcome, got {other:?}"),
+        }
+        assert!(b.deferred.is_empty());
     }
 }
