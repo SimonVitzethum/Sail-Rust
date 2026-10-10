@@ -15,6 +15,7 @@ sail-nexp = { path = "../sail-nexp" }
 z3 = { version = "0.21", optional = true }
 
 [dev-dependencies]
+sail-ast = { path = "../sail-ast" }
 
 [lints]
 workspace = true
