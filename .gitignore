@@ -1,0 +1,4 @@
+# Build-Artefakte (Lane-Vorgabe: target/ nie committen).
+target/
+# Cargo.lock nie committen (Lane-Vorgabe).
+Cargo.lock
