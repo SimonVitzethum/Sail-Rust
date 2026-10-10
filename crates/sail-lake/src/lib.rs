@@ -521,7 +521,9 @@ impl ArchFieldsV2 {
     pub fn render(&self) -> String {
         // `&str`-View statt `to_string()` pro Feld, alles per `write!` in
         // einen vorreservierten `String` (RAM-Diät Lane 90); Ausgabe identisch.
-        let ty = |v: &Option<String>, d: &str| v.as_deref().unwrap_or(d);
+        fn ty<'a>(v: &'a Option<String>, d: &'a str) -> &'a str {
+            v.as_deref().unwrap_or(d)
+        }
         let mut s = String::with_capacity(1024);
         let _ = writeln!(s, "  addr_size := {}", ty(&self.addr_size, "64"));
         let _ = writeln!(s, "  addr_space := {}", ty(&self.addr_space, "Unit"));
