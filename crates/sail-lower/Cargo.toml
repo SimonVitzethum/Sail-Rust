@@ -1,0 +1,9 @@
+[package]
+name = "sail-lower"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_lower"
+path = "src/lib.rs"
