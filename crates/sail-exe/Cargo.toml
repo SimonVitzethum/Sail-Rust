@@ -10,7 +10,7 @@ name = "sail_exe"
 path = "src/lib.rs"
 
 [dev-dependencies]
-sail-lake = { path = "../../../../crates/sail-lake" }
+sail-lake = { path = "../sail-lake" }
 
 [lints]
 workspace = true
