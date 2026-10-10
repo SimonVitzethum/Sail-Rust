@@ -33,6 +33,7 @@ members = [
     "crates/sail-sve-sme",
     "crates/sail-instrs-core",
     "crates/sail-exe",
+    "crates/sail-diag",
 ]
 resolver = "2"
 
