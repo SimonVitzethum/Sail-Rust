@@ -18,7 +18,7 @@ pub mod parser;
 pub mod span;
 
 pub use mini_ast::{Def, ParsedFile, PragmaArg, SpannedDef};
-pub use span::{ParseError, Span, Spanned};
+pub use span::{FileId, ParseError, Span, Spanned};
 
 pub use parser::parse_file;
 
@@ -44,7 +44,7 @@ pub fn parse_files_parallel(inputs: &[(&str, &str)]) -> Vec<Result<ParsedFile, P
             let (i, r) = h.join().unwrap_or_else(|_| {
                 (
                     usize::MAX,
-                    Err(ParseError::new(Span::point("?", 0, 1, 1), "parser thread panicked")),
+                    Err(ParseError::new(Span::new(FileId(0), 0, 0), "parser thread panicked")),
                 )
             });
             if i != usize::MAX {

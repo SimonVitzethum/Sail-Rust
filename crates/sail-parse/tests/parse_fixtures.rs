@@ -4,7 +4,7 @@
 //! [`sail_parse::parse_files_parallel`]; assertions pin the definition
 //! kinds, extracted names, shard markers and error spans.
 
-use sail_parse::{Def, PragmaArg, parse_file, parse_files_parallel};
+use sail_parse::{Def, FileId, PragmaArg, parse_file, parse_files_parallel};
 
 fn fixture(name: &str) -> String {
     let dir = env!("CARGO_MANIFEST_DIR");
@@ -86,10 +86,15 @@ fn fundefs_val_register_type_overload_fixity() {
         other => panic!("expected Fixity, got {other:?}"),
     }
 
-    // Spans: function body on lines 6-8 (1-based), file recorded.
-    assert_eq!(fun.span.file, "fundefs.sail");
-    assert_eq!(fun.span.start_line, 6);
-    assert_eq!(fun.span.end_line, 8);
+    // Spans: byte range covering the function definition (lines 6-8),
+    // file recorded as FileId (path stays on ParsedFile; line/col move
+    // to a driver-lane file table).
+    assert_eq!(fun.span.file, FileId(0));
+    assert_eq!((fun.span.start, fun.span.end), (92, 134));
+    assert_eq!(
+        &src[fun.span.start as usize..fun.span.end as usize],
+        "function bitvector_eq(x, y) = {\n  x == y\n}"
+    );
 }
 
 #[test]
@@ -202,14 +207,14 @@ fn pragma_shard_markers_preserved() {
 fn errors_carry_spans() {
     // Unterminated brace: error, not panic; span points into the file.
     let err = parse_file("bad.sail", "function f(x) = {\n  x + 1\n").unwrap_err();
-    assert_eq!(err.span.file, "bad.sail");
-    assert!(err.span.start_line >= 1, "span: {}", err.span);
+    assert_eq!(err.span.file, FileId(0));
+    assert!(err.span.start <= err.span.end, "span: {}", err.span);
     assert!(err.message.contains("unterminated"), "msg: {}", err.message);
 
     // Stray text at top level.
     let err2 = parse_file("bad2.sail", "hello world\n").unwrap_err();
-    assert_eq!(err2.span.file, "bad2.sail");
-    assert_eq!(err2.span.start_line, 1);
+    assert_eq!(err2.span.file, FileId(0));
+    assert_eq!((err2.span.start, err2.span.end), (0, 5));
     assert!(err2.message.contains("hello") || err2.message.contains("expected"), "{}", err2.message);
 
     // Empty file still yields exactly the shard markers.

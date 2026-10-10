@@ -23,7 +23,7 @@
 //! of counting conservatively).
 
 use crate::mini_ast::{Def, ParsedFile, PragmaArg, SpannedDef};
-use crate::span::{ParseError, Span};
+use crate::span::{FileId, ParseError, Span};
 
 /// Keywords that start a new top-level definition when seen as the first
 /// token of a line at nesting depth 0. Mirrors the `def:` rule of
@@ -78,41 +78,36 @@ fn is_ident_char(b: u8) -> bool {
 #[derive(Debug, Clone, Copy)]
 struct Cur {
     byte: usize,
-    line: u32,
-    col: u32,
 }
 
 struct Scanner<'a> {
-    file: &'a str,
+    file_id: FileId,
     src: &'a str,
     bytes: &'a [u8],
     pos: usize,
-    line: u32,
-    col: u32,
 }
 
 impl<'a> Scanner<'a> {
-    fn new(file: &'a str, src: &'a str) -> Self {
-        Scanner { file, src, bytes: src.as_bytes(), pos: 0, line: 1, col: 1 }
+    fn new(file_id: FileId, src: &'a str) -> Self {
+        Scanner { file_id, src, bytes: src.as_bytes(), pos: 0 }
     }
 
     fn cur(&self) -> Cur {
-        Cur { byte: self.pos, line: self.line, col: self.col }
+        Cur { byte: self.pos }
     }
 
-    /// Save/restore the full cursor for speculative parsing.
-    fn save(&self) -> (usize, u32, u32) {
-        (self.pos, self.line, self.col)
+    /// Save/restore the cursor for speculative parsing.
+    fn save(&self) -> usize {
+        self.pos
     }
 
-    fn restore(&mut self, s: (usize, u32, u32)) {
-        self.pos = s.0;
-        self.line = s.1;
-        self.col = s.2;
+    fn restore(&mut self, s: usize) {
+        self.pos = s;
     }
 
     fn span(&self, from: Cur, to: Cur) -> Span {
-        Span::new(self.file, from.byte, to.byte, from.line, from.col, to.line, to.col)
+        debug_assert!(from.byte <= to.byte);
+        Span::new(self.file_id, from.byte as u32, to.byte as u32)
     }
 
     fn err(&self, from: Cur, to: Cur, msg: &str) -> ParseError {
@@ -135,12 +130,6 @@ impl<'a> Scanner<'a> {
         for _ in 0..n {
             if self.eof() {
                 return;
-            }
-            if self.bytes[self.pos] == b'\n' {
-                self.line += 1;
-                self.col = 1;
-            } else {
-                self.col += 1;
             }
             self.pos += 1;
         }
@@ -395,7 +384,7 @@ impl<'a> Scanner<'a> {
                 }
                 Some(b'\n') if paren == 0 && bracket == 0 && brace == 0 => {
                     // Possible header end: check the next line.
-                    let save = (self.pos, self.line, self.col);
+                    let save = self.pos;
                     self.bump(1);
                     // Peek next line's first word (skip inline ws/comments).
                     let mut p = self.pos;
@@ -417,9 +406,7 @@ impl<'a> Scanner<'a> {
                     let is_blank = self.bytes.get(p) == Some(&b'\n');
                     if is_next_def || is_blank || p >= self.bytes.len() {
                         // Rewind to before the newline; caller skips trivia.
-                        self.pos = save.0;
-                        self.line = save.1;
-                        self.col = save.2;
+                        self.pos = save;
                         return Ok((self.slice(start, self.pos).trim().to_owned(), HeaderEnd::Eol));
                     }
                     // Continuation line: keep scanning.
@@ -529,15 +516,6 @@ impl<'a> Scanner<'a> {
                             line_begin -= 1;
                         }
                         self.pos = line_begin;
-                        // Resync column by recounting from the last newline
-                        // (`line` is unchanged: we never crossed a newline).
-                        let mut q = self.pos;
-                        let mut c = 1u32;
-                        while q > 0 && self.bytes[q - 1] != b'\n' {
-                            q -= 1;
-                            c += 1;
-                        }
-                        self.col = c;
                         return Ok(self.slice(start, end).trim_end().to_owned());
                     }
                     end = self.pos;
@@ -564,13 +542,16 @@ enum HeaderEnd {
 /// Parse one `.sail` file. Always succeeds at the file level unless a
 /// lexical/structural error occurs; the result is wrapped in
 /// `file_start`/`file_end` pragma markers (like OCaml `initial_check.ml`).
+///
+/// Spans carry `FileId(0)`: the file-table mapping (`FileId` → path) is
+/// owned by a later (driver) lane; the path stays on [`ParsedFile::path`].
 pub fn parse_file(path: &str, src: &str) -> Result<ParsedFile, ParseError> {
-    let mut sc = Scanner::new(path, src);
+    let mut sc = Scanner::new(FileId(0), src);
     let mut defs: Vec<SpannedDef> = Vec::new();
 
     defs.push(SpannedDef::new(
         Def::Pragma { name: "file_start".to_owned(), arg: PragmaArg::Line(path.to_owned()) },
-        Span::point(path, 0, 1, 1),
+        Span::new(FileId(0), 0, 0),
     ));
 
     loop {
@@ -621,7 +602,7 @@ pub fn parse_file(path: &str, src: &str) -> Result<ParsedFile, ParseError> {
     let eof = sc.cur();
     defs.push(SpannedDef::new(
         Def::Pragma { name: "file_end".to_owned(), arg: PragmaArg::Line(path.to_owned()) },
-        Span::point(path, eof.byte, eof.line, eof.col),
+        Span::new(FileId(0), eof.byte as u32, eof.byte as u32),
     ));
 
     Ok(ParsedFile { path: path.to_owned(), defs })
