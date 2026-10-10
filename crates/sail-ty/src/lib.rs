@@ -40,11 +40,11 @@ pub use advanced::{
     freshen_exist, is_arm_exist_bits, open_exist, prove_exist_open, subst_adv_typ,
 };
 pub use ast_env::{kenv_from_kopts, kenv_to_kopts};
-pub use check::{BidirectionalChecker, CheckLimits, TypedDefSummary};
+pub use check::{BidirectionalChecker, CheckLimits, ScatteredKind, TypedDefSummary};
 pub use env::TypeEnv;
 pub use error::{Span, TypeError, TypeResult};
 pub use kind::Kind;
-pub use nexp::{MiniExp, MiniFExp, MiniLexp, MiniLoop, MiniOrder, MiniPExp, MiniTyp, NConstraint, Nexp, TypQuant};
+pub use nexp::{MiniExp, MiniFExp, MiniLexp, MiniLoop, MiniOrder, MiniPExp, MiniTyp, NConstraint, Nexp, TypQuant, gensym};
 pub use pat::MiniPat;
 pub use prove::{
     ScatteredClauses, SolverContext, assumption_from_register, assumption_from_val,
