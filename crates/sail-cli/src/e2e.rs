@@ -28,6 +28,8 @@
 
 use std::fmt;
 
+use crate::ooc::{NoopHooks, OocDriver, OocError, OocHooks, OocStats};
+
 /// Eine Lücke der Pipeline: genau ein Owner-Lane (Spec-Vorgabe).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct E2eFail {
@@ -82,6 +84,9 @@ pub struct Outcome {
     pub emitted: Vec<String>,
     /// Lücken, je mit genau einem Owner.
     pub fails: Vec<E2eFail>,
+    /// Lane 62 (E4): OoC-Zähler des Rewrite-Shard-Streamings (sealed/evicted,
+    /// Warm-Spills, Memo-Hits/Misses, Summaries).
+    pub ooc: OocStats,
 }
 
 /// Statische Lücken mit TinyArm-Belegstellen (Zeilen in
@@ -170,7 +175,7 @@ fn static_fails() -> Vec<E2eFail> {
     ]
 }
 
-/// Zählt Funktions-/Val-Namen aus `ParsedFile` für Stub-Signaturen.
+/// Funktions-/Val-Namen aus `ParsedFile`: eine OoC-Shard-Einheit je Name.
 /// Effekt-Heuristik (Skizze!): `execute`/`fetch`/`rMem`/`wMem`-Namen sind
 /// zustandsbehaftet, Rest pure — echte Effektanalyse (`effect_label`,
 /// Lane 08) ist via F-ast-unify blockiert.
@@ -191,6 +196,88 @@ fn stub_sig(name: &str) -> sail_lean::FunSig {
         },
         span: sail_lean::Span::new(0, 0),
     }
+}
+
+/// Funktions-/Val-Namen aus `ParsedFile`: eine OoC-Shard-Einheit je Name
+/// (Stub-Signaturen + Rewrite-Streaming teilen sich den Zensus).
+fn fun_names(parsed: &sail_parse::ParsedFile) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for d in &parsed.defs {
+        match &d.def {
+            sail_parse::Def::Fundef { name, .. }
+            | sail_parse::Def::Val { name, .. }
+            | sail_parse::Def::Mapdef { name, .. } => {
+                if !names.iter().any(|n| n == name) {
+                    names.push(name.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    names
+}
+
+/// Lane-62-Treiberkern (E4): jede Shard-Einheit läuft über die OoC-Barriere —
+/// genau ein heißer Shard (Rewrite), danach Seal (serialisieren + verwerfen),
+/// Warm-Spill des fertigen Shards und Export-Summary statt Body in RAM.
+/// Solver-Memos hängen am selben Hook (`OocDriver::memo_prove`).
+fn stream_rewrite<H: OocHooks>(
+    fun_names: &[String],
+    driver: &mut OocDriver<H>,
+) -> Result<(), OocError> {
+    for name in fun_names {
+        // Stub-Bytes: echte Rewrite-Pässe (sail-rewrite-`Pipeline`) + kanonische
+        // Serialisierung folgen mit dem Unified-AST (Fail ast-unify, lane-47).
+        // Der `content_key` ist bis dahin ein Platzhalter — kanonisch ein
+        // sail-ooc-`ContentId` (Herkunft s. `ooc.rs`); ohne stabilen
+        // Content-Hash invalidiert jeder Lauf den Cache (E4).
+        let bytes = format!("stub:{name}\n").into_bytes();
+        let summary = name.as_bytes().to_vec();
+        let key = format!("{}:{name}", crate::ooc::OOC_PASS_VERSION);
+        driver.run_shard(name, &key, || bytes, summary)?;
+    }
+    Ok(())
+}
+
+/// Eintritt für die file-backed OoC-Bindung (Lane 60, `sail-ooc`): läuft den
+/// normalen Treiber (`run`) und legt danach das Rewrite-Streaming über das
+/// mitgegebene Backend (`driver`) — ohne Treiberänderung, sobald `sail-ooc`
+/// ein `impl OocHooks` liefert. Gibt das `Outcome` mit echten OoC-Zählern
+/// zurück; das Backend bleibt beim Aufrufer (inspizierbar nach `finish`).
+pub fn run_with_ooc<H: OocHooks>(args: &E2eArgs, driver: &mut OocDriver<H>) -> Outcome {
+    let mut out = run(args);
+    if out
+        .fails
+        .iter()
+        .any(|f| f.stage == "read-input" || f.stage == "parse")
+    {
+        return out;
+    }
+    // Namen erneut einsammeln (Re-Read, kein AST in RAM — E4: Shard-Streaming,
+    // kein Alles-auf-einmal). Fehler hier sind in `run` schon als Fails
+    // abgedeckt; der Rescan meldet sich notfalls selbst mit Owner lane-62.
+    let parsed = match std::fs::read_to_string(&args.input)
+        .map_err(|e| format!("Eingabe {} nicht lesbar: {e}", args.input))
+        .and_then(|src| {
+            sail_parse::parse_file(&args.input, &src).map_err(|e| format!("parse_file: {e}"))
+        }) {
+        Ok(p) => p,
+        Err(detail) => {
+            out.fails.push(E2eFail::new("ooc-rescan", "lane-62", detail));
+            return out;
+        }
+    };
+    let names = fun_names(&parsed);
+    if let Err(e) = stream_rewrite(&names, driver) {
+        out.fails.push(E2eFail::new(
+            "ooc-wire",
+            "lane-62",
+            format!("OoC-Streaming: {e}"),
+        ));
+    }
+    driver.finish();
+    out.ooc = driver.stats().clone();
+    out
 }
 
 /// Pipeline-Skizze: parsen → zählen → Stubs + Register + Lake-Skelett
@@ -233,24 +320,14 @@ pub fn run(args: &E2eArgs) -> Outcome {
         }
     };
 
-    // Zensus + Funktionsnamen für Stub-Signaturen.
-    let mut fun_names: Vec<String> = Vec::new();
+    // Zensus: Funktionsnamen für Stub-Signaturen + OoC-Shard-Einheiten.
+    let fun_names = fun_names(&parsed);
     let mut has_non_prelude_include = false;
     for d in &parsed.defs {
-        match &d.def {
-            sail_parse::Def::Fundef { name, .. }
-            | sail_parse::Def::Val { name, .. }
-            | sail_parse::Def::Mapdef { name, .. } => {
-                if !fun_names.iter().any(|n| n == name) {
-                    fun_names.push(name.clone());
-                }
+        if let sail_parse::Def::Pragma { name, arg } = &d.def {
+            if name == "include" && !format!("{arg:?}").contains("prelude.sail") {
+                has_non_prelude_include = true;
             }
-            sail_parse::Def::Pragma { name, arg } => {
-                if name == "include" && !format!("{arg:?}").contains("prelude.sail") {
-                    has_non_prelude_include = true;
-                }
-            }
-            _ => {}
         }
     }
     if !has_non_prelude_include {
@@ -282,6 +359,22 @@ pub fn run(args: &E2eArgs) -> Outcome {
         }
     }
     let _ = stub_ok;
+
+    // Lane 62 (E4): Rewrite-Pässe laufen shardweise hinter der OoC-Barriere —
+    // genau ein heißer Shard, danach Seal (serialisieren + verwerfen),
+    // Warm-Spill fertiger Shards + Export-Summary statt Body in RAM.
+    // Mit NoopHooks zählt nur die Barriere (kein Dateisystem-Effekt); die
+    // file-backed Bindung an sail-ooc (Lane 60) erfolgt über run_with_ooc.
+    let mut driver = OocDriver::new(NoopHooks::default());
+    if let Err(e) = stream_rewrite(&fun_names, &mut driver) {
+        out.fails.push(E2eFail::new(
+            "ooc-wire",
+            "lane-62",
+            format!("OoC-Streaming: {e}"),
+        ));
+    }
+    driver.finish();
+    out.ooc = driver.stats().clone();
 
     // Register: aus Rohtext via sail-regs (Lane 19, verdrahtbar ohne AST).
     let minis = sail_regs::parse_register_lines(&src);
@@ -357,4 +450,74 @@ pub fn run(args: &E2eArgs) -> Outcome {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    //! Lane-62-Verdrahtung als Code (E3-Moratorium: läuft später im Test-Rig).
+    use super::*;
+    use crate::ooc::RecordingHooks;
+
+    fn pos_with(events: &[String], prefix: &str) -> usize {
+        events
+            .iter()
+            .position(|e| e.starts_with(prefix))
+            .unwrap_or_else(|| panic!("Event fehlt: {prefix}"))
+    }
+
+    #[test]
+    fn streaming_versiegelt_jeden_shard_in_reihenfolge() {
+        let mut driver = OocDriver::new(RecordingHooks::default());
+        let names = vec!["execute".to_string(), "decode".to_string()];
+        stream_rewrite(&names, &mut driver).expect("streaming");
+        driver.finish();
+        assert_eq!(driver.stats().sealed, 2);
+        assert_eq!(driver.stats().warm_spills, 2);
+        assert_eq!(driver.stats().summaries, 2);
+        assert_eq!(driver.hooks().summary_count(), 2);
+        // Je Shard: begin → seal → spill → summary (Barriere um Rewrite).
+        let ev = &driver.hooks().events;
+        for name in &names {
+            let key = format!("{}:{name}", crate::ooc::OOC_PASS_VERSION);
+            assert!(pos_with(ev, &format!("begin:{name}")) < pos_with(ev, &format!("seal:{name}=")));
+            assert!(pos_with(ev, &format!("seal:{name}=")) < pos_with(ev, &format!("spill:{key}")));
+            assert!(pos_with(ev, &format!("spill:{key}")) < pos_with(ev, &format!("summary:{name}=")));
+        }
+        // Bodies stehen nie im Treiber-RAM — nur Keys + Summaries.
+        assert!(ev.iter().all(|e| !e.contains("stub:execute\n")));
+    }
+
+    #[test]
+    fn solver_memo_spill_wird_run_uebergreifend_genutzt() {
+        let mut driver = OocDriver::new(RecordingHooks::default());
+        let mut calls = 0u32;
+        let query = format!("{}/(atom x>0)", crate::ooc::MEMO_DOMAIN_SOLVER_Z3);
+        let first = driver.memo_prove(&query, || {
+            calls += 1;
+            b"sat".to_vec()
+        });
+        let second = driver.memo_prove(&query, || {
+            calls += 1;
+            b"neu-berechnet".to_vec()
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(first, b"sat");
+        assert_eq!(second, b"sat");
+        assert_eq!((driver.stats().memo_hits, driver.stats().memo_misses), (1, 1));
+    }
+
+    #[test]
+    fn warm_budget_fehler_wird_fail_mit_genau_einem_owner() {
+        // Backend ohne Budget: schon der erste Spill scheitert.
+        let mut driver = OocDriver::new(RecordingHooks::default().with_max_live_bytes(0));
+        let err = stream_rewrite(&["execute".to_string()], &mut driver).expect_err("Budget 0");
+        assert!(matches!(err, OocError::WarmBudget { .. }));
+        // Barriere ist frei (Seal war vor dem Spill), kein Shard versiegelt.
+        assert_eq!(driver.hot(), None);
+        assert_eq!(driver.stats().sealed, 0);
+        // Abbildung auf Fail: genau ein Owner (Spec-Vorgabe).
+        let fail = E2eFail::new("ooc-wire", "lane-62", format!("OoC-Streaming: {err}"));
+        assert_eq!(fail.owner, "lane-62");
+        assert!(fail.to_string().contains("Warm-Budget"));
+    }
 }
