@@ -1,9 +1,9 @@
 # Aktiv-Set
 
-Integration (10.10.2026, Integrator, Welle 2): 14 Lanes nach main
-gemergt (je ein Merge-Commit), Worktrees + Branches geloescht:
-Lane 11, 17, 28, 29, 31–40. Lane 30 uebersprungen (uncommittete
-Aenderungen, Spec QUEUED).
+Integration (10.10.2026, Integrator, Welle 3): 15 Lanes nach main
+gemergt (je ein Merge-Commit mit -s + Co-authored-by-Trailer),
+Worktrees + Branches geloescht:
+Lane 30, 32f, 45–57. Keine Lane uebersprungen (alle 15 vorhanden).
 
 DONE (gemergt in main, Worktree+Branch geloescht):
 Lane 01–11, 12–17, 18–29, 31–40.
@@ -23,7 +23,20 @@ Lane 01–11, 12–17, 18–29, 31–40.
   35 error-diagnostics, 36 incremental-cache-disk,
   37 arena-interner-tuning, 38 cli-frontend, 39 c-parity-smoke,
   40 release-packaging.
-- Workspace: 40 Member (26 Bestand + 14 neue). Lane-15/lane-11-Stubs
+  30 structs-enums-unions (sail-typedef doc_typedef-Port + Soundness-Fix
+  implies_nneg/RegisterRef-Trennzeichen), 32f sve-fix (tokenize-Loop,
+  throw-Ausnahme, Test-Label, Ctx.src raus),
+  45 e2e-tiny-arm (sail-cli-e2e-Modul + Fail-Liste),
+  46 e2e-armv85 (Durchlaufplan + Messgeruest), 47 ast-unify
+  (MIGRATION.md, Analyse), 48 workspace-unify (UNIFY_PLAN.md, Analyse only),
+  49 ci-gates (E2-/Unsafe-/Budget-Gates, Budget warnend),
+  50 smp-boot (Abnahme-Doku + Harness-Skizze),
+  51 test-rig (systemd-run + tmux + Spec), 52 sorry-elim (sail-regs
+  harter E3512-Fehler mit Span), 53 arch-docs (ARCHITECTURE.md),
+  54 gabbro-survey (SURVEY.md), 55 budget-consol (BUDGETS_ALL.md),
+  56 wave3-prep (WAVE3.md Mergeplan + Gate), 57 lean-contract
+  (sail-lake Golden-Contract + Layout-Register).
+- Workspace: 41 Member (40 Bestand + sail-typedef neu). Lane-15/lane-11-Stubs
   ersetzt wo echte Crates existieren (echt gewinnt: sail-shard Lane 11,
   sail-cli Lane 38).
 
@@ -59,11 +72,31 @@ Welle-2-Notizen (E3, Test-Moratorium — KEINE Builds, Review-only):
   kein unsafe-Token im Lane-Code. Build/Test-Verifikation offen
   (Test-Rig der Haupt-Session).
 
+Welle-3-Notizen (E3, Test-Moratorium — KEINE Builds, Review-only):
+- Lane 45 (Konflikt main.rs): Lane-38-Voll-CLI behalten (echt), Lane-45-
+  Treiber als `mod e2e` verdrahtet statt main.rs-Ersatz; e2e.rs + Cargo-Deps
+  + Fail-Liste uebernommen. forbid(unsafe_code) im CLI-Root erhalten.
+- Lane 51 (Konflikt Root-Cargo.toml): HEAD-Profile behalten ([profile.release]
+  + [profile.ci] inherits release); Lane-51-[profile.ci]-Anhang (inherits dev)
+  als Doppelkey entfallen, Substanz bereits abgedeckt. .gitignore vereint
+  (logs/-Zeile uebernommen).
+- Lane 30 (Konflikt Root-Cargo.toml): Member-Union (sail-typedef nach
+  sail-loops einsortiert, alle HEAD-Member behalten). Crate mit [lints]
+  workspace=true + forbid im Root.
+- Lane 52: keine externen Aufrufer von initial_regstate_snippet ausser
+  sail-regs selbst (mitmigriert).
+- UNIFY_PLAN (Lane 48) + MIGRATION.md (Lane 47) nur gelesen/uebernommen,
+  NICHT umgesetzt (Umsetzung Lane-47/48-Sache nach Merge).
+- Cargo.lock nirgends getrackt; keine Konfliktmarker; unsafe-Treffer nur
+  Doc-Kommentare; forbid(unsafe_code) in allen 41 Crate-Roots.
+- Build/Test-Verifikation offen (Test-Rig der Haupt-Session).
+
 Aktiv (noch in Arbeit, NICHT anfassen):
-- Lane 30 structs-enums-unions (`worktrees/lane-30`,
-  Branch lane/structs-enums-unions — uncommittete Aenderungen,
-  Spec QUEUED, NICHT gemergt)
-- Lane 41–58 (Branches lane/41-* ... lane/58-*, Worktrees lane-41..58)
+- Lane 41–44 (Branches lane/41-lang-delta, lane/42-shared-mem,
+  lane/43-scheduler-replay, lane/44-el3-psci-boot, Worktrees lane-41..44 —
+  BLOCKED bis Gate: Port durch + laeuft + RAM-opt, siehe WAVE3.md)
+- Lane 58 (Branch lane/58-ram-opt, Worktree lane-58 — BLOCKED, startet erst
+  nach Unify, selber Gate) sowie lane/59-grammar-gen (ausserhalb Welle 3)
 
 Rotation: Lane fertig → mergen → Worktree löschen → nächsten Queued-Branch aktivieren:
 
