@@ -62,6 +62,12 @@ pub enum NConstraint {
     Lt(Box<NExp>, Box<NExp>),
     /// `NC_set (n, vs)` — `n` is one of `vs`.
     Set(Box<NExp>, Vec<i128>),
+    /// `NC_app (f, args)` — uninterpreted predicate application.
+    ///
+    /// Only `A_nexp` arguments are modelled; constraints over other
+    /// `typ_arg` sorts cannot be represented and must be abstracted by
+    /// the caller (`True`/`False`/fresh [`NConstraint::Id`]).
+    App(String, Vec<NExp>),
     And(Box<NConstraint>, Box<NConstraint>),
     Or(Box<NConstraint>, Box<NConstraint>),
     Not(Box<NConstraint>),
@@ -320,6 +326,11 @@ impl NConstraint {
                 b.collect_vars(acc, seen);
             }
             NConstraint::Set(n, _) => n.collect_vars(acc, seen),
+            NConstraint::App(_, args) => {
+                for a in args {
+                    a.collect_vars(acc, seen);
+                }
+            }
             NConstraint::And(a, b) | NConstraint::Or(a, b) => {
                 a.collect_vars(acc, seen);
                 b.collect_vars(acc, seen);
@@ -372,6 +383,18 @@ impl NConstraint {
                     ))
                 }
             }
+            NConstraint::App(f, args) => {
+                let rewritten: Vec<Cow<'_, NExp>> =
+                    args.iter().map(|a| a.subst_cow(subst)).collect();
+                if rewritten.iter().any(|c| matches!(c, Cow::Owned(_))) {
+                    Cow::Owned(NConstraint::App(
+                        f.clone(),
+                        rewritten.into_iter().map(Cow::into_owned).collect(),
+                    ))
+                } else {
+                    Cow::Borrowed(self)
+                }
+            }
             NConstraint::And(a, b) => {
                 subst_constraint_binary(subst, self, a, b, NConstraint::And)
             }
@@ -404,6 +427,9 @@ impl NConstraint {
             NConstraint::Le(a, b) => Some(a.eval(env)? <= b.eval(env)?),
             NConstraint::Lt(a, b) => Some(a.eval(env)? < b.eval(env)?),
             NConstraint::Set(n, vs) => Some(vs.contains(&n.eval(env)?)),
+            // Uninterpreted predicate: no valuation (conservative `None`,
+            // like [`NExp::Id`]).
+            NConstraint::App(_, _) => None,
             NConstraint::And(a, b) => Some(a.eval(env)? && b.eval(env)?),
             NConstraint::Or(a, b) => Some(a.eval(env)? || b.eval(env)?),
             NConstraint::Not(c) => Some(!c.eval(env)?),

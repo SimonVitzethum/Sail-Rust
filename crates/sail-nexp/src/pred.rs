@@ -55,8 +55,9 @@ impl Facts {
     }
 
     /// Collect simple bounds from a constraint tree (`And` of
-    /// comparisons against constants, `x != 0`, `x in {...}` with a
-    /// single element). Anything else is ignored (conservative).
+    /// comparisons against constants, `x != 0`, `x == c` (both bounds),
+    /// `x in {...}` with a single element). Anything else is ignored
+    /// (conservative).
     pub fn from_constraint(c: &NConstraint) -> Self {
         let mut facts = Facts::new();
         facts.add(c);
@@ -78,6 +79,23 @@ impl Facts {
                     (&**a, &**b)
                 {
                     self.nonzero.insert(*k, ());
+                }
+            }
+            NConstraint::Equal(a, b) => {
+                // `x == c` pins both bounds (max/min discipline keeps
+                // tighter pre-existing bounds; contradictory facts stay
+                // contradictory, which is vacuously sound).
+                if let (NExp::Var(k), NExp::Constant(c))
+                | (NExp::Constant(c), NExp::Var(k)) = (&**a, &**b)
+                {
+                    self.lower
+                        .entry(k.clone())
+                        .and_modify(|bound| *bound = (*bound).max(*c))
+                        .or_insert(*c);
+                    self.upper
+                        .entry(k.clone())
+                        .and_modify(|bound| *bound = (*bound).min(*c))
+                        .or_insert(*c);
                 }
             }
             NConstraint::Set(n, vs) => {

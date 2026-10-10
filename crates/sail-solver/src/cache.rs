@@ -1,9 +1,11 @@
 //! Begrenzter LRU-Memo-Cache mit TTL und Hit/Miss-Zaehlern.
 //!
-//! Ersatz fuer OCaml `-memo_z3` (unbegrenzt): Eintragszahl und Lebensdauer
-//! sind konfigurierbar, Defaults bewusst klein. Der Cache ist `Send + Sync`
-//! und wird poolweit von allen Threads geteilt; die teuren Z3-Solver bleiben
-//! pro Thread exklusiv ([`crate::SolverPool`]).
+//! Ersatz fuer OCaml `-memo_z3` (unbegrenzt): **Bounded-LRU ist Pflicht** —
+//! jeder Cache hat `capacity >= 1` (kleinere Werte werden auf 1 geklemmt),
+//! bei vollem Cache greift LRU-Eviction, Eintraege altern per TTL aus.
+//! Defaults bewusst klein (128 Eintraege, 5 Minuten). Der Cache ist
+//! `Send + Sync` und wird poolweit von allen Threads geteilt; die teuren
+//! Z3-Solver bleiben pro Thread exklusiv ([`crate::SolverPool`]).
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
