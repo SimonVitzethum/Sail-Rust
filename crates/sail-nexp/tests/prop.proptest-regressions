@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 02c35f627faebc2a4f09b84a050289d1f25a75794e583bf399eea7538f242767 # shrinks to a = Neg(Times(Var("n"), Constant(-2))), b = Neg(App("abs", [Var("n")]))
