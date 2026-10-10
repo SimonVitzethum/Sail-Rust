@@ -1171,3 +1171,67 @@ fn parse_union_subst_extern_attr_lists() {
         )
     );
 }
+
+#[test]
+fn parse_lane102_configkey_attrs_tails() {
+    // Lane 102 (Rig 1375 + 1529): `ConfigKey` is left-recursive and the
+    // `Attrs` / `AttrsTail` `AttrData?` tails are explicit arms (E4).
+    // Same accepted language: keys in order, `Some` / `None` payloads.
+    assert_eq!(
+        parse_def("type foo : Type = config a").unwrap(),
+        Def::Aux(DefAux::Type(TypeDef::Abstract(
+            "foo".to_string(),
+            Kind::Type,
+            Some(vec!["a".to_string()])
+        )))
+    );
+    assert_eq!(
+        parse_def("type foo : Type = config a.b.c.d").unwrap(),
+        Def::Aux(DefAux::Type(TypeDef::Abstract(
+            "foo".to_string(),
+            Kind::Type,
+            Some(vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string(),
+            ])
+        )))
+    );
+    assert_eq!(
+        parse_exp("$[foo] x").unwrap(),
+        Exp::Attr(
+            vec![Attr { name: "foo".to_string(), data: None }],
+            Box::new(Exp::Id("x".to_string())),
+        )
+    );
+    assert_eq!(
+        parse_exp("$[foo 1, bar] x").unwrap(),
+        Exp::Attr(
+            vec![
+                Attr {
+                    name: "foo".to_string(),
+                    data: Some(AttrData::Num("1".to_string())),
+                },
+                Attr { name: "bar".to_string(), data: None },
+            ],
+            Box::new(Exp::Id("x".to_string())),
+        )
+    );
+    assert_eq!(
+        parse_exp("$[foo, bar true] x").unwrap(),
+        Exp::Attr(
+            vec![
+                Attr { name: "foo".to_string(), data: None },
+                Attr {
+                    name: "bar".to_string(),
+                    data: Some(AttrData::Bool(true)),
+                },
+            ],
+            Box::new(Exp::Id("x".to_string())),
+        )
+    );
+    // `Attrs` prefix on a register field (the Rig-1529 `RDefBody` path).
+    assert!(parse_def("bitfield B : bits(8) = { $[myattr 1] f : 4 }").is_ok());
+    assert!(parse_def("bitfield B : bits(8) = { $[a, b 2] f : 4, g : 4 }").is_ok());
+}
