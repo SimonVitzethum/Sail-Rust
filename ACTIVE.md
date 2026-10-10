@@ -91,6 +91,42 @@ Welle-3-Notizen (E3, Test-Moratorium — KEINE Builds, Review-only):
   Doc-Kommentare; forbid(unsafe_code) in allen 41 Crate-Roots.
 - Build/Test-Verifikation offen (Test-Rig der Haupt-Session).
 
+E3-Integration Welle 4 (10.10.2026, Integrator — KEINE Builds, nur Merges):
+15 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer, Message endet mit
+Co-authored-by), Branches + Worktrees geloescht: Lane 71, 72, 74, 75, 76, 77,
+78, 79, 80, 81, 82, 83, 84, 85, 86.
+Uebersprungen + Grund:
+- lane/structs-enums-unions (Lane 30): Branch existiert nicht — nichts zu mergen.
+- lane/41-lang-delta, lane/42-shared-mem, lane/44-el3-psci-boot: gesperrt —
+  NICHT angefasst.
+- lane/43-scheduler-replay, lane/58-ram-opt: VORSICHT + gesperrt (41–44-Gate) —
+  NICHT angefasst (Worktree-Zustand gar nicht erst geprueft).
+Merge-Notizen:
+- Lane 76 (Konflikt-frei, einseitig): build.rs-Generierung (process_root mit
+  cleanem Fehler) gegen Main-No-op — Lane 76 gewinnt (Generierung ist Ziel).
+- Lane 77 (Konflikt bridge.rs mit Lane 71): vereint — pub(crate)-Sichtbarkeit
+  (Lane 77, convert.rs/real.rs-Adapter) + Interner-aufloesendes
+  op_by_lex/3-arg (Lane 71); convert.rs-eigenes Converter::name/2-arg unberuehrt.
+- Lane 79 (lib.rs-Auto-Union): Lane-72-ast_env + Lane-79-rules/subsume/pat
+  beide behalten (verifiziert).
+- Lane 80 (konfliktfrei vereint): sail-nexp-Auto-Union (Lane-71-Payloads +
+  Lane-80-Vollstaendigkeit) + sail-solver/Cargo.toml-Union (Lane-70-Dep-Bump
+  bereits auf Main + Lane-80-sail-nexp-Dep, API aus Lane 80).
+- Lane 83 (Konflikte README.md/lib.rs mit Lane 74): je beide Zeilen behalten
+  (Summary-Zeilen Lane 74 + Driver-Zeilen Lane 83; mod/pub-use beider Module
+  auto-vereint).
+- Lane 86 (Konflikt Root-Cargo.toml mit Lane 82): Member-Union
+  (sail-arm-corpus + sail-frontend-diff, 43 Member, TOML-validiert).
+- lanes/-Specs je Lane mit uebernommen (71, 72, 75, 80, 82, 86 per Branch-
+  Commit; 74, 76, 77, 78, 79, 81, 83, 84, 85 uncommitted aus Worktrees
+  kopiert + in den Merge-Commit aufgenommen).
+- Checks nach allen Merges: kein Cargo.lock getrackt, .gitignore unveraendert
+  (worktrees/+target/+Cargo.lock+logs/), keine Konfliktmarker, alle 43+
+  Manifeste TOML-valide, forbid(unsafe_code) in allen Crate-Roots,
+  unsafe-Treffer nur Doc-Kommentare. Build-Verifikation offen (Rig).
+- Identitaet unverstellt (SimonVitzethum); Worktree-Reste (target/,
+  Cargo.lock) gab es keine.
+
 E3-Integration (10.10.2026, Integrator — KEINE Builds, nur Merges):
 10 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer), Branches +
 Worktrees geloescht: Lane 62, 63, 64, 65, 66, 67, 69, 70, 58 (selektiv),
