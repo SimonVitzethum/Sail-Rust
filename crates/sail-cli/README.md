@@ -28,6 +28,15 @@ SAIL_RS_DRY_RUN=1 ./target/debug/sail-rs -dprofile -verbose 1 -memo_z3 \
 
 `Cargo.lock` wird nie committet (siehe `.gitignore`).
 
+## E2E-Treiber (Lane 116 verdrahtet Lane-45-`e2e.rs`)
+
+`sail-rs --e2e <input.sail> --out-dir <dir> [--e2e-module <name>]` treibt eine
+Eingabe durch die Phase-1-Crates (Parse-Zensus, Lean-Stubs, Register, Lake-Skelett)
+und meldet offene Bodies als Fail-Liste (Exit 1, I/O-Probleme Exit 2) — nie
+stillen Erfolg über Lücken hinweg. `--e2e --dry-run` druckt nur den Plan.
+Details + Fail-Ampel: `E2E_READINESS.md` im Repo-Root. E3: Läufe (inkl.
+`lake build` im out-dir) erfolgen zentral beim Integrator.
+
 ## OoC-Verdrahtung (Lane 62, E4)
 
 `src/ooc.rs` + `src/e2e.rs` (`stream_rewrite`, `run_with_ooc`): Rewrite-Pässe
