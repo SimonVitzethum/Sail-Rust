@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bridge;
+pub mod infix;
 pub mod lexer;
 pub mod mini_ast;
 pub mod parser;
