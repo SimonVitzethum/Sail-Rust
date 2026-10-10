@@ -16,18 +16,27 @@
 //     (non-empty, right-recursive) `Block`s. This also settles
 //     `LoopExp ... "by" Exp "in" Typ`, since a step can no longer end in a
 //     bare `let`/`var` waiting for `in`.
-//   - `IndexRange` parens removed: `"(" IndexRange ")"` duplicated
-//     `AtomicTyp`'s `"(" Typ ")"` for every parenthesised type (`(t)` had
-//     two trees; `(a, b)` was shift-vs-reduce on `,`) while being the only
-//     way to write `(a..b)` / `(a@b)`. Bare `a..b` / `a@b` still parse;
-//     parenthesised ranges are rejected (see GRAMMAR.md; 0 occurrences in
-//     `sail-lib`, checked by `tests/corpus.rs` on the Rig).
 //   - `RDefBody` strict (Lane 87, E4 `Block` shape): non-empty,
 //     right-recursive, explicit trailing-"," arm. The old nullable
 //     `(<RIdDef> ",")* <RIdDef>?` list was used as `RDefBody?`, so `{}`
 //     had two trees (Rig local ambiguity at 1288:5-1291:5); the use site
 //     keeps `?`, so `{}` still parses, unambiguously, and the accepted
 //     language is unchanged.
+//   - Lane 98 (same E4 shape, Rig family): `Enum`/`ExpList`/`CaseList`/
+//     `StructFields` strict with `?` use sites where the port accepted
+//     empty bodies; `IndexRange`/`@` and `AtomicIndexRange`/`..` as
+//     explicit arms (no `?` tail); `LoopExp` `by`/`in` as four explicit
+//     arms; `TypSchm` with/without `effect` as two arms; bare
+//     `let`/`var` moved from `BlockItem` into explicit `Block` arms
+//     carrying their `;` terminator, so after `let p = E` the lookahead
+//     decides by shift only (`in` continues, `;` continues the block)
+//     and only `}` reduces — no reduce-vs-shift on `in` anymore.
+//   - `IndexRange` parens removed: `"(" IndexRange ")"` duplicated
+//     `AtomicTyp`'s `"(" Typ ")"` for every parenthesised type (`(t)` had
+//     two trees; `(a, b)` was shift-vs-reduce on `,`) while being the only
+//     way to write `(a..b)` / `(a@b)`. Bare `a..b` / `a@b` still parse;
+//     parenthesised ranges are rejected (see GRAMMAR.md; 0 occurrences in
+//     `sail-lib`, checked by `tests/corpus.rs` on the Rig).
 //   - D1/D2 (`Typ` index-range vs tuple, paren vs tuple): UNCHANGED, pending
 //     corpus evaluation via `tests/corpus.rs` (see GRAMMAR.md).
 // - Every Menhir `A | A B` common-prefix rule is factored to `A B?` with
@@ -360,13 +369,24 @@ ForallPart: TypQuant = {
 }
 
 // `typschm`.
+// `typschm`: the optional `effect` tail is two explicit arms (Lane 98) —
+// the old `("effect" <EffectSet>)?` tail left an empty production whose
+// reduce competed with the `effect` shift (Rig 358:5-364:5). Accepted
+// language unchanged.
 pub TypSchm: TypSchm = {
-    <q:ForallPart?> <l:Typ> <a:Arrow> <r:Typ> <e:("effect" <EffectSet>)?> => TypSchm {
+    <q:ForallPart?> <l:Typ> <a:Arrow> <r:Typ> => TypSchm {
         quant: q,
         lhs: l,
         arrow: a,
         rhs: r,
-        effect: e,
+        effect: None,
+    },
+    <q:ForallPart?> <l:Typ> <a:Arrow> <r:Typ> "effect" <e:EffectSet> => TypSchm {
+        quant: q,
+        lhs: l,
+        arrow: a,
+        rhs: r,
+        effect: Some(e),
     },
 }
 
@@ -574,8 +594,8 @@ PlainExp: Exp = {
     ),
     "return" <e:ClosedExp> => Exp::Return(Box::new(e)),
     "throw" <e:ClosedExp> => Exp::Throw(Box::new(e)),
-    "match" <e:Exp> "{" <cs:CaseList> "}" => Exp::Match(Box::new(e), cs),
-    "try" <e:Exp> "catch" "{" <cs:CaseList> "}" => Exp::Try(Box::new(e), cs),
+    "match" <e:Exp> "{" <cs:CaseList?> "}" => Exp::Match(Box::new(e), cs.unwrap_or_default()),
+    "try" <e:Exp> "catch" "{" <cs:CaseList?> "}" => Exp::Try(Box::new(e), cs.unwrap_or_default()),
     "foreach" "(" <l:LoopExp> ")" "do"? <e:ClosedExp> => Exp::For(Box::new(l), Box::new(e)),
     "foreach" <l:LoopExp> "{" <b:Block> "}" => Exp::For(
         Box::new(l),
@@ -612,14 +632,42 @@ RepeatMeas: Measure = {
 }
 
 // `loop_exp`.
+// `loop_exp`: the `by`/`in` tails are four explicit arms (Lane 98) — the
+// old nested `("by" <Exp>)? ("in" <Typ>)?` tails left empty productions
+// whose reduces competed with the `by`/`in` shifts (Rig 610:5-617:5).
+// Same four combinations as before; accepted language unchanged.
 LoopExp: LoopHead = {
-    <v:Ident> "from" <f:Exp> <o:ToOrd> <t:Exp> <s:("by" <Exp>)?> <ord:("in" <Typ>)?> => LoopHead {
+    <v:Ident> "from" <f:Exp> <o:ToOrd> <t:Exp> => LoopHead {
         var: v,
         from: Box::new(f),
         ord: o,
         to: Box::new(t),
-        step: s.map(Box::new),
-        order: ord,
+        step: None,
+        order: None,
+    },
+    <v:Ident> "from" <f:Exp> <o:ToOrd> <t:Exp> "by" <s:Exp> => LoopHead {
+        var: v,
+        from: Box::new(f),
+        ord: o,
+        to: Box::new(t),
+        step: Some(Box::new(s)),
+        order: None,
+    },
+    <v:Ident> "from" <f:Exp> <o:ToOrd> <t:Exp> "in" <ord:Typ> => LoopHead {
+        var: v,
+        from: Box::new(f),
+        ord: o,
+        to: Box::new(t),
+        step: None,
+        order: Some(ord),
+    },
+    <v:Ident> "from" <f:Exp> <o:ToOrd> <t:Exp> "by" <s:Exp> "in" <ord:Typ> => LoopHead {
+        var: v,
+        from: Box::new(f),
+        ord: o,
+        to: Box::new(t),
+        step: Some(Box::new(s)),
+        order: Some(ord),
     },
 }
 
@@ -661,17 +709,31 @@ AttrCase: PatExp = {
 }
 
 // `case_list` (trailing comma allowed).
+// `case_list`: E4-strict (Lane 98) — non-empty, right-recursive, explicit
+// trailing-"," arm (Lane-87 `RDefBody` shape). The old nullable
+// `(<Case> ",")* <Case>?` list expanded to `(...)+`/`(...)*` intermediates
+// whose shifts/reduces competed on every `Case`-leading token
+// (Rig 659:5-662:5). Use sites keep `?`, so `{}` still parses (via
+// `None`); accepted language unchanged.
 CaseList: Vec<PatExp> = {
-    <mut v:(<Case> ",")*> <last:Case?> => {
-        if let Some(c) = last { v.push(c); }
+    <c:Case> => vec![c],
+    <c:Case> "," <cs:CaseList> => {
+        let mut v = vec![c];
+        v.extend(cs);
         v
     },
+    <c:Case> "," => vec![c],
 }
 
 // `block`: E4 strict — non-empty and right-recursive (as in the validated
-// toy), so a trailing `;` parses but `{}` does not. Items admit bare
-// `let`/`var` without `in` (E4-`I`); the missing body defaults to `()` as
-// in the Menhir port.
+// toy), so a trailing `;` parses but `{}` does not. Bare `let`/`var`
+// without `in` live here as explicit `Block` arms carrying their `;`
+// terminator (Lane 98): after `let p = E` the lookahead decides by shift
+// only (`in` continues the `PlainExp` form, `;` continues the block) and
+// only `}` reduces — the old `BlockItem` bare arms reduced against the
+// `PlainExp` `in` shift (Rig 682:5-691:5). The missing body defaults to
+// `()` as in the Menhir port; accepted language unchanged (in particular
+// `{ let p = E }`, `{ let p = E; }` and `{ let p = E; ... }` all parse).
 Block: Vec<Exp> = {
     <i:BlockItem> => vec![i],
     <i:BlockItem> ";" <b:Block> => {
@@ -680,21 +742,50 @@ Block: Vec<Exp> = {
         v
     },
     <i:BlockItem> ";" => vec![i],
-}
-
-// Block item: any expression, or bare `let`/`var` without `in` (expression
-// position requires `in`; the `in` vs `;`/`}` lookahead keeps them apart).
-BlockItem: Exp = {
-    "let" <p:Pat> "=" <e:Exp> => Exp::Let(
+    "let" <p:Pat> "=" <e:Exp> => vec![Exp::Let(
         p,
         Box::new(e),
         Box::new(Exp::Lit(Lit::Unit)),
-    ),
-    "var" <a:AtomicExp> "=" <e:Exp> => Exp::Var(
+    )],
+    "let" <p:Pat> "=" <e:Exp> ";" => vec![Exp::Let(
+        p,
+        Box::new(e),
+        Box::new(Exp::Lit(Lit::Unit)),
+    )],
+    "let" <p:Pat> "=" <e:Exp> ";" <b:Block> => {
+        let mut v = vec![Exp::Let(
+            p,
+            Box::new(e),
+            Box::new(Exp::Lit(Lit::Unit)),
+        )];
+        v.extend(b);
+        v
+    },
+    "var" <a:AtomicExp> "=" <e:Exp> => vec![Exp::Var(
         Box::new(a),
         Box::new(e),
         Box::new(Exp::Lit(Lit::Unit)),
-    ),
+    )],
+    "var" <a:AtomicExp> "=" <e:Exp> ";" => vec![Exp::Var(
+        Box::new(a),
+        Box::new(e),
+        Box::new(Exp::Lit(Lit::Unit)),
+    )],
+    "var" <a:AtomicExp> "=" <e:Exp> ";" <b:Block> => {
+        let mut v = vec![Exp::Var(
+            Box::new(a),
+            Box::new(e),
+            Box::new(Exp::Lit(Lit::Unit)),
+        )];
+        v.extend(b);
+        v
+    },
+}
+
+// Block item: any expression (expression-level `let`/`var` require `in`
+// via `PlainExp`; bare forms are `Block` arms above, so no rule here ever
+// reduces against an `in` shift).
+BlockItem: Exp = {
     <e:Exp> => e,
 }
 
@@ -781,11 +872,21 @@ ExitArgs: Exp = {
 }
 
 // `exp_list` (trailing comma allowed).
+// `exp_list`: E4-strict (Lane 98) — non-empty, right-recursive, explicit
+// trailing-"," arm (Lane-87 `RDefBody` shape). The old nullable
+// `(<Exp> ",")* <Exp>?` list expanded to `(...)+`/`(...)*` intermediates
+// whose shifts/reduces competed on every `Exp`-leading token
+// (Rig 779:5-782:5). Every use site already guards the list with a
+// leading element plus `,` (tuples) or a separate `"()"` arm (calls), so
+// no use-site change is needed; accepted language unchanged.
 ExpList: Vec<Exp> = {
-    <mut v:(<Exp> ",")*> <last:Exp?> => {
-        if let Some(e) = last { v.push(e); }
+    <e:Exp> => vec![e],
+    <e:Exp> "," <es:ExpList> => {
+        let mut v = vec![e];
+        v.extend(es);
         v
     },
+    <e:Exp> "," => vec![e],
 }
 
 // `{ block | exp with updates }`.
@@ -1124,10 +1225,10 @@ UnbracketedTyParam: TypQuant = {
 
 // `type_def` (struct/enum/newtype/union/bitfield; `type` handled in DefAux).
 TypeDef: TypeDef = {
-    "struct" <i:Ident> <p:TyParam?> "=" "{" <fs:StructFields> "}" => TypeDef::Record(
+    "struct" <i:Ident> <p:TyParam?> "=" "{" <fs:StructFields?> "}" => TypeDef::Record(
         i,
         p.unwrap_or(TypQuant { kopts: vec![], constraint: None }),
-        fs,
+        fs.unwrap_or_default(),
     ),
     "enum" <i:Ident> <e:EnumBody> => TypeDef::Enum(i, e.0, e.1),
     "newtype" <i:Ident> <p:TyParam?> "=" <u:TypeUnion> => TypeDef::Variant(
@@ -1191,8 +1292,8 @@ EnumBody: (Vec<(String, Typ)>, Vec<(EnumMember, Option<Exp>)>) = {
         vec![],
         m.into_iter().map(|i| (EnumMember::Item(i), None)).collect(),
     ),
-    "=" "{" <e:Enum> "}" => (vec![], e),
-    "with" <f:EnumFns> "=" "{" <e:Enum> "}" => (f, e),
+    "=" "{" <e:Enum?> "}" => (vec![], e.unwrap_or_default()),
+    "with" <f:EnumFns> "=" "{" <e:Enum?> "}" => (f, e.unwrap_or_default()),
 }
 
 // `enum_bar`.
@@ -1217,11 +1318,19 @@ EnumFns: Vec<(String, Typ)> = {
 }
 
 // `enum` member list (trailing comma allowed).
+// `enum` member list: E4-strict (Lane 98) — non-empty, right-recursive,
+// explicit trailing-"," arm (Lane-87 `RDefBody` shape). The old nullable
+// list expanded to `(...)+`/`(...)*` intermediates (Rig 1215:5-1218:5).
+// Use sites keep `?`, so `= {}` still parses (via `None`); accepted
+// language unchanged.
 Enum: Vec<(EnumMember, Option<Exp>)> = {
-    <mut v:(<EnumMember> ",")*> <last:EnumMember?> => {
-        if let Some(m) = last { v.push(m); }
+    <m:EnumMember> => vec![m],
+    <m:EnumMember> "," <e:Enum> => {
+        let mut v = vec![m];
+        v.extend(e);
         v
     },
+    <m:EnumMember> "," => vec![m],
 }
 
 // `enum_member`.
@@ -1238,11 +1347,20 @@ StructField: StructField = {
     <n:Ident> ":" <t:Typ> => StructField::Item(n, t),
 }
 
+// `struct` fields: E4-strict (Lane 98) — non-empty, right-recursive,
+// explicit trailing-"," arm (Lane-87 `RDefBody` shape). The old nullable
+// list expanded to `(...)+`/`(...)*` intermediates (Rig 309:5-312:5 local
+// ambiguity via `{}`). Both use sites (`struct` record, `TypeUnion` anon
+// record) keep `?`, so `= {}` still parses (via `None`); accepted
+// language unchanged.
 StructFields: Vec<StructField> = {
-    <mut v:(<StructField> ",")*> <last:StructField?> => {
-        if let Some(f) = last { v.push(f); }
+    <f:StructField> => vec![f],
+    <f:StructField> "," <fs:StructFields> => {
+        let mut v = vec![f];
+        v.extend(fs);
         v
     },
+    <f:StructField> "," => vec![f],
 }
 
 // `type_union`.
@@ -1254,7 +1372,7 @@ TypeUnion: TypeUnion = {
         Some(ret) => TypeUnion::Id(i, Typ::Fn(Box::new(t), Box::new(ret))),
         None => TypeUnion::Id(i, t),
     },
-    <i:Ident> ":" "{" <fs:StructFields> "}" => TypeUnion::AnonRecord(i, fs),
+    <i:Ident> ":" "{" <fs:StructFields?> "}" => TypeUnion::AnonRecord(i, fs.unwrap_or_default()),
 }
 
 TypeUnions: Vec<TypeUnion> = {
@@ -1269,18 +1387,22 @@ TypeUnions: Vec<TypeUnion> = {
 // parenthesised type, so `(t)` was ambiguous and `(a, b)` conflicted.
 // Bare `..`-ranges and `@`-concats cover the corpus (no bitfields in
 // `sail-lib`); `(a..b)` / `(a@b)` are rejected, see GRAMMAR.md.
+// The `@` tail is two explicit arms (Lane 98) — the old
+// `("@" <IndexRange>)?` tail left an empty production whose reduce
+// competed with the `@` shift (Rig 1267:5-1270:5). Accepted language
+// unchanged.
 IndexRange: IndexRange = {
-    <a:AtomicIndexRange> <t:("@" <IndexRange>)?> => match t {
-        Some(hi) => IndexRange::Concat(Box::new(a), Box::new(hi)),
-        None => a,
-    },
+    <a:AtomicIndexRange> => a,
+    <a:AtomicIndexRange> "@" <hi:IndexRange> =>
+        IndexRange::Concat(Box::new(a), Box::new(hi)),
 }
 
+// The `..` tail is two explicit arms (Lane 98) — the old
+// `(".." <Typ>)?` tail left an empty production whose reduce competed
+// with the `..` shift (Rig 1274:5-1277:5). Accepted language unchanged.
 AtomicIndexRange: IndexRange = {
-    <t:Typ> <r:(".." <Typ>)?> => match r {
-        Some(hi) => IndexRange::Range(t, hi),
-        None => IndexRange::Single(t),
-    },
+    <t:Typ> => IndexRange::Single(t),
+    <t:Typ> ".." <hi:Typ> => IndexRange::Range(t, hi),
 }
 
 // `r_id_def`.
@@ -1290,11 +1412,12 @@ RIdDef: RegField = {
     <n:Ident> ":" <r:IndexRange> => RegField::Item(n, r),
 }
 
-// `r_id_def` list: E4-strict (Lane 87) — non-empty and right-recursive with
-// an explicit trailing-"," arm (exactly the validated `Block` shape), so a
-// trailing `,` parses but the empty body does not. The use site keeps
-// `RDefBody?`, hence `{}` still parses — via exactly one tree (the old
-// nullable `(<RIdDef> ",")* <RIdDef>?` list gave `{}` two trees: Rig local
+// `r_id_def` list: E4-strict (Lane 87, re-applied on this branch) —
+// non-empty and right-recursive with an explicit trailing-"," arm
+// (exactly the validated `Block` shape), so a trailing `,` parses but
+// the empty body does not. The use site keeps `RDefBody?`, hence `{}`
+// still parses — via exactly one tree (the old nullable
+// `(<RIdDef> ",")* <RIdDef>?` list gave `{}` two trees: Rig local
 // ambiguity at 1288:5-1291:5). Accepted language is unchanged.
 RDefBody: Vec<RegField> = {
     <i:RIdDef> => vec![i],
