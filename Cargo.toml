@@ -37,6 +37,7 @@ members = [
     "crates/sail-cache",
     "crates/sail-arena",
     "crates/sail-smoke",
+    "crates/sail-release-meta",
 ]
 resolver = "2"
 

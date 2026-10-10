@@ -1,0 +1,10 @@
+[package]
+name = "sail-release-meta"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.75.0"
+license = "MIT OR Apache-2.0"
+description = "Lane-40-Platzhalter: release-meta, nur Doku-Tests (reines Rust, kein unsafe)"
+
+[lints]
+rust.unsafe_code = "forbid"
