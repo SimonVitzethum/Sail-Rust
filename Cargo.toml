@@ -28,6 +28,7 @@ members = [
     "crates/sail-loops",
     "crates/sail-grammar",
     "crates/sail-except",
+    "crates/sail-archsem",
 ]
 resolver = "2"
 
