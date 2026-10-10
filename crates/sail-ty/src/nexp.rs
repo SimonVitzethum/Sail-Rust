@@ -165,6 +165,19 @@ pub enum NConstraint {
     Or(Box<NConstraint>, Box<NConstraint>),
     /// `~a`
     Not(Box<NConstraint>),
+    /// `n in {v1, ..}` — Sail `NC_set` (Lane 107 prove-path: constant
+    /// scrutinees fold by membership, `[]` folds to `False`; anything else
+    /// goes to the [`Solver`](crate::solver::Solver) via the trait).
+    Set(Box<Nexp>, Vec<i128>),
+    /// Uninterpreted predicate `f(n1, ..)` — Sail `NC_app` over `A_nexp`
+    /// arguments only (Lane 107: non-`NExp` `typ_arg`s have no local
+    /// counterpart and stay abstracted by the caller, see [`crate::conv`]).
+    /// Folding is always `None` (sound); backends decide via the trait.
+    App(String, Vec<Nexp>),
+    /// Boolean kind variable used as a constraint — Sail `NC_var`.
+    Var(String),
+    /// Opaque boolean identifier — Sail `NC_id`.
+    Id(String),
 }
 
 impl NConstraint {
@@ -180,12 +193,21 @@ impl NConstraint {
             | Self::Lt(a, b) => 1 + a.depth().max(b.depth()),
             Self::And(a, b) | Self::Or(a, b) => 1 + a.depth().max(b.depth()),
             Self::Not(a) => 1 + a.depth(),
+            Self::Set(n, _) => 1 + n.depth(),
+            Self::App(_, args) => {
+                1 + args.iter().map(Nexp::depth).max().unwrap_or(0)
+            }
+            Self::Var(_) | Self::Id(_) => 1,
         }
     }
 
     pub fn free_vars(&self, out: &mut Vec<String>) {
         match self {
-            Self::True | Self::False => {}
+            Self::True | Self::False | Self::Id(_) => {}
+            // Boolean level variable: same flat namespace as `Nexp::Var`
+            // in this skeleton (kind-checked against `K_bool`, see
+            // [`crate::kind::check_constraint_kind`]).
+            Self::Var(v) => out.push(v.clone()),
             Self::Eq(a, b)
             | Self::Neq(a, b)
             | Self::Ge(a, b)
@@ -200,6 +222,12 @@ impl NConstraint {
                 b.free_vars(out);
             }
             Self::Not(a) => a.free_vars(out),
+            Self::Set(n, _) => n.free_vars(out),
+            Self::App(_, args) => {
+                for a in args {
+                    a.free_vars(out);
+                }
+            }
         }
     }
 
@@ -250,6 +278,15 @@ impl NConstraint {
                 _ => None,
             },
             Self::Not(a) => a.as_bool().map(|v| !v),
+            Self::Set(n, vs) => match n.as_const() {
+                Some(x) => Some(vs.contains(&x)),
+                // Empty membership is unsatisfiable whatever the scrutinee.
+                None if vs.is_empty() => Some(false),
+                None => None,
+            },
+            // Uninterpreted predicates and opaque booleans never fold
+            // (conservative `None`, like `Nexp` unknown functions).
+            Self::App(_, _) | Self::Var(_) | Self::Id(_) => None,
         }
     }
 }
@@ -268,6 +305,28 @@ impl fmt::Display for NConstraint {
             Self::And(a, b) => write!(f, "({a} & {b})"),
             Self::Or(a, b) => write!(f, "({a} | {b})"),
             Self::Not(a) => write!(f, "~({a})"),
+            Self::Set(n, vs) => {
+                write!(f, "({n} in {{")?;
+                for (i, v) in vs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{v}")?;
+                }
+                write!(f, "}})")
+            }
+            Self::App(func, args) => {
+                write!(f, "{func}(")?;
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{a}")?;
+                }
+                write!(f, ")")
+            }
+            Self::Var(v) => write!(f, "'{v}"),
+            Self::Id(name) => write!(f, "{name}"),
         }
     }
 }

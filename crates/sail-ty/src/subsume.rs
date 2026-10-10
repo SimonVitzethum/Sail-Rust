@@ -105,6 +105,22 @@ impl NexpSubst {
                 Box::new(self.apply_constraint(b)),
             ),
             NConstraint::Not(a) => NConstraint::Not(Box::new(self.apply_constraint(a))),
+            NConstraint::Set(n, vs) => {
+                NConstraint::Set(Box::new(self.apply_nexp(n)), vs.clone())
+            }
+            NConstraint::App(func, args) => NConstraint::App(
+                func.clone(),
+                args.iter().map(|a| self.apply_nexp(a)).collect(),
+            ),
+            // Boolean level variable: fold constant mappings to truth
+            // values (mirrors `NConstraint::subst_cow`); anything else
+            // leaves the variable untouched.
+            NConstraint::Var(v) => match self.map.get(v) {
+                Some(Nexp::Const(0)) => NConstraint::False,
+                Some(Nexp::Const(_)) => NConstraint::True,
+                _ => c.clone(),
+            },
+            NConstraint::Id(_) => c.clone(),
         }
     }
 

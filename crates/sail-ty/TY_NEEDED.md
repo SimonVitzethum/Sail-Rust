@@ -23,7 +23,7 @@ This file is the swap contract: when those crates land, replace the minimals fie
 |---|---|---|
 | `Span { file, start, end }` | `Span` / `Lexing.position` pair | File table interning comes from Lane 01; keep `DUMMY` |
 | `Nexp::{Const,Var,Add,Sub,Mul,Neg,Exp,Div,Mod,Abs,If}` | `Nexp_aux::{Nexp_constant,Nexp_var,Nexp_times,Nexp_sum,Nexp_minus,Nexp_exp,Nexp_neg}` (+ div/mod/abs extensions) | Real AST may add `Nexp_id`, `Nexp_app`; map `If` to Sail `n_constraint`-guarded nexp |
-| `NConstraint::{True,False,Eq,Neq,Ge,Gt,Le,Lt,And,Or,Not}` | `NC_aux::{NC_true,NC_false,NC_equal,NC_not_equal,NC_ge,NC_gt,NC_le,NC_lt,NC_and,NC_or,NC_not,NC_var,NC_app,NC_set,NC_leq}` | `NC_set`/`NC_app` have no minimal yet — add on demand |
+| `NConstraint::{True,False,Eq,Neq,Ge,Gt,Le,Lt,And,Or,Not}` | `NC_aux::{NC_true,NC_false,NC_equal,NC_not_equal,NC_ge,NC_gt,NC_le,NC_lt,NC_and,NC_or,NC_not,NC_var,NC_app,NC_set,NC_leq}` | Lane 107: `Set`/`App`/`Var`/`Id` locals added (kinds, folding, stub paths, `conv` round-trip); residual `None`: `NExp_id`, non-`NExp` `typ_arg`s, unparseable `Set` members |
 | `MiniTyp::{Int,Bool,Bit,Bits,Range,Named,Fun,Tuple}` | `Typ_aux::{Typ_int,Typ_bool,Typ_bit,Typ_bits,Typ_atom(?),Typ_app,Typ_fn,Typ_tuple,Typ_exist,…}` | `Range` ≈ `Typ_atom`-bounded int; `Named` ≈ `Typ_app`/`Typ_id`; existentials come with Lane 09 |
 | `TypQuant { quants, constraint, typ }` | `TypQ_aux::{TypQ_tq,TypQ_no_forall}` + `kind_aux::{K_int,K_bool,K_type}` | `quants: Vec<(String, Kind)>` ≈ `quant_item` telescope |
 | `MiniExp::{IntLit,BoolLit,Var,Let,App,Tuple,Annot,If}` | `Exp_aux` (tiny subset) | Full `Exp_aux` port is Lane 02/03; checker matches on subsets |

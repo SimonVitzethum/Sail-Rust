@@ -177,6 +177,28 @@ pub fn check_constraint_kind(
             check_constraint_kind(a, env, span)?;
             Ok(Kind::KBool)
         }
+        // CK-Set: membership scrutinee is `K_int`-like.
+        NConstraint::Set(n, _) => {
+            let k = check_nexp_kind(n, env, span)?;
+            expect_int_like(span, k)?;
+            Ok(Kind::KBool)
+        }
+        // CK-App: uninterpreted predicate over `K_int`-like level args.
+        NConstraint::App(_, args) => {
+            for a in args {
+                let k = check_nexp_kind(a, env, span)?;
+                expect_int_like(span, k)?;
+            }
+            Ok(Kind::KBool)
+        }
+        // CK-Var: boolean level variable must be bound at `K_bool`.
+        NConstraint::Var(v) => match env.lookup(v) {
+            Some(Kind::KBool) => Ok(Kind::KBool),
+            Some(other) => Err(TypeError::kind_mismatch(span, Kind::KBool, other)),
+            None => Err(TypeError::unbound_var(span, v.clone())),
+        },
+        // CK-Id: opaque boolean identifier (Sail `NC_id`), always `K_bool`.
+        NConstraint::Id(_) => Ok(Kind::KBool),
     }
 }
 

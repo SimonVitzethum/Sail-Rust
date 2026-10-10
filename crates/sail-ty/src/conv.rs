@@ -12,8 +12,12 @@
 //!   with any other operator maps back to `None`.
 //! - `NConstraint::{True,False,Ge,Gt,Le,Lt,And,Or,Not}` map 1:1;
 //!   `Eq/Neq` wrap both sides in `Typ_arg` (`ConstraintKind::Equal`
-//!   compares type arguments, not raw nexps). `NC_set`/`NC_app`/`NC_var`
-//!   map back to `None`.
+//!   compares type arguments, not raw nexps).
+//! - `NConstraint::{Set,App,Id,Var}` (Lane 107, Sail `NC_set`/`NC_app`/
+//!   `NC_id`/`NC_var`) map onto `ConstraintKind::{Set,App,Id,Var}`;
+//!   only `A_nexp` arguments are modelled — `App` with non-`NExp`
+//!   `Typ_arg`s and unparseable `Set` members lift back to `None`
+//!   (residual `X-NcSetApp`).
 //! - `Kind::{KInt,KBool,KType}` erase onto `sail_ast::Kind::{Int,Bool,Type}`;
 //!   `KNat` (Lean-`Nat` refinement, Lane 04/10) erases to `Int` and is
 //!   NEVER silently recovered: [`kind_from_ast`] yields `KInt`.
@@ -194,6 +198,16 @@ pub fn constraint_to_ast(c: &NConstraint, it: &mut impl Interner) -> Constraint 
         NConstraint::Not(a) => mk_constraint(ConstraintKind::Not(Box::new(constraint_to_ast(
             a, it,
         )))),
+        NConstraint::Set(n, vs) => mk_constraint(ConstraintKind::Set {
+            nexp: nexp_to_ast(n, it),
+            members: vs.iter().map(|v| v.to_string()).collect(),
+        }),
+        NConstraint::App(func, args) => mk_constraint(ConstraintKind::App {
+            func: ast_name(it, func),
+            args: args.iter().map(|a| mk_nexp_arg(nexp_to_ast(a, it))).collect(),
+        }),
+        NConstraint::Id(name) => mk_constraint(ConstraintKind::Id(ast_name(it, name))),
+        NConstraint::Var(v) => mk_constraint(ConstraintKind::Var(it.intern(v))),
     }
 }
 
@@ -243,10 +257,28 @@ pub fn constraint_from_ast(c: &Constraint, it: &impl Interner) -> Option<NConstr
             Box::new(constraint_from_ast(b, it)?),
         )),
         ConstraintKind::Not(x) => Some(NConstraint::Not(Box::new(constraint_from_ast(x, it)?))),
-        ConstraintKind::App { .. }
-        | ConstraintKind::Id(_)
-        | ConstraintKind::Var(_)
-        | ConstraintKind::Set { .. } => None,
+        ConstraintKind::Set { nexp, members } => {
+            let mut vs = Vec::with_capacity(members.len());
+            for m in members {
+                vs.push(m.parse::<i128>().ok()?);
+            }
+            Some(NConstraint::Set(
+                Box::new(nexp_from_ast(nexp, it)?),
+                vs,
+            ))
+        }
+        ConstraintKind::App { func, args } => {
+            let name = resolve_name(func, it)?;
+            let mut nexps = Vec::with_capacity(args.len());
+            for a in args {
+                // Only `A_nexp` arguments are modelled; `Typ`/`Bool`
+                // arguments stay abstracted (`None`, residual `X-NcSetApp`).
+                nexps.push(nexp_from_ast(&typarg_nexp_only(a, it)?, it)?);
+            }
+            Some(NConstraint::App(name, nexps))
+        }
+        ConstraintKind::Id(name) => Some(NConstraint::Id(resolve_name(name, it)?)),
+        ConstraintKind::Var(sym) => Some(NConstraint::Var(it.resolve(*sym)?.to_owned())),
     }
 }
 
