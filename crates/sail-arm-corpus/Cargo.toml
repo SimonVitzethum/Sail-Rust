@@ -1,0 +1,13 @@
+[package]
+name = "sail-arm-corpus"
+version = "0.1.0"
+edition = "2021"
+description = "Lane 82: ARMv9.4 src/*.sail Korpus-Treiber (Klassifikation ok/defizit-mit-Owner, E3: kein Build/Lauf)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_arm_corpus"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
