@@ -1,0 +1,8 @@
+[package]
+name = "sail-lex"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone Sail2 lexer: token stream, spans, error recovery (Lane 16)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
