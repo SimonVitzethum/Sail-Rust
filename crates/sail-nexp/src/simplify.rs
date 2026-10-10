@@ -409,14 +409,26 @@ fn rebuild_times(mut factors: Vec<NExp>) -> NExp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expr::NExp::*;
+    use crate::expr::{Kid, NExp::*};
+    use sail_ast::{Interner as _, SimpleInterner};
     use std::collections::BTreeMap;
 
-    fn v(n: &str) -> NExp {
-        NExp::var(n)
+    fn v(k: Kid) -> NExp {
+        NExp::Var(k)
     }
     fn c(i: i128) -> NExp {
         NExp::Constant(i)
+    }
+    /// Fresh table with `n`/`m`/`a`/`b` pre-interned (tuple order).
+    /// The table itself is dropped: [`Kid`]s are plain `Copy` handles.
+    fn kids() -> (Kid, Kid, Kid, Kid) {
+        let mut ix = SimpleInterner::new();
+        (
+            ix.intern("n"),
+            ix.intern("m"),
+            ix.intern("a"),
+            ix.intern("b"),
+        )
     }
 
     #[test]
@@ -430,73 +442,79 @@ mod tests {
 
     #[test]
     fn identities() {
-        assert_eq!(simplify(&Sum(Box::new(v("n")), Box::new(c(0)))), v("n"));
-        assert_eq!(simplify(&Times(Box::new(v("n")), Box::new(c(1)))), v("n"));
-        assert_eq!(simplify(&Times(Box::new(v("n")), Box::new(c(0)))), c(0));
-        assert_eq!(simplify(&Minus(Box::new(v("n")), Box::new(v("n")))), c(0));
-        assert_eq!(simplify(&Neg(Box::new(Neg(Box::new(v("n")))))), v("n"));
+        let (n, _m, _a, _b) = kids();
+        assert_eq!(simplify(&Sum(Box::new(v(n)), Box::new(c(0)))), v(n));
+        assert_eq!(simplify(&Times(Box::new(v(n)), Box::new(c(1)))), v(n));
+        assert_eq!(simplify(&Times(Box::new(v(n)), Box::new(c(0)))), c(0));
+        assert_eq!(simplify(&Minus(Box::new(v(n)), Box::new(v(n)))), c(0));
+        assert_eq!(simplify(&Neg(Box::new(Neg(Box::new(v(n)))))), v(n));
     }
 
     #[test]
     fn if_true_false_branches() {
+        let (n, _m, _a, b) = kids();
         let t = NExp::If(Box::new(NConstraint::True), Box::new(c(1)), Box::new(c(2)));
         assert_eq!(simplify(&t), c(1));
         let same = NExp::If(
-            Box::new(NConstraint::Var("b".to_string())),
-            Box::new(v("n")),
-            Box::new(v("n")),
+            Box::new(NConstraint::Var(b)),
+            Box::new(v(n)),
+            Box::new(v(n)),
         );
-        assert_eq!(simplify(&same), v("n"));
+        assert_eq!(simplify(&same), v(n));
     }
 
     #[test]
     fn negated_sum_is_order_independent() {
-        let neg_a = Neg(Box::new(v("a")));
-        let neg_b = Neg(Box::new(NExp::abs(v("b"))));
+        let (_n, _m, a, b) = kids();
+        let neg_a = Neg(Box::new(v(a)));
+        let neg_b = Neg(Box::new(NExp::abs(v(b))));
         let ab = Sum(Box::new(neg_a.clone()), Box::new(neg_b.clone()));
         let ba = Sum(Box::new(neg_b), Box::new(neg_a));
         // `simplify` alone does not sort; `normalize` must agree.
         assert_eq!(normalize(&ab), normalize(&ba));
         // Mixed negated / plain operands agree as well.
-        let an = Sum(Box::new(Neg(Box::new(v("a")))), Box::new(v("b")));
-        let na = Sum(Box::new(v("b")), Box::new(Neg(Box::new(v("a")))));
+        let an = Sum(Box::new(Neg(Box::new(v(a)))), Box::new(v(b)));
+        let na = Sum(Box::new(v(b)), Box::new(Neg(Box::new(v(a)))));
         assert_eq!(simplify(&an), simplify(&na));
         assert_eq!(normalize(&an), normalize(&na));
     }
 
     #[test]
     fn normalize_is_canonical_for_ac() {
-        let a = Sum(
-            Box::new(v("b")),
-            Box::new(Sum(Box::new(v("a")), Box::new(c(1)))),
+        let (_n, _m, a, b) = kids();
+        let x = Sum(
+            Box::new(v(b)),
+            Box::new(Sum(Box::new(v(a)), Box::new(c(1)))),
         );
-        let b = Sum(
+        let y = Sum(
             Box::new(c(1)),
-            Box::new(Sum(Box::new(v("a")), Box::new(v("b")))),
+            Box::new(Sum(Box::new(v(a)), Box::new(v(b)))),
         );
-        assert_eq!(normalize(&a), normalize(&b));
+        assert_eq!(normalize(&x), normalize(&y));
     }
 
     #[test]
     fn normalize_preserves_semantics() {
+        let (n, _m, _a, _b) = kids();
         let e = Sum(
-            Box::new(Times(Box::new(v("n")), Box::new(c(0)))),
+            Box::new(Times(Box::new(v(n)), Box::new(c(0)))),
             Box::new(Minus(Box::new(c(5)), Box::new(c(5)))),
         );
         assert_eq!(normalize(&e), c(0));
-        let env: BTreeMap<String, i128> = [("n".to_string(), 7)].into_iter().collect();
-        let orig = Sum(Box::new(v("n")), Box::new(c(0)));
+        let env: BTreeMap<Kid, i128> = [(n, 7)].into_iter().collect();
+        let orig = Sum(Box::new(v(n)), Box::new(c(0)));
         assert_eq!(orig.eval(&env), normalize(&orig).eval(&env));
     }
 
     #[test]
     fn constraint_simplification() {
+        let (_n, _m, _a, b) = kids();
         assert_eq!(
             simplify_constraint(&NConstraint::And(
                 Box::new(NConstraint::True),
-                Box::new(NConstraint::Var("b".to_string()))
+                Box::new(NConstraint::Var(b))
             )),
-            NConstraint::Var("b".to_string())
+            NConstraint::Var(b)
         );
         assert_eq!(
             simplify_constraint(&NConstraint::Equal(Box::new(c(2)), Box::new(c(3)))),

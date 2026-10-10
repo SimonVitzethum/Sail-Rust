@@ -9,8 +9,16 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
+use sail_ast::Symbol;
+
 /// Numeric kind variable (`kid` in the Sail AST), e.g. `"n"`.
-pub type Kid = String;
+///
+/// Interned [`Symbol`] (Lane 71 payload-intern): repeated occurrences share
+/// one table entry. Build one via an [`Interner`][sail_ast::Interner] and
+/// resolve it back with
+/// [`resolve`][sail_ast::Interner::resolve]. (`Id`/`App` operator names stay
+/// plain `String`s — see `docs/payload-intern-contract.md`.)
+pub type Kid = Symbol;
 
 /// Numeric type-level expression.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -128,8 +136,8 @@ impl NExp {
     }
 
     /// `(n: Int)` variable.
-    pub fn var(name: impl Into<String>) -> NExp {
-        NExp::Var(name.into())
+    pub fn var(name: Kid) -> NExp {
+        NExp::Var(name)
     }
 
     /// Integer literal.
@@ -149,8 +157,8 @@ impl NExp {
         match self {
             NExp::Id(_) | NExp::Constant(_) => {}
             NExp::Var(k) => {
-                if seen.insert(k.clone()) {
-                    acc.push(k.clone());
+                if seen.insert(*k) {
+                    acc.push(*k);
                 }
             }
             NExp::App(_, args) => {
@@ -298,8 +306,8 @@ impl NConstraint {
         match self {
             NConstraint::True | NConstraint::False | NConstraint::Id(_) => {}
             NConstraint::Var(k) => {
-                if seen.insert(k.clone()) {
-                    acc.push(k.clone());
+                if seen.insert(*k) {
+                    acc.push(*k);
                 }
             }
             NConstraint::Equal(a, b)
@@ -406,32 +414,32 @@ impl NConstraint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sail_ast::{Interner as _, SimpleInterner};
 
-    fn env(pairs: &[(&str, i128)]) -> BTreeMap<Kid, i128> {
-        pairs.iter().map(|(k, v)| ((*k).to_string(), *v)).collect()
+    fn env(ix: &mut SimpleInterner, pairs: &[(&str, i128)]) -> BTreeMap<Kid, i128> {
+        pairs.iter().map(|(k, v)| (ix.intern(k), *v)).collect()
     }
 
     #[test]
     fn eval_arith_identities() {
-        let e = env(&[("n", 6), ("m", 4)]);
-        let sum = NExp::Sum(Box::new(NExp::var("n")), Box::new(NExp::var("m")));
+        let mut ix = SimpleInterner::new();
+        let n = ix.intern("n");
+        let m = ix.intern("m");
+        let e = env(&mut ix, &[("n", 6), ("m", 4)]);
+        let sum = NExp::Sum(Box::new(NExp::var(n)), Box::new(NExp::var(m)));
         assert_eq!(sum.eval(&e), Some(10));
         assert_eq!(NExp::Exp(Box::new(NExp::constant(3))).eval(&e), Some(8));
-        assert_eq!(
-            NExp::div(NExp::var("n"), NExp::constant(2)).eval(&e),
-            Some(3)
-        );
-        assert_eq!(
-            NExp::modulo(NExp::var("n"), NExp::var("m")).eval(&e),
-            Some(2)
-        );
+        assert_eq!(NExp::div(NExp::var(n), NExp::constant(2)).eval(&e), Some(3));
+        assert_eq!(NExp::modulo(NExp::var(n), NExp::var(m)).eval(&e), Some(2));
         assert_eq!(NExp::abs(NExp::constant(-5)).eval(&e), Some(5));
     }
 
     #[test]
     fn eval_total_on_partial_input() {
-        let e = env(&[]);
-        assert_eq!(NExp::var("n").eval(&e), None);
+        let mut ix = SimpleInterner::new();
+        let n = ix.intern("n");
+        let e = env(&mut ix, &[]);
+        assert_eq!(NExp::var(n).eval(&e), None);
         assert_eq!(
             NExp::div(NExp::constant(1), NExp::constant(0)).eval(&e),
             None
@@ -442,10 +450,12 @@ mod tests {
 
     #[test]
     fn subst_and_vars() {
-        let e = NExp::Sum(Box::new(NExp::var("n")), Box::new(NExp::var("n")));
-        assert_eq!(e.vars(), vec!["n".to_string()]);
+        let mut ix = SimpleInterner::new();
+        let n = ix.intern("n");
+        let e = NExp::Sum(Box::new(NExp::var(n)), Box::new(NExp::var(n)));
+        assert_eq!(e.vars(), vec![n]);
         let mut s = BTreeMap::new();
-        s.insert("n".to_string(), NExp::constant(2));
+        s.insert(n, NExp::constant(2));
         assert_eq!(
             e.subst(&s),
             NExp::Sum(Box::new(NExp::constant(2)), Box::new(NExp::constant(2)))
@@ -454,20 +464,25 @@ mod tests {
 
     #[test]
     fn subst_cow_borrows_fully_unchanged_tree() {
-        let e = NExp::Sum(Box::new(NExp::var("n")), Box::new(NExp::constant(1)));
+        let mut ix = SimpleInterner::new();
+        let n = ix.intern("n");
+        let m = ix.intern("m");
+        let e = NExp::Sum(Box::new(NExp::var(n)), Box::new(NExp::constant(1)));
         let empty: BTreeMap<Kid, NExp> = BTreeMap::new();
         assert!(matches!(e.subst_cow(&empty), Cow::Borrowed(_)));
         // A miss in a non-empty map still borrows (no clone, no re-box).
         let mut s = BTreeMap::new();
-        s.insert("m".to_string(), NExp::constant(2));
+        s.insert(m, NExp::constant(2));
         assert!(matches!(e.subst_cow(&s), Cow::Borrowed(_)));
     }
 
     #[test]
     fn subst_cow_rebuilds_only_on_hit_and_matches_subst() {
-        let e = NExp::Sum(Box::new(NExp::var("n")), Box::new(NExp::constant(1)));
+        let mut ix = SimpleInterner::new();
+        let n = ix.intern("n");
+        let e = NExp::Sum(Box::new(NExp::var(n)), Box::new(NExp::constant(1)));
         let mut s = BTreeMap::new();
-        s.insert("n".to_string(), NExp::constant(2));
+        s.insert(n, NExp::constant(2));
         let cow = e.subst_cow(&s);
         assert!(matches!(cow, Cow::Owned(_)));
         assert_eq!(cow.into_owned(), e.subst(&s));
@@ -479,18 +494,21 @@ mod tests {
 
     #[test]
     fn subst_cow_constraint_keeps_bool_var_folding() {
-        let v = NConstraint::Var("b".to_string());
+        let mut ix = SimpleInterner::new();
+        let b = ix.intern("b");
+        let n = ix.intern("n");
+        let v = NConstraint::Var(b);
         let mut s = BTreeMap::new();
-        s.insert("b".to_string(), NExp::constant(0));
+        s.insert(b, NExp::constant(0));
         assert_eq!(v.subst_cow(&s).into_owned(), NConstraint::False);
-        s.insert("b".to_string(), NExp::constant(7));
+        s.insert(b, NExp::constant(7));
         assert_eq!(v.subst_cow(&s).into_owned(), NConstraint::True);
         // Non-constant mapping leaves the var borrowed (unchanged, as before).
-        s.insert("b".to_string(), NExp::var("n"));
+        s.insert(b, NExp::var(n));
         assert!(matches!(v.subst_cow(&s), Cow::Borrowed(_)));
-        assert_eq!(v.subst(&s), NConstraint::Var("b".to_string()));
+        assert_eq!(v.subst(&s), NConstraint::Var(b));
         // Unchanged set-constraint borrows (old `subst` cloned `vs` always).
-        let set = NConstraint::Set(Box::new(NExp::var("n")), vec![1, 2, 3]);
+        let set = NConstraint::Set(Box::new(NExp::var(n)), vec![1, 2, 3]);
         let empty: BTreeMap<Kid, NExp> = BTreeMap::new();
         assert!(matches!(set.subst_cow(&empty), Cow::Borrowed(_)));
         assert_eq!(set.subst(&empty), set);
@@ -498,10 +516,25 @@ mod tests {
 
     #[test]
     fn constraint_eval() {
-        let e = env(&[("n", 3)]);
-        let c = NConstraint::Ge(Box::new(NExp::var("n")), Box::new(NExp::constant(0)));
+        let mut ix = SimpleInterner::new();
+        let n = ix.intern("n");
+        let e = env(&mut ix, &[("n", 3)]);
+        let c = NConstraint::Ge(Box::new(NExp::var(n)), Box::new(NExp::constant(0)));
         assert_eq!(c.eval(&e), Some(true));
-        let set = NConstraint::Set(Box::new(NExp::var("n")), vec![1, 2, 3]);
+        let set = NConstraint::Set(Box::new(NExp::var(n)), vec![1, 2, 3]);
         assert_eq!(set.eval(&e), Some(true));
+    }
+
+    #[test]
+    fn kid_symbols_share_one_table_entry() {
+        // Lane 71: interning the same name twice yields one symbol, and the
+        // `vars` order contract (first occurrence) is unchanged.
+        let mut ix = SimpleInterner::new();
+        let n = ix.intern("n");
+        assert_eq!(ix.intern("n"), n);
+        assert_eq!(ix.len(), 1);
+        let e = NExp::Sum(Box::new(NExp::var(n)), Box::new(NExp::var(n)));
+        assert_eq!(e.vars(), vec![n]);
+        assert_eq!(ix.resolve(n), Some("n"));
     }
 }

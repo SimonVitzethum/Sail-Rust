@@ -31,6 +31,12 @@ Dropped payloads (always constant in OCaml): `Colon`, `Eq`, `EqGt`, `Unit`
 are unit variants here. `MultilineString` is one joined `String`, not a
 `string list`. `Num` is decimal text (arbitrary width, never parsed).
 
+Lane 71 payload-intern: every payload above is an interned `Symbol`, not a
+`String`. `lex(file, src, interner)` interns into the caller's table;
+resolve with `Interner::resolve`. Only `Error(msg)` stays a `String` (it
+duplicates `LexError::message` and must not pollute the table). Snapshot
+shape changes are pinned in `docs/payload-intern-contract.md`.
+
 ## 3. Deliberate deviations from `lexer.mll`
 
 1. **`(* *)` comments (lane spec) with heuristic**: `(*` opens a comment
@@ -71,6 +77,8 @@ are unit variants here. `MultilineString` is one joined `String`, not a
 - File table (`FileId` → path/contents) and includes resolution for `$include`
   (driver lane).
 - Grammar using the token stream (Lane 17). Suggested entry:
-  `lex(file, src)` → filter `is_doc()`/`Error` → parse.
+  `lex(file, src, interner)` → filter `is_doc()`/`Error` → parse. The same
+  interner should flow into the AST build so payload symbols stay resolvable
+  (Lane 71; see `docs/payload-intern-contract.md`).
 - No spans for skipped comments are retained; add trivia collection here if a
   formatter lane needs them.

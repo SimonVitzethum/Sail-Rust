@@ -4,17 +4,33 @@
 //! - Simplification/normalization preserves total valuation.
 //! - Normalization is idempotent and canonical for `Sum`/`Times`.
 //! - `provably_*` predicates are sound w.r.t. evaluation.
+//!
+//! Lane 71: kind variables are interned [`Kid`]s. Strategies use
+//! pre-interned handles from [`kids`]; every call interns through a fresh
+//! table, so `n` is always the same symbol (determinism pinned by
+//! `kids_are_stable_across_tables`).
 
 use proptest::prelude::*;
+use sail_ast::{Interner as _, SimpleInterner};
 use sail_nexp::{
-    normalize, provably_nneg, provably_nonzero, provably_zero, simplify, Facts, NConstraint, NExp,
+    normalize, provably_nneg, provably_nonzero, provably_zero, simplify, Facts, Kid, NConstraint,
+    NExp,
 };
 use std::collections::BTreeMap;
 
+/// Pre-interned `n`/`m` handles. Each call uses a fresh table, which is
+/// dropped on return (`Kid`s are plain `Copy` handles); the symbols are
+/// stable because interning is content-addressed insertion-ordered.
+fn kids() -> (Kid, Kid) {
+    let mut ix = SimpleInterner::new();
+    (ix.intern("n"), ix.intern("m"))
+}
+
 fn leaf() -> impl Strategy<Value = NExp> {
+    let (n, m) = kids();
     prop_oneof![
         (-8i128..8).prop_map(NExp::Constant),
-        prop_oneof![Just("n".to_string()), Just("m".to_string())].prop_map(NExp::Var),
+        prop_oneof![Just(n), Just(m)].prop_map(NExp::Var),
     ]
 }
 
@@ -43,12 +59,18 @@ fn nexp(depth: u32) -> BoxedStrategy<NExp> {
     .boxed()
 }
 
-fn small_env() -> impl Strategy<Value = BTreeMap<String, i128>> {
-    (-8i128..8, -8i128..8).prop_map(|(n, m)| {
-        [("n".to_string(), n), ("m".to_string(), m)]
-            .into_iter()
-            .collect()
-    })
+fn small_env() -> impl Strategy<Value = BTreeMap<Kid, i128>> {
+    let (n, m) = kids();
+    (-8i128..8, -8i128..8).prop_map(move |(a, b)| [(n, a), (m, b)].into_iter().collect())
+}
+
+#[test]
+fn kids_are_stable_across_tables() {
+    // The whole strategy scheme relies on this: a fresh table interns
+    // `n`/`m` to identical symbols every time.
+    assert_eq!(kids(), kids());
+    let (n, m) = kids();
+    assert_ne!(n, m);
 }
 
 proptest! {

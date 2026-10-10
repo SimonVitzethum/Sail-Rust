@@ -15,14 +15,15 @@ use sail_ast::{Interner, LitKind as AstLitKind, Pat as AstPat, PatKind};
 use crate::lit::Lit;
 use crate::pat::Pat;
 
-fn lit_from_ast(lit: &sail_ast::Lit) -> Option<Lit> {
+fn lit_from_ast(lit: &sail_ast::Lit, it: &impl Interner) -> Option<Lit> {
     match &lit.kind {
-        AstLitKind::Num(s) => Some(Lit::Num(s.clone())),
-        AstLitKind::String(s) => Some(Lit::Str(s.clone())),
+        AstLitKind::Num(s) => Some(Lit::Num(it.resolve(*s)?.to_owned())),
+        AstLitKind::String(s) => Some(Lit::Str(it.resolve(*s)?.to_owned())),
         AstLitKind::True => Some(Lit::Bool(true)),
         AstLitKind::False => Some(Lit::Bool(false)),
         AstLitKind::Unit => Some(Lit::Unit),
         AstLitKind::Hex(s) => {
+            let s = it.resolve(*s)?;
             if !s.is_empty() && s.chars().all(|c| c.is_ascii_hexdigit()) {
                 Some(Lit::Hex(s.to_ascii_uppercase()))
             } else if s.is_empty() {
@@ -32,6 +33,7 @@ fn lit_from_ast(lit: &sail_ast::Lit) -> Option<Lit> {
             }
         }
         AstLitKind::Bin(s) => {
+            let s = it.resolve(*s)?;
             if s.is_empty() {
                 return Some(Lit::Empty);
             }
@@ -54,7 +56,7 @@ pub fn pat_from_ast(p: &AstPat, it: &impl Interner) -> Option<Pat> {
     let span = p.span;
     match &p.kind {
         PatKind::Wild => Some(Pat::Wild { span }),
-        PatKind::Lit(l) => Some(Pat::Lit { lit: lit_from_ast(l)?, span }),
+        PatKind::Lit(l) => Some(Pat::Lit { lit: lit_from_ast(l, it)?, span }),
         PatKind::Id(name) => Some(Pat::Id {
             name: it.resolve(name.symbol)?.to_owned(),
             width: None,

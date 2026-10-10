@@ -87,23 +87,27 @@ pub struct KOpt {
     pub kid: Symbol,
 }
 
-/// Literals (`lit_aux`). Big numbers are decimal strings (arbitrary width).
+/// Literals (`lit_aux`). Payloads are interned [`Symbol`]s resolved
+/// through the caller's [`Interner`][crate::Interner]: repeated literals
+/// share one table entry instead of one `String` per occurrence (Lane 71
+/// payload-intern). JSON snapshots therefore carry numeric payloads (see
+/// `docs/payload-intern-contract.md`).
 pub type Lit = Node<LitKind>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LitKind {
     Unit,
     True,
     False,
     /// Decimal integer literal, e.g. `"42"`, `"-7"`.
-    Num(String),
+    Num(Symbol),
     /// Hex digits without `0x` prefix, e.g. `"FF"`.
-    Hex(String),
+    Hex(Symbol),
     /// Binary digits without `0b` prefix, e.g. `"101"`.
-    Bin(String),
-    String(String),
+    Bin(Symbol),
+    String(Symbol),
     /// Real literal in decimal notation, e.g. `"1.5"`.
-    Real(String),
+    Real(Symbol),
 }
 
 // ---------------------------------------------------------------------------

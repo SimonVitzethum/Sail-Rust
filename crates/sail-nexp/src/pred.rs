@@ -8,19 +8,20 @@
 //! the expression plus the assumed [`Facts`]. Unknown shapes answer
 //! `false` (unknown), never a wrong `true`.
 
-use crate::expr::{NConstraint, NExp};
+use crate::expr::{Kid, NConstraint, NExp};
 use std::collections::BTreeMap;
 
 /// Assumed context facts: lower/upper bounds per kind variable plus a
 /// set of variables known to be non-zero.
 ///
-/// Bounds are inclusive: `lower["n"] = Some(0)` means `n >= 0` is
-/// assumed.
+/// Bounds are inclusive: `lower[n] = Some(0)` means `n >= 0` is
+/// assumed. Keys are interned [`Kid`]s (Lane 71); intern names through
+/// the caller's interner before inserting or querying.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Facts {
-    lower: BTreeMap<String, i128>,
-    upper: BTreeMap<String, i128>,
-    nonzero: BTreeMap<String, ()>,
+    lower: BTreeMap<Kid, i128>,
+    upper: BTreeMap<Kid, i128>,
+    nonzero: BTreeMap<Kid, ()>,
 }
 
 impl Facts {
@@ -30,8 +31,7 @@ impl Facts {
     }
 
     /// Assume `var >= bound`.
-    pub fn with_lower(mut self, var: impl Into<String>, bound: i128) -> Self {
-        let var = var.into();
+    pub fn with_lower(mut self, var: Kid, bound: i128) -> Self {
         self.lower
             .entry(var)
             .and_modify(|b| *b = (*b).max(bound))
@@ -40,8 +40,7 @@ impl Facts {
     }
 
     /// Assume `var <= bound`.
-    pub fn with_upper(mut self, var: impl Into<String>, bound: i128) -> Self {
-        let var = var.into();
+    pub fn with_upper(mut self, var: Kid, bound: i128) -> Self {
         self.upper
             .entry(var)
             .and_modify(|b| *b = (*b).min(bound))
@@ -50,8 +49,8 @@ impl Facts {
     }
 
     /// Assume `var != 0`.
-    pub fn with_nonzero(mut self, var: impl Into<String>) -> Self {
-        self.nonzero.insert(var.into(), ());
+    pub fn with_nonzero(mut self, var: Kid) -> Self {
+        self.nonzero.insert(var, ());
         self
     }
 
@@ -78,13 +77,13 @@ impl Facts {
                 if let (NExp::Var(k), NExp::Constant(0)) | (NExp::Constant(0), NExp::Var(k)) =
                     (&**a, &**b)
                 {
-                    self.nonzero.insert(k.clone(), ());
+                    self.nonzero.insert(*k, ());
                 }
             }
             NConstraint::Set(n, vs) => {
                 if let ([v], NExp::Var(k)) = (vs.as_slice(), &**n) {
-                    self.lower.insert(k.clone(), *v);
-                    self.upper.insert(k.clone(), *v);
+                    self.lower.insert(*k, *v);
+                    self.upper.insert(*k, *v);
                 }
             }
             _ => {}
@@ -99,14 +98,14 @@ impl Facts {
             (NExp::Var(k), NExp::Constant(c)) => {
                 let bound = c.saturating_add(bump);
                 self.lower
-                    .entry(k.clone())
+                    .entry(*k)
                     .and_modify(|b| *b = (*b).max(bound))
                     .or_insert(bound);
             }
             (NExp::Constant(c), NExp::Var(k)) => {
                 let bound = c.saturating_sub(bump);
                 self.upper
-                    .entry(k.clone())
+                    .entry(*k)
                     .and_modify(|b| *b = (*b).min(bound))
                     .or_insert(bound);
             }
@@ -115,18 +114,18 @@ impl Facts {
     }
 
     /// Assumed lower bound of `var`, if any.
-    pub fn lower(&self, var: &str) -> Option<i128> {
-        self.lower.get(var).copied()
+    pub fn lower(&self, var: Kid) -> Option<i128> {
+        self.lower.get(&var).copied()
     }
 
     /// Assumed upper bound of `var`, if any.
-    pub fn upper(&self, var: &str) -> Option<i128> {
-        self.upper.get(var).copied()
+    pub fn upper(&self, var: Kid) -> Option<i128> {
+        self.upper.get(&var).copied()
     }
 
     /// Whether `var` is assumed non-zero.
-    pub fn is_nonzero_var(&self, var: &str) -> bool {
-        self.nonzero.contains_key(var)
+    pub fn is_nonzero_var(&self, var: Kid) -> bool {
+        self.nonzero.contains_key(&var)
     }
 }
 
@@ -178,8 +177,8 @@ fn sign(e: &NExp, facts: &Facts) -> Sign {
             }
         }
         NExp::Var(k) => {
-            let lo = facts.lower(k);
-            let hi = facts.upper(k);
+            let lo = facts.lower(*k);
+            let hi = facts.upper(*k);
             match (lo, hi) {
                 (Some(l), Some(h)) if l == h && l == 0 => Sign::Zero,
                 (Some(l), Some(h)) if l == h && l > 0 => Sign::Pos,
@@ -350,7 +349,7 @@ pub fn provably_nonzero(x: &NExp) -> bool {
 /// honours [`Facts::with_nonzero`] assumptions.
 pub fn provably_nonzero_in(x: &NExp, facts: &Facts) -> bool {
     if let NExp::Var(k) = x {
-        if facts.is_nonzero_var(k) {
+        if facts.is_nonzero_var(*k) {
             return true;
         }
     }
@@ -360,12 +359,16 @@ pub fn provably_nonzero_in(x: &NExp, facts: &Facts) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sail_ast::{Interner as _, SimpleInterner};
 
-    fn v(n: &str) -> NExp {
-        NExp::var(n)
+    fn v(k: Kid) -> NExp {
+        NExp::Var(k)
     }
     fn c(i: i128) -> NExp {
         NExp::Constant(i)
+    }
+    fn table() -> SimpleInterner {
+        SimpleInterner::new()
     }
 
     #[test]
@@ -382,62 +385,78 @@ mod tests {
 
     #[test]
     fn shapes_without_context() {
+        let mut ix = table();
+        let n = ix.intern("n");
         // Unknown variable: conservative `false` everywhere.
-        assert!(!provably_nneg(&v("n")));
-        assert!(!provably_pos(&v("n")));
-        assert!(!provably_zero(&v("n")));
-        assert!(!provably_nonzero(&v("n")));
+        assert!(!provably_nneg(&v(n)));
+        assert!(!provably_pos(&v(n)));
+        assert!(!provably_zero(&v(n)));
+        assert!(!provably_nonzero(&v(n)));
         // `2^x` is always positive; `abs` is always non-negative.
-        assert!(provably_pos(&NExp::Exp(Box::new(v("n")))));
-        assert!(provably_nneg(&NExp::abs(v("n"))));
-        assert!(!provably_pos(&NExp::abs(v("n"))));
+        assert!(provably_pos(&NExp::Exp(Box::new(v(n)))));
+        assert!(provably_nneg(&NExp::abs(v(n))));
+        assert!(!provably_pos(&NExp::abs(v(n))));
         // Sums/products of non-negative constants.
         let e = NExp::Sum(Box::new(c(1)), Box::new(c(2)));
         assert!(provably_pos(&e));
-        let z = NExp::Times(Box::new(c(0)), Box::new(v("n")));
+        let z = NExp::Times(Box::new(c(0)), Box::new(v(n)));
         assert!(provably_zero(&z));
     }
 
     #[test]
     fn facts_drive_bounds() {
-        let f = Facts::new().with_lower("n", 0);
-        assert!(provably_nneg_in(&v("n"), &f));
-        assert!(!provably_pos_in(&v("n"), &f));
-        let f = Facts::new().with_lower("n", 1);
-        assert!(provably_pos_in(&v("n"), &f));
-        assert!(provably_nonzero_in(&v("n"), &f));
-        let f = Facts::new().with_nonzero("n");
-        assert!(provably_nonzero_in(&v("n"), &f));
-        assert!(!provably_nneg_in(&v("n"), &f));
+        let mut ix = table();
+        let n = ix.intern("n");
+        let f = Facts::new().with_lower(n, 0);
+        assert!(provably_nneg_in(&v(n), &f));
+        assert!(!provably_pos_in(&v(n), &f));
+        let f = Facts::new().with_lower(n, 1);
+        assert!(provably_pos_in(&v(n), &f));
+        assert!(provably_nonzero_in(&v(n), &f));
+        let f = Facts::new().with_nonzero(n);
+        assert!(provably_nonzero_in(&v(n), &f));
+        assert!(!provably_nneg_in(&v(n), &f));
     }
 
     #[test]
     fn from_constraint_collects_bounds() {
+        let mut ix = table();
+        let n = ix.intern("n");
+        let m = ix.intern("m");
         let c = NConstraint::And(
-            Box::new(NConstraint::Ge(
-                Box::new(v("n")),
-                Box::new(NExp::Constant(2)),
-            )),
-            Box::new(NConstraint::Lt(
-                Box::new(v("m")),
-                Box::new(NExp::Constant(0)),
-            )),
+            Box::new(NConstraint::Ge(Box::new(v(n)), Box::new(NExp::Constant(2)))),
+            Box::new(NConstraint::Lt(Box::new(v(m)), Box::new(NExp::Constant(0)))),
         );
         let f = Facts::from_constraint(&c);
-        assert_eq!(f.lower("n"), Some(2));
-        assert_eq!(f.upper("m"), Some(-1));
-        assert!(provably_pos_in(&v("n"), &f));
-        assert!(provably_neg_in(&v("m"), &f));
+        assert_eq!(f.lower(n), Some(2));
+        assert_eq!(f.upper(m), Some(-1));
+        assert!(provably_pos_in(&v(n), &f));
+        assert!(provably_neg_in(&v(m), &f));
     }
 
     #[test]
     fn sign_through_arith() {
-        let f = Facts::new().with_lower("n", 0).with_lower("m", 0);
-        let sum = NExp::Sum(Box::new(v("n")), Box::new(v("m")));
+        let mut ix = table();
+        let n = ix.intern("n");
+        let m = ix.intern("m");
+        let f = Facts::new().with_lower(n, 0).with_lower(m, 0);
+        let sum = NExp::Sum(Box::new(v(n)), Box::new(v(m)));
         assert!(provably_nneg_in(&sum, &f));
-        let prod = NExp::Times(Box::new(v("n")), Box::new(v("m")));
+        let prod = NExp::Times(Box::new(v(n)), Box::new(v(m)));
         assert!(provably_nneg_in(&prod, &f));
-        let diff = NExp::Minus(Box::new(v("n")), Box::new(v("m")));
+        let diff = NExp::Minus(Box::new(v(n)), Box::new(v(m)));
         assert!(!provably_nneg_in(&diff, &f));
+    }
+
+    #[test]
+    fn facts_key_on_symbols_not_strings() {
+        // Lane 71: interning the same spelling twice hits the same `Facts`
+        // entry (no per-occurrence `String` keys).
+        let mut ix = table();
+        let n = ix.intern("n");
+        assert_eq!(ix.intern("n"), n);
+        let f = Facts::new().with_lower(n, 2);
+        assert_eq!(f.lower(ix.intern("n")), Some(2));
+        assert!(provably_pos_in(&v(n), &f));
     }
 }

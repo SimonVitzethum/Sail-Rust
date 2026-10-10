@@ -201,18 +201,21 @@ pub fn render_sail_typ(typ: &Typ, interner: &impl Interner) -> String {
     }
 }
 
-/// Render a literal back to Sail source.
+/// Render a literal back to Sail source. Payloads resolve through
+/// `interner` (Lane 71: interned [`sail_ast::LitKind`]); an unresolvable
+/// symbol renders as `?` like the other renderers above.
 #[must_use]
-pub fn render_sail_lit(lit: &Lit) -> String {
+pub fn render_sail_lit(lit: &Lit, interner: &impl Interner) -> String {
+    let text = |sym: &Symbol| interner.resolve(*sym).unwrap_or("?");
     match &lit.kind {
         sail_ast::LitKind::Unit => "()".to_owned(),
         sail_ast::LitKind::True => "true".to_owned(),
         sail_ast::LitKind::False => "false".to_owned(),
-        sail_ast::LitKind::Num(s) => s.clone(),
-        sail_ast::LitKind::Hex(d) => format!("0x{d}"),
-        sail_ast::LitKind::Bin(b) => format!("0b{b}"),
-        sail_ast::LitKind::String(s) => format!("{s:?}"),
-        sail_ast::LitKind::Real(s) => s.clone(),
+        sail_ast::LitKind::Num(s) => text(s).to_owned(),
+        sail_ast::LitKind::Hex(d) => format!("0x{}", text(d)),
+        sail_ast::LitKind::Bin(b) => format!("0b{}", text(b)),
+        sail_ast::LitKind::String(s) => format!("{:?}", text(s)),
+        sail_ast::LitKind::Real(s) => text(s).to_owned(),
     }
 }
 
@@ -224,7 +227,7 @@ pub fn render_sail_lit(lit: &Lit) -> String {
 #[must_use]
 pub fn try_render_sail_exp(exp: &Exp, interner: &impl Interner) -> Option<String> {
     match &exp.kind {
-        ExpKind::Lit(lit) => Some(render_sail_lit(lit)),
+        ExpKind::Lit(lit) => Some(render_sail_lit(lit, interner)),
         ExpKind::Id(name) => name_text(interner, name).map(str::to_owned),
         _ => None,
     }
@@ -521,7 +524,8 @@ mod tests {
             }
         }
 
-        fn lit_exp(kind: LitKind) -> Exp {
+        fn lit_exp(&mut self, text: &str) -> Exp {
+            let kind = LitKind::Bin(self.interner.intern(text));
             Node::dummy(ExpKind::Lit(Node::dummy(kind)))
         }
     }
@@ -610,7 +614,7 @@ mod tests {
     #[test]
     fn ast_extraction_matches_string_pipeline() {
         let mut ctx = Ctx::new();
-        let init: Exp = Ctx::lit_exp(LitKind::Bin("00000000000000000000000000000000".to_owned()));
+        let init: Exp = ctx.lit_exp("00000000000000000000000000000000");
         let defs: Vec<Def> = vec![
             Node::dummy(DefKind::Register(ctx.dec("PSTATE", ctx.bits("32"), Some(init)))),
             Node::dummy(DefKind::Register(ctx.dec("SP", ctx.bits("64"), None))),
