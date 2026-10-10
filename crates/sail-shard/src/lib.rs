@@ -11,6 +11,18 @@
 //! * [`IncrementalCache`]: Skip-bei-unveraendert-Logik, inkl. textuellem
 //!   Cache-Format (`serialize`/`deserialize`) fuer prozessuebergreifende Laeufe.
 //!
+//! ## Lane-127-Begriffswahrheit (Shard)
+//!
+//! `Shard`/`ShardId`/`ShardKind` hier sind die Datei-Shards (atomare
+//! Inkrementalitaets-Einheit). Andere `Shard`-Namen im Workspace sind
+//! eigene Begriffe, keine Duplikate: `sail-rewrite::Shard` ist die
+//! Rewrite-Einheit (Def-Chunk, Umbenennung `RewriteUnit` als
+//! Owner-Folgearbeit Lane 07), `sail-arena::{ShardArena, ShardPlan}`
+//! ist Arena-Sharding, `sail-sysregs-shard::{ShardReport, ShardConfig}`
+//! der Runner-Bericht. Fingerprint-Wahrheit ist [`Fingerprint`]
+//! (blake3-256); das FNV-16-Minimal in `sail-cache` (`ShardFingerprint`)
+//! migriert hierher (Migrationsnotiz dort).
+//!
 //! # ARMv9-Shardliste (dokumentiert, vgl. Done-Kriterium)
 //!
 //! Die Funktion [`armv9_shard_plan`] nennt die erwarteten Shards des

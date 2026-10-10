@@ -6,6 +6,11 @@
 //! Once `sail-ast` (Lane 01) and `sail-nexp` (Lane 04) exist, replace these
 //! with the real types — see `TY_NEEDED.md` for the field-by-field mapping.
 //!
+//! Lane 127 bestaetigt: kanonische `NExp`-Wahrheit ist `sail-nexp`
+//! (`NExp`/`NConstraint`/`TypArg`/`NTyp`, internierte `Kid`s); die
+//! Vollmigration (`Nexp`/`NConstraint`/`MiniTyp`/Checker) bleibt
+//! Owner-Folgearbeit nach Lane 47 — hier keine Logik-Aenderung.
+//!
 //! Design notes (low-RAM + multithreaded):
 //! - Everything is `Clone + Send + Sync`, no interior `Rc`/raw pointers.
 //! - `Nexp` is a boxed tree; [`Nexp::depth`] + [`CheckLimits`] bound recursion
@@ -465,6 +470,10 @@ impl TypQuant {
 }
 
 /// Loop kind for [`MiniExp::Loop`] (mirrors Sail `loop`: `while`/`until`).
+///
+/// Lane-127-Notiz (Checker-Minimal, keine Logik-Aenderung): Wahrheit
+/// ist `sail_loops::LoopKind`; dieses Minimal bleibt bis Lane 47
+/// (Typvereinheitlichung, siehe `TY_NEEDED.md`) bestehen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MiniLoop {
     While,

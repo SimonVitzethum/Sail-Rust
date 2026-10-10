@@ -1,6 +1,28 @@
 #![forbid(unsafe_code)]
 //! `Solver` trait + stub + bounded caching wrapper.
 //!
+//! Lane-127-Wahrheit: Die kanonische Solver-Schnittstelle ist
+//! `sail_solver::Solver` (`sail-solver`, Lane 06: `prove(&SolverQuery) ->
+//! SolverVerdict`, `name()`, kanonische `Constraint`-Bruecke aus
+//! `sail-nexp` mit Normalisierung, `MemoCache` mit TTL + LRU,
+//! `SolverPool` mit 1-Solver-pro-Thread, optionalem Z3-Backend hinter
+//! Feature `z3`). Dieser Modul-Trait ([`Solver`]: `prove(&NConstraint)
+//! -> ProveResult`, `Send + Sync`) ist die Lane-05-lokale Sicht auf den
+//! *gleichen* Vertrag ueber den lokalen Minimaltypen
+//! (`crate::nexp::Nexp`/`NConstraint` mit `String`-Vars, siehe
+//! `TY_NEEDED.md`): gleiche Formel = gleiche Antwort, immer
+//! terminierend, `Unknown` ist immer sound.
+//!
+//! Abbildung: `Proved <-> Valid`, `Refuted <-> Invalid`,
+//! `Unknown <-> Unknown` (pinnt `tests/solver_parity.rs` als Code,
+//! E3: ungeprueft). [`CachingSolver`] ist die Lane-05-lokale
+//! Cache-Huelle (kapazitaetsbegrenzt, LRU); kanonisch ist
+//! `sail_solver::{MemoCache, MemoSolver}` (zusaetzlich TTL,
+//! poolweit geteilt, atomare Zaehler). Vollmigration (Checker generisch
+//! ueber `sail_solver::Solver`, Minimaltypen -> `sail-nexp`) ist
+//! Owner-Folgearbeit nach Lane 47 (Typvereinheitlichung) — bis dahin
+//! wird hier nichts umgebaut.
+//!
 //! Lane 06 implements this trait with the real Z3 backend. Everything in
 //! Lane 05 must work (and terminate) with [`StubSolver`]. Lane 107 adds the
 //! real `NC_set`/`NC_app`/`NC_var`/`NC_id` prove paths through this same

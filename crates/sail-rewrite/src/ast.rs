@@ -17,6 +17,14 @@
 
 /// One rewrite unit: a small chunk of definitions.
 ///
+/// Lane-127-Notiz (eigener Begriff, keine Logik-Aenderung): Dies ist die
+/// Rewrite-Einheit (Def-Chunk fuer passes), KEIN Datei-Shard. Wahrheit
+/// fuer Datei-Sharding ist `sail_shard::{Shard, ShardId, ShardKind}`
+/// (`sail-shard`: Datei-Grenzen, Chunk-Index, Zeilen, eigener Inhalt).
+/// Vorgeschlagene Owner-Folgearbeit (Lane 07): diesen Typ in
+/// `RewriteUnit`/`Chunk` umbenennen, um die Verwechslung zu beenden;
+/// bis dahin nutzt dieser Crate bewusst keinen `sail-shard`-Dep.
+///
 /// Shards are the parallelism + low-RAM granularity: the pipeline processes
 /// each shard independently, so peak memory is `O(shard)` per thread.
 #[derive(Clone, Debug, PartialEq, Eq)]

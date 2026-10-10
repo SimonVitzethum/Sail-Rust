@@ -25,15 +25,47 @@ use std::time::SystemTime;
 /// Standard-Limit für Einträge, wenn keines angegeben wird.
 pub const DEFAULT_MAX_ENTRIES: usize = 128;
 /// Datei mit dem kompilierten Shard-Output innerhalb eines Eintrags.
+///
+/// Lane-127-Namenswahrheit: Diese beiden Dateinamen (`output`,
+/// `fingerprint`) plus das Layout `<root>/<shard-hash>/` sind kanonisch
+/// fuer DiskCache-Eintraege. Verbraucher (`sail-ooc::MemoSpills`)
+/// nutzen sie ausschliesslich ueber die [`DiskCache`]-API (nie eigene
+/// Pfade); der Warm-Layer (`sail-ooc::warm`, eigene Domaene, eigene
+/// Endung `*.blob`) ist bewusst getrennt dokumentiert.
 pub const OUTPUT_FILE: &str = "output";
 /// Datei mit dem Fingerprint (Hex) innerhalb eines Eintrags.
+///
+/// Siehe [`OUTPUT_FILE`]: Teil der kanonischen Eintrags-Namen.
 pub const FINGERPRINT_FILE: &str = "fingerprint";
 /// Präfix für temporäre Schreibdateien (niemals sichtbarer Endzustand).
-const TMP_PREFIX: &str = ".tmp-";
+///
+/// Namenswahrheit auch fuer den Warm-Layer: `sail-ooc::warm` nutzt
+/// denselben Wert ueber diesen Re-Export (kein zweites Literal).
+pub const TMP_PREFIX: &str = ".tmp-";
 /// Maximale Länge einer Shard-ID (Schutz vor absurden Pfaden).
 const MAX_ID_LEN: usize = 128;
 
 /// Minimaler Fingerprint über Shard-Input + Pass-Version.
+///
+/// Lane-127-Wahrheit: Der kanonische Shard-Fingerprint ist
+/// `sail_shard::{Fingerprint, fingerprint}` (`sail-shard`, Lane 11:
+/// blake3-256 ueber `(pass_version, content)` mit Laengen-Prefix,
+/// 64-Hex, `fingerprint_all` parallel). Dieser Typ hier ist das
+/// FNV-1a-64-Minimal aus `CACHE_NEEDED.md` (16-Hex, Lane-36-lokal,
+/// toolchain-stabil): Test-Vehikel, bis `sail-shard` echte Typen
+/// lieferte — was seit Lane 11 der Fall ist.
+///
+/// Migrationsnotiz (Owner-Folgearbeit): `ShardFingerprint` durch
+/// `sail_shard::Fingerprint` ersetzen. Beachten: Der `CACHE_NEEDED.md`-
+/// Hinweis "beide sind 16-Hex-FNV, kein Layout-Wechsel" ist ueberholt —
+/// blake3 liefert 64-Hex, d. h. der *Inhalt* der `fingerprint`-Datei im
+/// Eintrag wechselt (Cache-Invalidierung beim Wechsel, alte Eintraege
+/// missen sauber via [`DiskCache::lookup`]-Mismatch). Das Layout
+/// `<root>/<shard-hash>/` + Dateinamen
+/// ([`OUTPUT_FILE`]/[`FINGERPRINT_FILE`]) bleibt unveraendert, da
+/// `shard_hash` aufrufervergeben ist. Uebereinstimmende Eigenschaft
+/// beider Hashes (Laengen-Prefix-Trennschaerfe) pinnt
+/// `tests/fingerprint_parity.rs` (Code, E3: ungeprueft).
 ///
 /// 16 Hex-Zeichen (FNV-1a 64, deterministisch, stabil über
 /// Toolchain-Wechsel hinweg — bewusst kein `DefaultHasher`).

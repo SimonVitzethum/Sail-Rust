@@ -7,6 +7,10 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 sail-ast = { path = "../sail-ast" }
+sail-extern = { path = "../sail-extern" }
+
+[dev-dependencies]
+sail-nexp = { path = "../sail-nexp" }
 
 [lints]
 workspace = true

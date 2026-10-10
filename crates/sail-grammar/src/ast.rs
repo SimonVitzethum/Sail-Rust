@@ -145,6 +145,13 @@ pub enum LoopOrd {
 }
 
 /// Loop kind for `while` / `repeat` / `until`.
+///
+/// Lane-127-Notiz (Parse-Sicht, keine Logik-Aenderung): Wahrheit fuer
+/// Loop-Kombinatoren ist `sail_loops::LoopKind` (dort inkl. Fuel- und
+/// `foreach#`-Varianten, `sail_name()`, `is_loop_name`). Diese
+/// Grammatik-Sicht (`While`/`Until`) bleibt absichtlich abhaengig-frei
+/// (kein Dep auf `sail-loops`; Parser-Oberflaeche, Owner-Migration in
+/// der Rest-Owner-Tabelle).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LoopKind {
     While,

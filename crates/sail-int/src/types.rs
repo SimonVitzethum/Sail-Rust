@@ -12,6 +12,11 @@
 use crate::nexp::{provably_nneg_in, Facts, NExp};
 
 /// Lean integer type selected for a numeric Sail type.
+///
+/// Lane-127-Notiz: Wahrheit fuer die `Nat`-vs-`Int`-Entscheidung ist
+/// `sail_nexp::{IntKind, int_kind_in}` (dort direkt auf kanonischem
+/// `NExp`); diese Variante wertet das lokale [`crate::nexp`]-Fragment
+/// aus (Paritaet: `tests/intkind_parity.rs`, Code, E3: ungeprueft).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IntKind {
     /// Emits as `Nat`.

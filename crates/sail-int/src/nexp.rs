@@ -1,6 +1,20 @@
 #![forbid(unsafe_code)]
 //! Minimal numeric exponent AST plus a conservative `provably_nneg` predicate.
 //!
+//! Lane-127-Notiz: Dies ist ein bewusst kleines Fragment fuer die
+//! Int/Nat/Range/Atom-Klassifikation. Kanonische Wahrheit fuer `NExp`
+//! ist `sail-nexp` (`NExp` mit internierten `Kid`s, `TypArg`/`NTyp`,
+//! Substitution, Total-Valuation, `simplify`); kanonische Wahrheit
+//! fuer [`Facts`]/`IntKind` ist `sail_nexp::{pred, lean}` (volle
+//! `provably_*`-Familie: nneg/pos/nonpos/neg/zero/nonzero, Lower- +
+//! Upper-Bounds, Nonzero-Mengen, `from_constraint`). Dieses Fragment
+//! kennt nur Lower-Bounds mit `String`-Schluesseln und die vier
+//! Basis-Praedikate. Die Bruecke zu `sail-ast` steht in
+//! [`crate::conv`]; die Vollmigration auf `sail-nexp` (inkl.
+//! `NumType`/`ForLoop`-Klassifikation) ist Owner-Folgearbeit —
+//! Paritaet auf den geteilten Shapes pinnt `tests/intkind_parity.rs`
+//! (Code, E3: ungeprueft).
+//!
 //! Local mirror of the rule used by the OCaml Lean backend
 //! (`sail/src/sail_lean_backend/pretty_print_lean.ml`):
 //! `provably_nneg ctx x = prove env (x >= 0)`.
