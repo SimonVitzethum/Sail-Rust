@@ -1,0 +1,17 @@
+[package]
+name = "sail-frontend-diff"
+version = "0.1.0"
+edition = "2021"
+description = "Frontend differential harness: OCaml sail parse trees (normalized) vs Rust frontend + type-judgment sampling (Lane 86, E3: code only, no runs)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_frontend_diff"
+path = "src/lib.rs"
+
+[dependencies]
+sail-parse = { path = "../sail-parse" }
+sail-oracle = { path = "../sail-oracle" }
+
+[lints]
+workspace = true
