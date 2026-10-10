@@ -224,6 +224,44 @@ Merge-Notizen:
 - Checks je Merge: kein Cargo.lock getrackt, kein unsafe-Token ausser
   forbid-Zeilen, keine Konfliktmarker. Build-Verifikation offen (Rig).
 
+E3-Integration Welle 7 (10.10.2026, Integrator — KEINE Builds, nur Merges):
+15 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer, Message endet mit
+Co-authored-by) + 1 Spec-Sammelcommit, Branches + Worktrees geloescht:
+Lane 104, 105, 106, 107, 108, 109, 110, 111, 113, 114, 115, 116, 117,
+118, 119.
+Keine Lane uebersprungen (alle 15 vorhanden). Lane 112 existiert nicht
+(kein Branch, keine Luecke im Auftrag).
+Uebersprungen + Grund:
+- lane/41-lang-delta, lane/42-shared-mem, lane/43-scheduler-replay,
+  lane/44-el3-psci-boot: gesperrt — NICHT angefasst (Branches + Worktrees
+  ungeprueft stehen gelassen).
+Merge-Notizen:
+- Alle 15 Merges konfliktarm/auto-vereint (ort): 106 (lib.rs-Auto-Union),
+  107 (TY_NEEDED/check/conv/lib/nexp-Auto-Union), 111 (kind.rs-Auto-Union),
+  115 (bridge.rs-Auto-Union); Rest konfliktfrei.
+- Lane 104: Grammar-Konflikt per Lane geloest, Generierung bleibt an
+  (sail.lalrpop + grammar_coverage.rs + GRAMMAR.md).
+- Lane 105: MiniExp-Erweiterung (conv.rs/ne xp.rs + exp_coverage.rs);
+  check.rs-_-Fallback beachtet (mitgemergt, keine Nacharbeit).
+- Lane 108 (2 Commits): NExp/TypArg-Shape (NC_app/Equal ueber typ_arg-
+  Sorten); Folge-Arme solver/regs/typedef im Branch bereits angepasst
+  (query.rs, z3_backend.rs, Mapping-Tests, Operator-Doku).
+- Lane 115: vendorte Scanner in sail-sve-sme geloescht (lexer/mini_ast/
+  parser/span.rs raus, -1670/+163 Zeilen); Dep auf sail-parse im Branch
+  gesetzt (Cargo.toml).
+- Lane 113/114/117/118/119: Doku/Config/Skripte only (AUDIT.md + deny.toml +
+  par-pipe-Dep; UNIFY_HARNESS.md; TEST-RIG.md + rig-triage.py;
+  HYGIENE.md; USER.md) — kein Code-Risiko.
+- lanes/-Specs je Lane mit uebernommen (104, 108, 111, 113, 119 per Branch-
+  Commit; 105, 106, 107, 109, 110, 114, 115, 116, 117, 118 uncommitted aus
+  Worktrees kopiert + Spec-Sammelcommit 314456a).
+- Checks nach allen Merges: kein Cargo.lock getrackt, .gitignore unveraendert
+  (worktrees/+target/+Cargo.lock+logs/, keine Lane-Diffs), keine
+  Konfliktmarker, forbid(unsafe_code) in allen Crate-Roots (45 Treffer),
+  unsafe-Token nur Doc-Kommentare. Build-Verifikation offen (Rig der
+  Haupt-Session).
+- Identitaet unverstellt.
+
 Aktiv (noch in Arbeit, NICHT anfassen):
 - Lane 41–44 (Branches lane/41-lang-delta, lane/42-shared-mem,
   lane/43-scheduler-replay, lane/44-el3-psci-boot, Worktrees lane-41..44 —
