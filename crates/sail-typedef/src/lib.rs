@@ -497,13 +497,16 @@ impl<I: Interner + ?Sized> Cx<'_, I> {
                         }
                         _ => self.print_generic_app(out, ty.span, &head, args),
                     },
+                    // OCaml joins register args with spaceless `comma`
+                    // (`(RegisterRef a,b)`), not `comma_sp`.
                     "register" => {
-                        out.write_str("(RegisterRef")?;
+                        let mut rendered = Vec::with_capacity(args.len());
                         for arg in args {
-                            out.write_char(' ')?;
-                            self.print_typ_arg_all(out, arg)?;
+                            let mut buf = String::new();
+                            self.print_typ_arg_all(&mut buf, arg)?;
+                            rendered.push(buf);
                         }
-                        out.write_char(')')?;
+                        write!(out, "(RegisterRef {})", rendered.join(","))?;
                         Ok(())
                     }
                     "implicit" => match args.as_slice() {
@@ -937,9 +940,10 @@ fn comment_kind(kind: Kind) -> &'static str {
 /// constraint imply `kid ≥ 0`?
 fn implies_nneg(nc: &ConstraintKind, kid: Symbol) -> bool {
     match nc {
-        ConstraintKind::Ge(a, b) => nexp_is_kid(a, kid) && nexp_const_le(b, 0),
+        // `k ≥ c` proves `k ≥ 0` iff `c ≥ 0` (and mirrored `c ≤ k`).
+        ConstraintKind::Ge(a, b) => nexp_is_kid(a, kid) && nexp_const_ge(b, 0),
         ConstraintKind::Gt(a, b) => nexp_is_kid(a, kid) && nexp_const_ge(b, -1),
-        ConstraintKind::Le(a, b) => nexp_is_kid(b, kid) && nexp_const_le(a, 0),
+        ConstraintKind::Le(a, b) => nexp_is_kid(b, kid) && nexp_const_ge(a, 0),
         ConstraintKind::Lt(a, b) => nexp_is_kid(b, kid) && nexp_const_ge(a, -1),
         ConstraintKind::And(x, y) => implies_nneg(&x.kind, kid) || implies_nneg(&y.kind, kid),
         _ => false,
@@ -955,10 +959,6 @@ fn nexp_const(n: &NExp) -> Option<i128> {
         NExpKind::Constant(text) => text.parse().ok(),
         _ => None,
     }
-}
-
-fn nexp_const_le(n: &NExp, bound: i128) -> bool {
-    nexp_const(n).is_some_and(|c| c <= bound)
 }
 
 fn nexp_const_ge(n: &NExp, bound: i128) -> bool {
