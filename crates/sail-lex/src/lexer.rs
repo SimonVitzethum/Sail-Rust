@@ -99,8 +99,20 @@ fn is_bin_digit(b: u8) -> bool {
 fn is_oper_char(b: u8) -> bool {
     matches!(
         b,
-        b'!' | b'%' | b'&' | b'*' | b'+' | b'-' | b'.' | b'/' | b':' | b'<' | b'='
-            | b'>' | b'@' | b'^' | b'|'
+        b'!' | b'%'
+            | b'&'
+            | b'*'
+            | b'+'
+            | b'-'
+            | b'.'
+            | b'/'
+            | b':'
+            | b'<'
+            | b'='
+            | b'>'
+            | b'@'
+            | b'^'
+            | b'|'
     )
 }
 
@@ -228,7 +240,11 @@ impl<'a> Lexer<'a> {
     }
 
     fn span(&self, start: usize) -> Span {
-        Span::new(self.file, start.min(u32::MAX as usize) as u32, self.pos_u32())
+        Span::new(
+            self.file,
+            start.min(u32::MAX as usize) as u32,
+            self.pos_u32(),
+        )
     }
 
     fn push(&mut self, kind: TokenKind, start: usize) {
@@ -247,8 +263,10 @@ impl<'a> Lexer<'a> {
         // Column of `start` on the current line (approximation is fine for
         // multi-line spans; exactness matters for single-char errors).
         let col = start.saturating_sub(self.line_start).min(u32::MAX as usize) as u32 + 1;
-        self.errors.push(LexError::new(span, self.line, col, message.clone()));
-        self.tokens.push(Token::new(TokenKind::Error(message), span));
+        self.errors
+            .push(LexError::new(span, self.line, col, message.clone()));
+        self.tokens
+            .push(Token::new(TokenKind::Error(message), span));
     }
 
     fn skip_ws(&mut self) {
@@ -296,20 +314,17 @@ impl<'a> Lexer<'a> {
     fn skip_block_comment(&mut self, start: usize, paren_star: bool) {
         self.pos += 2; // consume opener
         let mut depth: u32 = 1;
+        // Open/close pairs depend on the comment flavour.
+        let (open0, open1, close0, close1): (u8, u8, u8, u8) = if paren_star {
+            (b'(', b'*', b'*', b')')
+        } else {
+            (b'/', b'*', b'*', b'/')
+        };
         while let Some(&b) = self.src.get(self.pos) {
-            if !paren_star && b == b'/' && self.at(1) == Some(b'*') {
+            if b == open0 && self.at(1) == Some(open1) {
                 depth += 1;
                 self.pos += 2;
-            } else if paren_star && b == b'(' && self.at(1) == Some(b'*') {
-                depth += 1;
-                self.pos += 2;
-            } else if !paren_star && b == b'*' && self.at(1) == Some(b'/') {
-                depth -= 1;
-                self.pos += 2;
-                if depth == 0 {
-                    return;
-                }
-            } else if paren_star && b == b'*' && self.at(1) == Some(b')') {
+            } else if b == close0 && self.at(1) == Some(close1) {
                 depth -= 1;
                 self.pos += 2;
                 if depth == 0 {
@@ -580,9 +595,8 @@ impl<'a> Lexer<'a> {
                 let (d1, d2) = (self.at(1), self.at(2));
                 match (d1, d2) {
                     (Some(a), Some(b2)) if a.is_ascii_digit() && b2.is_ascii_digit() => {
-                        let v = (b - b'0') as u32 * 100
-                            + (a - b'0') as u32 * 10
-                            + (b2 - b'0') as u32;
+                        let v =
+                            (b - b'0') as u32 * 100 + (a - b'0') as u32 * 10 + (b2 - b'0') as u32;
                         match char::from_u32(v) {
                             Some(ch) => buf.push(ch),
                             None => self.push_error(
@@ -867,7 +881,10 @@ impl<'a> Lexer<'a> {
         let digits = &self.text[self.pos..end];
         // `0x…` / `0b…` (accept `0X`/`0B` too; OCaml only takes lowercase).
         if digits == "0"
-            && matches!(self.src.get(end), Some(b'x') | Some(b'X') | Some(b'b') | Some(b'B'))
+            && matches!(
+                self.src.get(end),
+                Some(b'x') | Some(b'X') | Some(b'b') | Some(b'B')
+            )
         {
             let marker = self.src[end];
             let is_hex = marker == b'x' || marker == b'X';
@@ -911,7 +928,10 @@ impl<'a> Lexer<'a> {
         }
         // `digits.digits` → Real (both sides required).
         if self.src.get(self.pos) == Some(&b'.')
-            && self.src.get(self.pos + 1).is_some_and(|b| b.is_ascii_digit())
+            && self
+                .src
+                .get(self.pos + 1)
+                .is_some_and(|b| b.is_ascii_digit())
         {
             self.pos += 1; // `.`
             while self.src.get(self.pos).is_some_and(|&b| b.is_ascii_digit()) {
@@ -950,10 +970,7 @@ impl<'a> Lexer<'a> {
             self.push(TokenKind::EqGt, start);
             return;
         }
-        for (pat, kind) in [
-            ("|]", TokenKind::RsquareBar),
-            ("|}", TokenKind::RcurlyBar),
-        ] {
+        for (pat, kind) in [("|]", TokenKind::RsquareBar), ("|}", TokenKind::RcurlyBar)] {
             if rest.starts_with(pat) {
                 self.pos += pat.len();
                 self.push(kind, start);
@@ -971,7 +988,7 @@ impl<'a> Lexer<'a> {
             return;
         }
         // Single-char punctuation that is also an operator char.
-        if rest.len() >= 1 && !rest[1..].starts_with_oper_char() {
+        if !rest.is_empty() && !rest[1..].starts_with_oper_char() {
             let kind = match rest.as_bytes()[0] {
                 b':' => Some(TokenKind::Colon),
                 b'.' => Some(TokenKind::Dot),
@@ -1024,10 +1041,10 @@ impl<'a> Lexer<'a> {
             ("::", TokenKind::ColonColon),
             ("..", TokenKind::DotDot),
         ] {
-            if rest.starts_with(pat) {
+            if let Some(after) = rest.strip_prefix(pat) {
                 // `:::` / `...` lex as operators (longest match beats the
                 // two-char rule in `ocamllex`); defer to the operator scanner.
-                if (pat == "::" || pat == "..") && rest[pat.len()..].starts_with_oper_char() {
+                if (pat == "::" || pat == "..") && after.starts_with_oper_char() {
                     self.lex_operator(start);
                     return;
                 }

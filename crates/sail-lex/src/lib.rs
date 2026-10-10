@@ -12,6 +12,6 @@ mod lexer;
 mod span;
 mod token;
 
-pub use lexer::{LexError, LexResult, lex};
+pub use lexer::{lex, LexError, LexResult};
 pub use span::{FileId, Span};
 pub use token::{Fixity, Token, TokenKind};

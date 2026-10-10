@@ -1,11 +1,14 @@
-
 #![forbid(unsafe_code)]
 //! Behaviour tests for the lexer, pinned against `lexer.mll`.
 
-use sail_lex::{FileId, Fixity, LexError, LexResult, Span, Token, TokenKind, lex};
+use sail_lex::{lex, FileId, Fixity, LexError, LexResult, Span, Token, TokenKind};
 
 fn kinds(src: &str) -> Vec<TokenKind> {
-    lex(FileId(0), src).tokens.into_iter().map(|t| t.kind).collect()
+    lex(FileId(0), src)
+        .tokens
+        .into_iter()
+        .map(|t| t.kind)
+        .collect()
 }
 
 fn id(s: &str) -> TokenKind {
@@ -83,7 +86,12 @@ fn tyvar_and_lone_quote_error() {
     assert!(out.errors[0].message.contains('\''));
     assert_eq!(
         kinds("a ' b"),
-        [id("a"), TokenKind::Error("Unexpected character: `'`".to_string()), id("b"), TokenKind::Eof]
+        [
+            id("a"),
+            TokenKind::Error("Unexpected character: `'`".to_string()),
+            id("b"),
+            TokenKind::Eof
+        ]
     );
 }
 
@@ -136,11 +144,7 @@ fn bare_0x_falls_back_to_num_plus_id() {
     );
     assert_eq!(
         kinds("0b2"),
-        [
-            TokenKind::Num("0".to_string()),
-            id("b2"),
-            TokenKind::Eof,
-        ]
+        [TokenKind::Num("0".to_string()), id("b2"), TokenKind::Eof,]
     );
 }
 
@@ -148,11 +152,19 @@ fn bare_0x_falls_back_to_num_plus_id() {
 fn two_caret_forms() {
     assert_eq!(
         kinds("2^3"),
-        [TokenKind::TwoCaret, TokenKind::Num("3".to_string()), TokenKind::Eof]
+        [
+            TokenKind::TwoCaret,
+            TokenKind::Num("3".to_string()),
+            TokenKind::Eof
+        ]
     );
     assert_eq!(
         kinds("2 ^ 3"),
-        [TokenKind::TwoCaret, TokenKind::Num("3".to_string()), TokenKind::Eof]
+        [
+            TokenKind::TwoCaret,
+            TokenKind::Num("3".to_string()),
+            TokenKind::Eof
+        ]
     );
     // Longer digit runs are `Num` + `Caret`.
     assert_eq!(
@@ -171,7 +183,10 @@ fn comments_are_skipped_and_nest() {
     let out = lex(FileId(0), "a /* x /* y */ z */ b // tail\nc");
     assert!(out.is_ok());
     assert_eq!(out.tokens.iter().filter(|t| !t.is_eof()).count(), 3);
-    assert_eq!(kinds("a /* x /* y */ z */ b // tail\nc"), [id("a"), id("b"), id("c"), TokenKind::Eof]);
+    assert_eq!(
+        kinds("a /* x /* y */ z */ b // tail\nc"),
+        [id("a"), id("b"), id("c"), TokenKind::Eof]
+    );
 }
 
 #[test]
@@ -234,21 +249,24 @@ fn strings_with_escapes() {
 fn string_continuation_and_raw_newline() {
     let out = lex(FileId(0), "\"a\\\n   b\"");
     assert!(out.is_ok());
-    assert_eq!(kinds("\"a\\\n   b\""), [TokenKind::Str("ab".to_string()), TokenKind::Eof]);
+    assert_eq!(
+        kinds("\"a\\\n   b\""),
+        [TokenKind::Str("ab".to_string()), TokenKind::Eof]
+    );
 
     let out = lex(FileId(0), "\"a\nb\"");
     assert!(out.is_ok());
-    assert_eq!(kinds("\"a\nb\""), [TokenKind::Str("a\nb".to_string()), TokenKind::Eof]);
+    assert_eq!(
+        kinds("\"a\nb\""),
+        [TokenKind::Str("a\nb".to_string()), TokenKind::Eof]
+    );
 }
 
 #[test]
 fn unterminated_string_recovers() {
     let out = lex(FileId(0), "\"abc");
     assert_eq!(out.errors.len(), 1);
-    assert_eq!(
-        out.tokens[0].kind,
-        TokenKind::Str("abc".to_string()),
-    );
+    assert_eq!(out.tokens[0].kind, TokenKind::Str("abc".to_string()),);
     assert!(out.tokens.last().is_some_and(|t| t.is_eof()));
 }
 
@@ -313,10 +331,7 @@ fn long_arrow_becomes_operator() {
 
 #[test]
 fn slash_before_comment_ends_operator() {
-    assert_eq!(
-        kinds("+/*c*/b //x\n"),
-        [op("+"), id("b"), TokenKind::Eof]
-    );
+    assert_eq!(kinds("+/*c*/b //x\n"), [op("+"), id("b"), TokenKind::Eof]);
 }
 
 #[test]
@@ -369,7 +384,13 @@ fn fixity_declarations() {
     // Without `N op` these are plain identifiers.
     assert_eq!(
         kinds("infix infixl 8 infixr"),
-        [id("infix"), id("infixl"), TokenKind::Num("8".to_string()), id("infixr"), TokenKind::Eof]
+        [
+            id("infix"),
+            id("infixl"),
+            TokenKind::Num("8".to_string()),
+            id("infixr"),
+            TokenKind::Eof
+        ]
     );
 }
 
@@ -386,7 +407,10 @@ fn directives_pragmas_attributes() {
     );
     assert_eq!(
         kinds("$foo {"),
-        [TokenKind::StructuredPragma("foo".to_string()), TokenKind::Eof]
+        [
+            TokenKind::StructuredPragma("foo".to_string()),
+            TokenKind::Eof
+        ]
     );
     assert_eq!(
         kinds("$[mycfg]"),

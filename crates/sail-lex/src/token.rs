@@ -166,7 +166,10 @@ pub enum TokenKind {
     /// `$name {` structured pragma opener.
     StructuredPragma(String),
     /// `$name value…` up to end of line.
-    Pragma { name: String, value: String },
+    Pragma {
+        name: String,
+        value: String,
+    },
     /// `infix[l|r] N op` fixity declaration.
     Fixity {
         fixity: Fixity,
@@ -206,10 +209,7 @@ impl Token {
     /// Documentation tokens a parser usually skips (`DocBlock`/`DocLine`).
     #[must_use]
     pub fn is_doc(&self) -> bool {
-        matches!(
-            self.kind,
-            TokenKind::DocBlock(_) | TokenKind::DocLine(_)
-        )
+        matches!(self.kind, TokenKind::DocBlock(_) | TokenKind::DocLine(_))
     }
 
     /// Short stable name for debugging/snapshots (no payload).
