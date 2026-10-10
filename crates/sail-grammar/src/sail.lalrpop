@@ -1509,7 +1509,18 @@ TypeUnion: TypeUnion = {
         Some(ret) => TypeUnion::Id(i, Typ::Fn(Box::new(t), Box::new(ret))),
         None => TypeUnion::Id(i, t),
     },
-    <i:Ident> ":" "{" <fs:StructFields?> "}" => TypeUnion::AnonRecord(i, fs.unwrap_or_default()),
+    // `C : {}` (Lane 104): the old `"{" <StructFields?> "}"` anon arm
+    // accepted the empty brace, and so does `AtomicTyp`'s
+    // `"{" <NumList?> "}"` (empty `NSet`, pinned by `parse_typ("{}")`),
+    // giving two trees (Rig limited-run-20261010-193612,
+    // `sail.lalrpop:316:5-316:62`; siblings: `TypeUnions`-tail `,`,
+    // `union`/`newtype` use sites — all share this rule). Menhir
+    // (`parser.mly:1136`, `id Colon Lcurly struct_fields Rcurly`)
+    // requires non-empty `struct_fields` here (`KOpt` starts at `Kid`
+    // / `(`, so no other `{...}` shape overlaps), hence the strict
+    // list. `C : {}` now parses only as `Id(C, NSet([]))`; the
+    // `struct`-record use site keeps `?`. Accepted language unchanged.
+    <i:Ident> ":" "{" <fs:StructFields> "}" => TypeUnion::AnonRecord(i, fs),
 }
 
 TypeUnions: Vec<TypeUnion> = {

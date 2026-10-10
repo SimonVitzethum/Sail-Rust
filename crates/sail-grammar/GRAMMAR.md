@@ -83,8 +83,9 @@ lifted onto the Sail rules in this lane:
     `StructFields` `{}`). All four are now strict (non-empty,
     right-recursive, explicit trailing-, arm). Use sites that accepted
     empty bodies in the port keep `?` (`match`/`try` `CaseList?`,
-    `Enum?`, `StructFields?` in `struct` records and anon
-    `TypeUnion` records), so `{}` still parses via `None`;
+    `Enum?`, `StructFields?` in `struct` records), so `{}` still parses
+    via `None` (the anon-`TypeUnion`-record `?` fell away in Lane 104,
+    fix 13);
     `ExpList` needed no use-site change (every site already guards it
     with a leading element plus `,` or a separate `"()"` arm).
     Accepted language unchanged.
@@ -158,6 +159,17 @@ lifted onto the Sail rules in this lane:
     not another blind reshape. Unreported `(...)?` tails (`TypQuant`
     `,`, `PatexpTyp` `->`, guards, `Fexp`/`PlainExp` `=`, …) are
     deliberately untouched (minimal diff).
+13. **Anon-`TypeUnion`-record strict (Lane 104)**: `C : {}` reduced
+    two ways — `Id(C, NSet([]))` via `AtomicTyp`'s `"{" NumList? "}"`
+    and `AnonRecord(C, [])` via `"{" StructFields? "}"` (Rig
+    `limited-run-20261010-193612`, local ambiguity at
+    `sail.lalrpop:316:5-316:62`; siblings: `TypeUnions`-tail `,`,
+    `union`/`newtype` use sites, all one rule). Menhir
+    (`parser.mly:1136`) requires non-empty `struct_fields` here, so
+    the arm takes the strict list; the empty brace keeps parsing as
+    the `NSet` id-arm (port keeps empty `NSet`, fix 10) and the
+    `struct`-record use site keeps `?`. Accepted language unchanged;
+    `tests/grammar_coverage.rs` pins the single tree.
 
 6. **`RDefBody` strict (Lane 87, E4 `Block` shape)**: the old
     `(<RIdDef> ",")* <RIdDef>?` list was nullable AND used as `RDefBody?`
