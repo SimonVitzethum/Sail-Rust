@@ -1,5 +1,21 @@
-# Lane 15 — CI-Skizze: reines Rust erzwingen.
+# Lane 49 — CI-Gates (E2 + Unsafe + Budget), auf Lane-15-Basis (reines Rust).
 # Lokaler Kurz-Check: ./scripts/check.sh
+#
+# Gates im Ueberblick (Details je Job):
+# - e2-sorry-gate (BLOCKIEREND, Lane 13/45ff): `grep -rn sorry --include='*.lean'`
+#   ueber Generat muss leer sein. Der Lean-Printer (sail-lean) kennt keinen
+#   stillen sorry-Fallback — nicht uebersetzbare Funktionen sind harte Fehler
+#   ("no silent sorry"). Das Gate faengt sorry ab, falls es doch je ins Generat
+#   gelangt (Stub, Hand-Edit, Upstream-Drift). Verzahnung Lane 13: sobald der
+#   Oracle-Harness (sail-oracle) E2E-Outputs schreibt, wird dessen
+#   Out-Verzeichnis hier als zusaetzliche Suchwurzel angehaengt.
+# - unsafe-verbot (BLOCKIEREND, Lane 15): `cargo geiger --forbid-only`
+#   (eigener Code + Deps) plus expliziter unsafe-Token-Grep ueber crates/.
+# - perf-budget (WARNEND, Lane 14): vergleicht die Peaks aus
+#   perf/timings.jsonl gegen perf/BUDGETS.md (kleinstes Budget:
+#   aarch64_small 4 GiB). `continue-on-error: true` — warnt per
+#   ::warning::-Annotation, blockiert aber nicht, bis echte Modell-Peaks
+#   stabil gemessen sind (Tabelle in BUDGETS.md noch ⏳).
 name: ci
 
 on:
@@ -37,6 +53,32 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --workspace --all-targets
 
+  # Lane 49, E2-Gate (blockierend): Generat muss sorry-frei sein.
+  e2-sorry-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: sorry-Grep ueber Generat (muss leer sein)
+        run: |
+          # Konventionelle Wurzeln fuer generiertes Lean. Sobald Lane 13/45ff
+          # E2E-Outputs schreiben (sail-oracle-Out-Verzeichnis), hier ergaenzen.
+          dirs=""
+          for d in out generated lean-out target/lean-out; do
+            if [ -d "$d" ]; then dirs="$dirs $d"; fi
+          done
+          if [ -z "$dirs" ]; then
+            echo "Hinweis: kein Generat-Verzeichnis gefunden — nichts zu pruefen (ok)."
+            exit 0
+          fi
+          echo "Pruefe Generat:$dirs"
+          # shellcheck disable=SC2086
+          if hits=$(grep -rn --include='*.lean' -E '(^|[^_a-zA-Z])sorry([^_a-zA-Z]|$)' $dirs); then
+            echo "FEHLER: sorry im Generat gefunden:"
+            echo "$hits"
+            exit 1
+          fi
+          echo "ok: Generat sorry-frei"
+
   unsafe-verbot:
     runs-on: ubuntu-latest
     steps:
@@ -44,10 +86,49 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: cargo-geiger installieren
         run: cargo install cargo-geiger --locked
-      - name: kein unsafe-Code (eigener Code + Deps ueberpruefen)
+      # Lane 49, Unsafe-Gate (blockierend), Teil 1: Deps inklusive pruefen.
+      - name: cargo geiger (0 unsafe, eigener Code + Deps)
+        run: cargo geiger --workspace --all-targets --forbid-only
+      # Lane 49, Unsafe-Gate (blockierend), Teil 2: Token-Grep ueber crates/.
+      - name: unsafe-Token-Grep (muss leer sein)
         run: |
-          cargo geiger --workspace --all-targets --forbid-only
-          ./scripts/check.sh
+          if grep -rn --include='*.rs' -E '(^|[^_a-zA-Z])unsafe([^_a-zA-Z]|$)' crates/ | grep -v 'forbid(unsafe_code)'; then
+            echo "FEHLER: unsafe-Token in crates/ gefunden (siehe oben)"
+            exit 1
+          fi
+          echo "ok: kein unsafe-Token in crates/"
+      - name: lokaler Kurz-Check
+        run: ./scripts/check.sh
+
+  # Lane 49, Budget-Gate (WARNEND, Lane 14): warnt, blockiert nicht.
+  perf-budget:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Budget-Schranke gegen perf/BUDGETS.md (warnend)
+        run: |
+          # Budgets (Lane 14): aarch64_small <4 GiB, arm-v8.5-a <16 GiB,
+          # arm-v9.4-a <24 GiB. Hier gilt die schwaechste Schranke (4 GiB),
+          # solange echte Modell-Peaks ausstehen — Ueberschreitung heisst
+          # Shard verkleinern oder Pass in Lane 07/09 zurueckweisen.
+          BUDGET_KB=4194304
+          if [ ! -f perf/BUDGETS.md ]; then
+            echo "::warning::perf/BUDGETS.md fehlt — Budget ungeprueft"
+            exit 0
+          fi
+          if [ ! -f perf/timings.jsonl ]; then
+            echo "::warning::kein perf/timings.jsonl — Budgets ungeprueft"
+            exit 0
+          fi
+          peak=$(awk -F'"peak_rss_kb":' '{if (NF>1){split($2,a,/[^0-9]/); if (a[1]+0>max) max=a[1]+0}} END{print max+0}' perf/timings.jsonl)
+          echo "Peak-RSS (perf/timings.jsonl): ${peak} KiB vs. Budget ${BUDGET_KB} KiB (aarch64_small 4 GiB)"
+          if [ "$peak" -gt "$BUDGET_KB" ]; then
+            echo "::warning::Budget ueberschritten: Peak ${peak} KiB > ${BUDGET_KB} KiB — Shard verkleinern oder Pass in Lane 07/09 zurueckweisen"
+          else
+            echo "ok: unter Budget"
+          fi
+          exit 0
 
   msrv:
     runs-on: ubuntu-latest
