@@ -40,6 +40,7 @@ members = [
     "crates/sail-smoke",
     "crates/sail-release-meta",
     "crates/sail-ooc",
+    "crates/sail-par-pipe",
 ]
 resolver = "2"
 
