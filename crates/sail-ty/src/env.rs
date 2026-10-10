@@ -29,9 +29,10 @@ struct SharedTables {
 /// Cloning is cheap: the program-wide tables are [`Arc`]-shared, only the
 /// locals map is copied.
 ///
-/// Retained (MIGRATION.md #24): `sail-ast` has no `Env.t` yet; the
-/// val/register/local tables stay here until that lane lands. Schemes
-/// lower onto `sail_ast::TypSchm` (see [`crate::conv`]).
+/// Retained (MIGRATION.md #24, Lane 72 decision: kept local, see
+/// [`crate::ast_env`]): `sail-ast` has no `Env.t`; the val/register/local
+/// tables stay here until that lane lands. Schemes lower onto
+/// `sail_ast::TypSchm` (see [`crate::conv`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeEnv {
     shared: Arc<SharedTables>,

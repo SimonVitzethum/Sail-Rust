@@ -11,6 +11,7 @@
 //! AST/nexp types are local minimals; see `TY_NEEDED.md` for the mapping to
 //! the future `sail-ast` / `sail-nexp` crates.
 
+pub mod ast_env;
 pub mod check;
 pub mod conv;
 pub mod env;
@@ -20,6 +21,7 @@ pub mod nexp;
 pub mod quant;
 pub mod solver;
 
+pub use ast_env::{kenv_from_kopts, kenv_to_kopts};
 pub use check::{BidirectionalChecker, CheckLimits, TypedDefSummary};
 pub use env::TypeEnv;
 pub use error::{Span, TypeError, TypeResult};
