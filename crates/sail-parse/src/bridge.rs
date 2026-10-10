@@ -65,33 +65,43 @@ pub fn bridge_file(path: &str, src: &str) -> Result<BridgeOut, ParseError> {
 
 /// Bereits geparste Datei auf `sail-ast` brücken (reine Konvertierung).
 pub fn bridge_parsed(parsed: &ParsedFile) -> BridgeOut {
-    let mut b = Bridge {
-        ids: IdGen::new(),
-        interner: SimpleInterner::new(),
-        fid: FileId(0),
-        defs: Vec::new(),
-        unparsed: Vec::new(),
-        deferred: Vec::new(),
-    };
+    let mut b = Bridge::new();
     for sd in &parsed.defs {
         b.def(sd);
     }
-    BridgeOut {
-        ast: Ast::new(b.defs),
-        interner: b.interner,
-        files: vec![parsed.path.clone()],
-        unparsed: b.unparsed,
-        deferred: b.deferred,
-    }
+    b.finish(&parsed.path)
 }
 
-struct Bridge {
-    ids: IdGen,
-    interner: SimpleInterner,
-    fid: FileId,
-    defs: Vec<Def>,
-    unparsed: Vec<Unparsed>,
-    deferred: Vec<SpannedDef>,
+pub(crate) struct Bridge {
+    pub(crate) ids: IdGen,
+    pub(crate) interner: SimpleInterner,
+    pub(crate) fid: FileId,
+    pub(crate) defs: Vec<Def>,
+    pub(crate) unparsed: Vec<Unparsed>,
+    pub(crate) deferred: Vec<SpannedDef>,
+}
+
+impl Bridge {
+    pub(crate) fn new() -> Self {
+        Bridge {
+            ids: IdGen::new(),
+            interner: SimpleInterner::new(),
+            fid: FileId(0),
+            defs: Vec::new(),
+            unparsed: Vec::new(),
+            deferred: Vec::new(),
+        }
+    }
+
+    pub(crate) fn finish(self, path: &str) -> BridgeOut {
+        BridgeOut {
+            ast: Ast::new(self.defs),
+            interner: self.interner,
+            files: vec![path.to_owned()],
+            unparsed: self.unparsed,
+            deferred: self.deferred,
+        }
+    }
 }
 
 fn sat_u32(b: usize) -> u32 {
@@ -181,7 +191,7 @@ fn name_word(toks: &[&TokenKind], mut i: usize, interner: &impl Interner) -> Opt
 }
 
 impl Bridge {
-    fn name(&mut self, span: AstSpan, text: &str, head: &str) -> Name {
+    pub(crate) fn name(&mut self, span: AstSpan, text: &str, head: &str) -> Name {
         let is_operator =
             op_by_lex(head, text, &mut self.interner).unwrap_or_else(|| is_op_name(text));
         let sym: Symbol = self.interner.intern(text);
@@ -209,13 +219,13 @@ impl Bridge {
         }
     }
 
-    fn push_unparsed(&mut self, kind: &'static str, src: String) -> NodeId {
+    pub(crate) fn push_unparsed(&mut self, kind: &'static str, src: String) -> NodeId {
         let id = self.ids.fresh();
         self.unparsed.push(Unparsed { id, kind, src });
         id
     }
 
-    fn def(&mut self, sd: &SpannedDef) {
+    pub(crate) fn def(&mut self, sd: &SpannedDef) {
         let span = cvt_span(self.fid, &sd.span);
         match &sd.def {
             MiniDef::Val { name, sig_src } => {

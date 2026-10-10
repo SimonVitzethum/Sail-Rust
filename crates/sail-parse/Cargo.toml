@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 sail-ast = { path = "../sail-ast" }
+sail-grammar = { path = "../sail-grammar" }
 sail-lex = { path = "../sail-lex" }
 
 [lints]
