@@ -161,7 +161,11 @@ impl PhaseBarrier {
 
     /// Beginnt die heisse Phase fuer `shard`. Fehler, wenn noch einer heiss ist.
     pub fn begin(&mut self, shard: ShardId) -> Result<HotToken, BarrierError> {
-        let mut state = self.lock_state();
+        // Ueber geklonten Arc sperren (gleiche Mutex-Instanz wie `lock_state`,
+        // inkl. Vergiftungs-Toleranz): `lock_state(&self)` hielte `&self` ueber
+        // den Guard fest und blockierte `self.generation += 1` (E0506).
+        let state_arc = Arc::clone(&self.state);
+        let mut state = state_arc.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((current, _)) = &state.hot {
             return Err(BarrierError::AlreadyHot {
                 current: current.clone(),
@@ -173,7 +177,7 @@ impl PhaseBarrier {
         Ok(HotToken {
             shard,
             generation,
-            state: Arc::clone(&self.state),
+            state: Arc::clone(&state_arc),
             consumed: false,
         })
     }
