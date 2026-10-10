@@ -16,6 +16,11 @@
 #   aarch64_small 4 GiB). `continue-on-error: true` — warnt per
 #   ::warning::-Annotation, blockiert aber nicht, bis echte Modell-Peaks
 #   stabil gemessen sind (Tabelle in BUDGETS.md noch ⏳).
+# - deny-audit (WARNEND, Lane 91): `cargo deny check advisories licenses
+#   bans sources` gegen deny.toml. `continue-on-error: true` — warnt,
+#   blockiert aber nicht, bis AUDIT.md-Aktionen A1–A5 umgesetzt sind
+#   (Lizenzen/z3 fallen derzeit rot aus). Danach scharf schalten
+#   (`continue-on-error` entfernen).
 name: ci
 
 on:
@@ -138,3 +143,20 @@ jobs:
       # Bei MSRV-Erhöhung: Version hier UND in Cargo.toml anpassen.
       - uses: dtolnay/rust-toolchain@1.75.0
       - run: cargo check --workspace --all-targets
+
+  # Lane 91, Supply-Chain-Job (WARNEND): Aktionen A1–A5 aus AUDIT.md stehen
+  # noch aus (Lizenzen/z3 fallen rot aus), daher zunaechst warnend.
+  # Sobald A1–A5 umgesetzt sind: `continue-on-error` entfernen (scharf).
+  deny-audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo-deny installieren
+        run: cargo install cargo-deny --locked
+      # Entfaellt, sobald Cargo.lock eingecheckt ist (Aktion A1).
+      - name: Lockfile aufloesen (lesend, kein Build)
+        run: cargo generate-lockfile
+      - name: cargo deny (Advisories + Lizenzen + Bans + Sources)
+        run: cargo deny check advisories licenses bans sources

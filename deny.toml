@@ -2,7 +2,8 @@
 #
 # Prueft: Advisories (RustSec), Lizenzen, Bans, Sources.
 # Aufruf lokal:  cargo deny check advisories licenses bans sources
-# CI-Einbau: siehe AUDIT.md (Vorschlag, hier nicht eingebaut).
+# CI-Einbau: Job `deny-audit` in .github/workflows/ci.yml (Lane 91, vorerst
+# warnend per `continue-on-error: true`, bis AUDIT.md-Aktionen A1–A5 stehen).
 #
 # Hinweis: Das Repo checkt derzeit KEIN Cargo.lock ein. `cargo deny check`
 # braucht ein Lockfile (cargo generate-lockfile genuegt, kein Build).

@@ -61,12 +61,12 @@ Details:
   die gepatchte Version unmoeglich machen).
 - A5: `z3` 0.12 → ≥ 0.21 anheben **oder** dokumentieren, dass das
   Solver-Feature bis dahin nicht aktiviert werden darf.
-- A6: CI-Job nach Vorschlag unten einbauen (bewusst nicht in dieser Lane
-  umgesetzt).
+- A6: CI-Job nach Vorschlag unten einbauen (Lane 91: umgesetzt als
+  warnender `deny-audit`-Job mit `continue-on-error: true`).
 
-## 4. CI-Einbau-Vorschlag (nicht umgesetzt)
+## 4. CI-Einbau (Lane 91: warnend verdrahtet)
 
-Neuer Job in `.github/workflows/ci.yml`, blockierend:
+Verdrahteter Job in `.github/workflows/ci.yml` (vorerst warnend):
 
 ```yaml
   deny-audit:
@@ -83,10 +83,11 @@ Neuer Job in `.github/workflows/ci.yml`, blockierend:
         run: cargo deny check advisories licenses bans sources
 ```
 
-Reihenfolge-Hinweis: Erst A1–A5 umsetzen, dann Job scharf schalten —
+Reihenfolge-Hinweis: Erst A1–A5 umsetzen, dann Job scharf schalten
+(`continue-on-error: true` in `.github/workflows/ci.yml` entfernen) —
 sonst faellt er auf den hier dokumentierten Abweichungen (Lizenzen,
-ggf. z3) rot aus. Optionaler Zwischenschritt: Job zunaechst mit
-`continue-on-error: true` (warnend, analog `perf-budget`) einbauen.
+ggf. z3) rot aus. Der Job laeuft bewusst vorerst warnend (analog
+`perf-budget`).
 `cargo-deny`-Version dabei per `--locked` bzw. fester Versionsnummer
 pinnen, damit DB-Format (`[advisories] version = 2`,
 `[licenses] version = 2`) stabil bleibt.
