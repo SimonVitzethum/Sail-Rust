@@ -1,0 +1,6 @@
+[package]
+name = "sail-real"
+version = "0.1.0"
+edition = "2021"
+description = "Real-number support for the Sail Lean backend: FakeReal default path and mathlib opt-in flag"
+license = "MIT OR Apache-2.0"
