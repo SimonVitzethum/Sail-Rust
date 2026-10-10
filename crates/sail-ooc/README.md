@@ -14,6 +14,7 @@ E3: keine Builds/Tests in Lane-Agents — Verifikation später zentral per Test-
 | `MemoSpills` (`memo.rs`) | Kalte Memo-Spills (z. B. Z3-Ergebnisse) über `sail-cache` (Lane 36), run-übergreifend, Domänen-getrennt |
 | `SummaryTable`/`ShardSummary`/`ExportedSymbols` (`summary.rs`) | Cross-Shard-Summaries für Lanes 08/09; max. 64 KiB pro Eintrag, Bodies nur per `ContentId` referenziert |
 | `CallgraphSummary`/`MonoSummary`/`ConstPropSummary` + `export_*` (`summaries.rs`) | Lane 74: Summary-Typen + Export-Schnittstelle je interprozeduralem Pass (Callgraph/Mono/Const-Prop); Bodies bleiben auf Platte |
+| `OocDriverLoop`/`DriverPhase`/`DriverState`/`DriverStats` (`driver.rs`, Lane 83) | Fahrtüchtige Schleife (holen → Phase → sealen → spillen → weiter); Peak-Budgets je Phase (Lane-14-Format, deklariert), Zustände s. `DRIVER.md` |
 
 ## Warum kein echtes mmap
 
