@@ -21,6 +21,9 @@
 //!   (Lane 36), Keys sind Content-Hashes.
 //! * [`SummaryTable`]/[`ShardSummary`]/[`ExportedSymbols`]:
 //!   Cross-Shard-Summaries fuer Lanes 08/09 (Bodies bleiben auf Platte).
+//! * [`CallgraphSummary`]/[`MonoSummary`]/[`ConstPropSummary`]
+//!   (+ `export_*`): Summary-Typen + Export-Schnittstelle je
+//!   interprozeduralem Pass (Lane 74; Bodies auf Platte).
 //!
 //! Auf Lane 11 ([`sail_shard`]) und Lane 36 ([`sail_cache`]) wird
 //! aufgesetzt (gelesen, nicht gedoppelt); Lane 37 liefert die
@@ -36,6 +39,7 @@ mod barrier;
 mod id;
 mod memo;
 mod summary;
+mod summaries;
 mod warm;
 
 pub use barrier::{BarrierError, HotToken, PhaseBarrier, SealReceipt, ShardPhase};
@@ -43,5 +47,10 @@ pub use id::ContentId;
 pub use memo::{MEMO_DOMAIN_PREFIX, MemoSpills};
 pub use summary::{
     ExportedSymbols, MAX_SUMMARY_BYTES, ShardSummary, SummaryError, SummaryRecord, SummaryTable,
+};
+pub use summaries::{
+    CallFunc, CallgraphSummary, ConstFact, ConstPropSummary, ConstValue, EffectClass,
+    MonoInstance, MonoSummary, callgraph_record, const_prop_record, export_callgraph,
+    export_const_prop, export_mono, mono_record,
 };
 pub use warm::{WARM_BLOB_EXT, WarmError, WarmLayer};
