@@ -21,6 +21,10 @@
 //!   `KOpt` telescope (the `quant_item` shape `TypSchm` expects).
 //! - [`TypeEnv::val_scheme_ast`] / [`TypeEnv::register_scheme_ast`]:
 //!   stored schemes as canonical `TypSchm` nodes.
+//!
+//! Scattered-freeze (Lane 111, see `ENV_COVERAGE.md`): no scattered views
+//! here — open/`impl`/`end` linkage stays in `sail-resolve`; the checker
+//! only lowers *closed* schemes through these two methods.
 
 use sail_ast::{Interner, KOpt, TypSchm};
 
