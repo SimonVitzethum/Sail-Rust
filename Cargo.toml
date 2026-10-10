@@ -18,6 +18,7 @@ members = [
     "crates/sail-lex",
     "crates/sail-prelude",
     "crates/sail-regs",
+    "crates/sail-mapping",
 ]
 resolver = "2"
 
