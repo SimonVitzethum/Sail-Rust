@@ -21,6 +21,14 @@ impl Symbol {
     }
 }
 
+impl std::fmt::Display for Symbol {
+    /// Raw interned id (no interner is available at the call site;
+    /// resolve the text through [`Interner::resolve`]).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Interface shared by all interner backends.
 pub trait Interner: Send + Sync {
     /// Intern `text`, returning its stable handle.
@@ -135,5 +143,11 @@ mod tests {
         assert_eq!(back.resolve(a), Some("foo"));
         assert_eq!(back.resolve(b), Some("bar"));
         assert_eq!(back.len(), 2);
+    }
+
+    #[test]
+    fn symbol_display_prints_raw_id() {
+        assert_eq!(Symbol(42).to_string(), "42");
+        assert_eq!(Symbol::DUMMY.to_string(), u32::MAX.to_string());
     }
 }

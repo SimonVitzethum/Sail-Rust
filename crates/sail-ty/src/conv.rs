@@ -242,6 +242,7 @@ pub fn constraint_from_ast(c: &Constraint, it: &impl Interner) -> Option<NConstr
             Box::new(constraint_from_ast(a, it)?),
             Box::new(constraint_from_ast(b, it)?),
         )),
+        ConstraintKind::Not(x) => Some(NConstraint::Not(Box::new(constraint_from_ast(x, it)?))),
         ConstraintKind::App { .. }
         | ConstraintKind::Id(_)
         | ConstraintKind::Var(_)
@@ -497,5 +498,20 @@ pub fn miniexp_from_ast(e: &Exp, it: &impl Interner) -> Option<MiniExp> {
             Box::new(miniexp_from_ast(else_branch, it)?),
         )),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sail_ast::SimpleInterner;
+
+    #[test]
+    fn not_constraint_roundtrips() {
+        let mut it = SimpleInterner::new();
+        let local = NConstraint::Not(Box::new(NConstraint::True));
+        let ast = constraint_to_ast(&local, &mut it);
+        assert!(matches!(ast.kind, ConstraintKind::Not(_)));
+        assert_eq!(constraint_from_ast(&ast, &it), Some(local));
     }
 }

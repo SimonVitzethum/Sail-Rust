@@ -62,8 +62,8 @@ pub fn pat_from_ast(p: &AstPat, it: &impl Interner) -> Option<Pat> {
             width: None,
             span,
         }),
-        PatKind::Typ { inner, .. } => Some(Pat::Typ {
-            inner: Box::new(pat_from_ast(inner, it)?),
+        PatKind::Typ { pat, .. } => Some(Pat::Typ {
+            inner: Box::new(pat_from_ast(pat, it)?),
             width: None,
             span,
         }),
@@ -82,5 +82,29 @@ pub fn pat_from_ast(p: &AstPat, it: &impl Interner) -> Option<Pat> {
             Some(Pat::VectorConcat { parts: out, span })
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sail_ast::{Name, Node, SimpleInterner, Symbol, TypKind};
+
+    #[test]
+    fn typ_ascription_unwraps_inner_pat() {
+        let it = SimpleInterner::new();
+        let inner: AstPat = Node::dummy(PatKind::Wild);
+        let typ: sail_ast::Typ = Node::dummy(TypKind::Id(Name::dummy(Symbol::DUMMY)));
+        let node: AstPat = Node::dummy(PatKind::Typ {
+            typ,
+            pat: Box::new(inner),
+        });
+        let lowered = pat_from_ast(&node, &it).expect("Typ unwraps to inner");
+        match lowered {
+            Pat::Typ { inner, width: None, span } => {
+                assert_eq!(inner, Box::new(Pat::Wild { span }));
+            }
+            other => panic!("expected Typ ascription, got {other:?}"),
+        }
     }
 }
