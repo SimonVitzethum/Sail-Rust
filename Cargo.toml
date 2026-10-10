@@ -1,3 +1,6 @@
 [workspace]
-members = ["crates/sail-ast"]
+members = [
+    "crates/sail-ast",
+    "crates/sail-parse",
+]
 resolver = "2"
