@@ -1,0 +1,13 @@
+[package]
+name = "sail-sysregs-shard"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.75.0"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "sail-sysregs-shard"
+path = "src/main.rs"
+
+[lints]
+rust.unsafe_code = "forbid"
