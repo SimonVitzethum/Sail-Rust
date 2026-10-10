@@ -1,0 +1,12 @@
+[package]
+name = "sail-rewrite"
+version = "0.1.0"
+edition = "2021"
+description = "Shard-local Lean rewrite passes for the pure-Rust Sail compiler (lane 07)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rayon = "1.10"
+
+[dev-dependencies]
+rayon = "1.10"
