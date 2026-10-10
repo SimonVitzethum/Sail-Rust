@@ -140,7 +140,7 @@ pub fn render_sail_constraint(constraint: &Constraint, interner: &impl Interner)
             render_sail_constraint(a, interner),
             render_sail_constraint(b, interner)
         ),
-        ConstraintKind::Not(x) => format!("~({})", render_sail_constraint(x, interner)),
+        ConstraintKind::Not(x) => format!("(!{})", render_sail_constraint(x, interner)),
         ConstraintKind::App { func, args } => {
             let f = name_text(interner, func).unwrap_or("?");
             let rendered: Vec<String> =

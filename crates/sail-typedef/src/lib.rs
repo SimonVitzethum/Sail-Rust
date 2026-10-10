@@ -803,8 +803,9 @@ impl<I: Interner + ?Sized> Cx<'_, I> {
                 Ok(())
             }
             ConstraintKind::Not(x) => {
-                out.write_str("¬")?;
+                out.write_str("¬(")?;
                 self.print_constraint(out, x)?;
+                out.write_char(')')?;
                 Ok(())
             }
             ConstraintKind::Equal(a, b) => {

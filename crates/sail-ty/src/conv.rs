@@ -514,4 +514,14 @@ mod tests {
         assert!(matches!(ast.kind, ConstraintKind::Not(_)));
         assert_eq!(constraint_from_ast(&ast, &it), Some(local));
     }
+
+    #[test]
+    fn not_roundtrips_through_ast() {
+        let mut it = SimpleInterner::new();
+        let c = NConstraint::Not(Box::new(NConstraint::True));
+        let ast = constraint_to_ast(&c, &mut it);
+        assert!(matches!(ast.kind, ConstraintKind::Not(_)));
+        assert_eq!(constraint_from_ast(&ast, &it), Some(c));
+    }
+    }
 }
