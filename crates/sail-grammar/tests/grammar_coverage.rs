@@ -1,0 +1,496 @@
+//! Rule-coverage tests for the Menhir → LALRPOP grammar port skeleton.
+//!
+//! The LALRPOP tables are not generated yet (see `GRAMMAR.md`), so these
+//! tests pin down what the skeleton stage guarantees:
+//! - the lexer produces the token set of `parser.mly` / `lexer.mll` for
+//!   representative inputs from every syntactic category,
+//! - every AST constructor for the `Exp` / `Pat` / `Typ` / `Def` rules
+//!   exists and round-trips through `Clone` / `PartialEq`,
+//! - the `parse_*` entry points lex their input and report the skeleton
+//!   status instead of silently succeeding.
+
+#![forbid(unsafe_code)]
+
+use sail_grammar::ast::*;
+use sail_grammar::lexer::{Tok, tokenize};
+use sail_grammar::{SKELETON_MSG, parse_def, parse_exp, parse_file, parse_pat, parse_typ};
+
+fn kinds(toks: &[(usize, Tok, usize)]) -> Vec<Tok> {
+    toks.iter().map(|(_, t, _)| t.clone()).collect()
+}
+
+// ---------------------------------------------------------------------------
+// lexer: keywords / definitions
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lex_function_clause_shape() {
+    let toks = tokenize("function foo(x) = x").unwrap();
+    assert_eq!(
+        kinds(&toks),
+        vec![
+            Tok::Function,
+            Tok::Id("foo".to_string()),
+            Tok::Lparen,
+            Tok::Id("x".to_string()),
+            Tok::Rparen,
+            Tok::Eq,
+            Tok::Id("x".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn lex_val_and_effect_tokens() {
+    let toks = tokenize("val foo : pure Nat -> Nat").unwrap();
+    assert_eq!(
+        kinds(&toks),
+        vec![
+            Tok::Val,
+            Tok::Id("foo".to_string()),
+            Tok::Colon,
+            Tok::Pure,
+            Tok::Nat,
+            Tok::MinusGt,
+            Tok::Nat,
+        ]
+    );
+    // `Nat` is a keyword token, `->` maps to `MinusGt`.
+    let toks = tokenize("Nat -> Nat").unwrap();
+    assert_eq!(kinds(&toks), vec![Tok::Nat, Tok::MinusGt, Tok::Nat]);
+}
+
+#[test]
+fn lex_numbers_and_literals() {
+    assert_eq!(kinds(&tokenize("42").unwrap()), vec![Tok::Num("42".to_string())]);
+    assert_eq!(
+        kinds(&tokenize("0b10_01").unwrap()),
+        vec![Tok::Bin("10_01".to_string())]
+    );
+    assert_eq!(
+        kinds(&tokenize("0x1F").unwrap()),
+        vec![Tok::Hex("1F".to_string())]
+    );
+    assert_eq!(
+        kinds(&tokenize("1.5").unwrap()),
+        vec![Tok::Real("1.5".to_string())]
+    );
+    assert_eq!(
+        kinds(&tokenize("\"hi\"").unwrap()),
+        vec![Tok::Str("hi".to_string())]
+    );
+    assert_eq!(kinds(&tokenize("true").unwrap()), vec![Tok::True]);
+    assert_eq!(kinds(&tokenize("()").unwrap()), vec![Tok::Unit]);
+}
+
+#[test]
+fn lex_operators_and_punctuation() {
+    let toks = tokenize("a :: b @ c ^ d + e -> f => g <-> h .. i").unwrap();
+    assert_eq!(
+        kinds(&toks),
+        vec![
+            Tok::Id("a".to_string()),
+            Tok::ColonColon,
+            Tok::Id("b".to_string()),
+            Tok::At,
+            Tok::Id("c".to_string()),
+            Tok::Caret,
+            Tok::Id("d".to_string()),
+            Tok::OpId("+".to_string()),
+            Tok::Id("e".to_string()),
+            Tok::MinusGt,
+            Tok::Id("f".to_string()),
+            Tok::EqGt,
+            Tok::Id("g".to_string()),
+            Tok::Bidir,
+            Tok::Id("h".to_string()),
+            Tok::DotDot,
+            Tok::Id("i".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn lex_tyvar_pow2_and_fixity() {
+    assert_eq!(
+        kinds(&tokenize("'a").unwrap()),
+        vec![Tok::TyVar("'a".to_string())]
+    );
+    assert_eq!(kinds(&tokenize("2^").unwrap()), vec![Tok::TwoCaret]);
+    assert_eq!(
+        kinds(&tokenize("infixl 6 ++").unwrap()),
+        vec![Tok::Fixity(FixAssoc::InfixL, 6, "++".to_string())]
+    );
+}
+
+#[test]
+fn lex_comments_skipped_and_doc_kept() {
+    let toks = tokenize("// line\n/* block /* nested */ */let").unwrap();
+    assert_eq!(kinds(&toks), vec![Tok::Let]);
+    let toks = tokenize("/// doc line\nlet").unwrap();
+    assert_eq!(
+        kinds(&toks),
+        vec![Tok::DocLine(" doc line".to_string()), Tok::Let]
+    );
+}
+
+#[test]
+fn lex_attributes_pragmas_and_strings() {
+    let toks = tokenize("$[foo]").unwrap();
+    // `$[` becomes `Attr`, the closing `]` tokenizes normally.
+    assert_eq!(
+        kinds(&toks),
+        vec![Tok::Attr("foo".to_string()), Tok::Rsquare]
+    );
+    let toks = tokenize("$line 1 \"f.sail\"").unwrap();
+    assert!(matches!(kinds(&toks)[0], Tok::Pragma(_, _)));
+    let toks = tokenize("$pragma { key = 1 }").unwrap();
+    assert!(matches!(kinds(&toks)[0], Tok::StructPragma(_)));
+}
+
+#[test]
+fn lex_error_on_unexpected_character() {
+    let err = tokenize("let `x` = 1").unwrap_err();
+    assert!(err.message.contains("unexpected character"));
+}
+
+// ---------------------------------------------------------------------------
+// AST: literals, kinds, types
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ast_lit_covers_lit_rule() {
+    let lits = vec![
+        Lit::True,
+        Lit::False,
+        Lit::Unit,
+        Lit::Num("3".to_string()),
+        Lit::Zero,
+        Lit::One,
+        Lit::Bin("101".to_string()),
+        Lit::Hex("ff".to_string()),
+        Lit::Str("s".to_string()),
+        Lit::Real("1.5".to_string()),
+    ];
+    for l in &lits {
+        assert_eq!(&l.clone(), l);
+    }
+    assert_eq!(lits.len(), 10);
+}
+
+#[test]
+fn ast_typ_covers_typ_rules() {
+    let id = Typ::Id("bool".to_string());
+    let tup = Typ::Tuple(vec![Typ::Id("int".to_string()), Typ::Wild]);
+    let fun = Typ::Fn(Box::new(Typ::Id("int".to_string())), Box::new(id.clone()));
+    let app = Typ::App("vector".to_string(), vec![Typ::Var("'n".to_string())]);
+    let infix = Typ::Infix(Box::new(InfixChain {
+        prefixes: vec![],
+        head: Typ::Id("int".to_string()),
+        tail: vec![(
+            "+".to_string(),
+            vec![],
+            Typ::Id("nat".to_string()),
+        )],
+    }));
+    let exist = Typ::Exist(
+        vec![KOpt { constant: false, kids: vec!["'n".to_string()], kind: None }],
+        Box::new(Typ::Lit(Lit::True)),
+        Box::new(Typ::Var("'n".to_string())),
+    );
+    let cond = Typ::If(Box::new(id.clone()), Box::new(id.clone()), Box::new(id.clone()));
+    for t in [
+        id,
+        Typ::Wild,
+        Typ::Var("'a".to_string()),
+        Typ::Lit(Lit::Num("8".to_string())),
+        Typ::Dec,
+        Typ::Inc,
+        app,
+        tup,
+        fun,
+        Typ::NSet(vec!["1".to_string(), "2".to_string()]),
+        exist,
+        cond,
+        infix,
+    ] {
+        assert_eq!(t.clone(), t);
+    }
+    // `kind`, `kopt`, `typquant`, `typschm` rules.
+    for k in [Kind::Int, Kind::Nat, Kind::Type, Kind::Order, Kind::Bool] {
+        assert_eq!(k.clone(), k);
+    }
+    let schm = TypSchm {
+        quant: Some(TypQuant { kopts: vec![], constraint: None }),
+        lhs: Typ::Id("int".to_string()),
+        arrow: Arrow::Fn,
+        rhs: Typ::Id("bool".to_string()),
+        effect: None,
+    };
+    assert_eq!(schm.clone(), schm);
+    assert_eq!(Arrow::Bidir.clone(), Arrow::Bidir);
+}
+
+// ---------------------------------------------------------------------------
+// AST: patterns (`pat`, `atomic_pat`, `fpat`, `mpat` …)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ast_pat_covers_pat_rules() {
+    let p_id = Pat::Id("x".to_string());
+    let pats = vec![
+        Pat::Wild,
+        Pat::Lit(Lit::Num("0".to_string())),
+        p_id.clone(),
+        Pat::KidVar("'a".to_string()),
+        Pat::App("Some".to_string(), vec![p_id.clone()]),
+        Pat::VectorSubrange("v".to_string(), "7".to_string(), "0".to_string()),
+        Pat::Tuple(vec![p_id.clone(), Pat::Wild]),
+        Pat::Vector(vec![p_id.clone()]),
+        Pat::List(vec![p_id.clone()]),
+        Pat::Struct(None, vec![FieldPat::Wild]),
+        Pat::Typ(Box::new(p_id.clone()), Typ::Id("int".to_string())),
+        Pat::Infix(Box::new(p_id.clone()), vec![(PatOp::Cons, Pat::Wild)]),
+        Pat::As(Box::new(p_id.clone()), Typ::Id("int".to_string())),
+        Pat::Attr(vec![], Box::new(p_id.clone())),
+    ];
+    assert_eq!(pats.len(), 14);
+    for p in &pats {
+        assert_eq!(&p.clone(), p);
+    }
+    assert_eq!(
+        FieldPat::Field("f".to_string(), Pat::Wild).clone(),
+        FieldPat::Field("f".to_string(), Pat::Wild)
+    );
+    assert_eq!(PatOp::VectorConcat.clone(), PatOp::VectorConcat);
+    assert_eq!(PatOp::StringAppend.clone(), PatOp::StringAppend);
+}
+
+#[test]
+fn ast_mpat_covers_mpat_rules() {
+    let m = MPat::Tuple(vec![MPat::Id("x".to_string())]);
+    let guarded = MPExp { pat: m.clone(), guard: None };
+    assert_eq!(guarded.clone(), guarded);
+    let cl = MapCl::Bidir(guarded.clone(), guarded.clone());
+    assert_eq!(cl.clone(), cl);
+    assert_eq!(
+        MapCl::ForwardsDeprecated(
+            MPExp { pat: m.clone(), guard: None },
+            Exp::Lit(Lit::Unit)
+        )
+        .clone(),
+        MapCl::ForwardsDeprecated(
+            MPExp { pat: m.clone(), guard: None },
+            Exp::Lit(Lit::Unit)
+        )
+    );
+    let def = MapDef { name: "m".to_string(), typschm: None, clauses: vec![cl] };
+    assert_eq!(def.clone(), def);
+    assert_eq!(
+        MPat::As(Box::new(m.clone()), "y".to_string()).clone(),
+        MPat::As(Box::new(m.clone()), "y".to_string())
+    );
+    assert_eq!(
+        MPat::Infix(Box::new(m.clone()), vec![(PatOp::Cons, MPat::Id("t".to_string()))]).clone(),
+        MPat::Infix(Box::new(m.clone()), vec![(PatOp::Cons, MPat::Id("t".to_string()))])
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AST: expressions (`exp`, `atomic_exp`, `case`, `loop_exp` …)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ast_exp_covers_exp_rules() {
+    let x = Exp::Id("x".to_string());
+    let unit = Exp::Lit(Lit::Unit);
+    let exps = vec![
+        x.clone(),
+        Exp::Ref("r".to_string()),
+        unit.clone(),
+        Exp::Undef,
+        Exp::Config("arch".to_string()),
+        Exp::Exit(Box::new(unit.clone())),
+        Exp::Sizeof(Typ::Id("int".to_string())),
+        Exp::Constraint(Typ::Id("c".to_string())),
+        Exp::Assert(Box::new(x.clone()), Box::new(unit.clone())),
+        Exp::App("f".to_string(), vec![x.clone()]),
+        Exp::Suffix(Box::new(x.clone()), vec![ExpSuffix::Field("f".to_string())]),
+        Exp::Assign(Box::new(x.clone()), Box::new(unit.clone())),
+        Exp::Let(Pat::Wild, Box::new(unit.clone()), Box::new(x.clone())),
+        Exp::Var(
+            Box::new(x.clone()),
+            Box::new(unit.clone()),
+            Box::new(x.clone()),
+        ),
+        Exp::Block(vec![x.clone()]),
+        Exp::Return(Box::new(x.clone())),
+        Exp::Throw(Box::new(x.clone())),
+        Exp::If(Box::new(x.clone()), Box::new(x.clone()), Box::new(x.clone())),
+        Exp::Match(Box::new(x.clone()), vec![PatExp::Exp(Pat::Wild, Box::new(x.clone()))]),
+        Exp::Try(Box::new(x.clone()), vec![]),
+        Exp::For(
+            Box::new(LoopHead {
+                var: "i".to_string(),
+                from: Box::new(unit.clone()),
+                ord: LoopOrd::To,
+                to: Box::new(unit.clone()),
+                step: None,
+                order: None,
+            }),
+            Box::new(x.clone()),
+        ),
+        Exp::Loop(LoopKind::While, Measure::None, Box::new(x.clone()), Box::new(x.clone())),
+        Exp::Infix(Box::new(InfixChain {
+            prefixes: vec![],
+            head: x.clone(),
+            tail: vec![],
+        })),
+        Exp::Struct(None, vec![FieldExp::Punning("f".to_string())]),
+        Exp::StructUpdate(Box::new(x.clone()), vec![]),
+        Exp::Vector(vec![x.clone()]),
+        Exp::VectorUpdate(
+            Box::new(x.clone()),
+            vec![VectorUpdate::Single(Box::new(x.clone()), Box::new(x.clone()))],
+        ),
+        Exp::List(vec![x.clone()]),
+        Exp::Tuple(vec![x.clone()]),
+        Exp::InternalPlet(Pat::Wild, Box::new(x.clone()), Box::new(x.clone())),
+        Exp::InternalReturn(Box::new(x.clone())),
+        Exp::InternalAssume(Typ::Id("c".to_string()), Box::new(x.clone())),
+        Exp::Attr(vec![], Box::new(x.clone())),
+    ];
+    assert_eq!(exps.len(), 33);
+    for e in &exps {
+        assert_eq!(&e.clone(), e);
+    }
+    assert_eq!(LoopOrd::Downto.clone(), LoopOrd::Downto);
+    assert_eq!(LoopKind::Until.clone(), LoopKind::Until);
+    assert_eq!(
+        Measure::Some(Box::new(unit.clone())).clone(),
+        Measure::Some(Box::new(unit.clone()))
+    );
+    assert_eq!(
+        PatExp::When(Pat::Wild, Box::new(x.clone()), Box::new(x.clone())).clone(),
+        PatExp::When(Pat::Wild, Box::new(x.clone()), Box::new(x.clone()))
+    );
+    assert_eq!(
+        ExpSuffix::Call("f".to_string(), vec![]).clone(),
+        ExpSuffix::Call("f".to_string(), vec![])
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AST: definitions (`def_aux`, `type_def`, `val_spec_def` …)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ast_def_covers_def_rules() {
+    let funcl = Funcl {
+        annots: vec![],
+        name: "f".to_string(),
+        pat: GuardedPat::Plain(Pat::Wild),
+        typ: None,
+        body: PatExpBody::Exp(Box::new(Exp::Lit(Lit::Unit))),
+    };
+    let fundef = FunDef { rec_measure: None, head: funcl.clone(), tail: vec![] };
+    assert_eq!(
+        GuardedPat::Guarded(Pat::Wild, Exp::Lit(Lit::Unit)).clone(),
+        GuardedPat::Guarded(Pat::Wild, Exp::Lit(Lit::Unit))
+    );
+    let tq = TypQuant { kopts: vec![], constraint: None };
+    let schm = TypSchm {
+        quant: None,
+        lhs: Typ::Id("int".to_string()),
+        arrow: Arrow::Fn,
+        rhs: Typ::Id("int".to_string()),
+        effect: None,
+    };
+    let auxes = vec![
+        DefAux::Fun(fundef.clone()),
+        DefAux::Map(MapDef { name: "m".to_string(), typschm: None, clauses: vec![] }),
+        DefAux::Impl(funcl.clone()),
+        DefAux::Fixity(FixAssoc::InfixL, 6, "+".to_string()),
+        DefAux::Val(ValSpec {
+            name: "f".to_string(),
+            typschm: schm.clone(),
+            ext: Some(Extern { pure: None, bindings: vec![] }),
+        }),
+        DefAux::Outcome(
+            OutcomeSpec { name: "o".to_string(), typschm: schm.clone(), param: None },
+            vec![],
+        ),
+        DefAux::Instantiation("i".to_string(), vec![Subst::Id("a".to_string(), "b".to_string())]),
+        DefAux::Type(TypeDef::Record("r".to_string(), tq.clone(), vec![])),
+        DefAux::Type(TypeDef::Enum("e".to_string(), vec![], vec![])),
+        DefAux::Type(TypeDef::Variant("u".to_string(), tq.clone(), vec![], false)),
+        DefAux::Type(TypeDef::Bitfield("b".to_string(), Typ::Id("t".to_string()), vec![])),
+        DefAux::Type(TypeDef::Abbrev("a".to_string(), tq.clone(), None, Typ::Id("t".to_string()))),
+        DefAux::Type(TypeDef::Abstract("a".to_string(), Kind::Type, None)),
+        DefAux::Let(Pat::Wild, Exp::Lit(Lit::Unit)),
+        DefAux::Register(RegDef {
+            name: "r".to_string(),
+            typ: Typ::Id("t".to_string()),
+            init: None,
+        }),
+        DefAux::Overload("o".to_string(), vec!["f".to_string()]),
+        DefAux::Default(DefaultDef { kind: Kind::Order, order: Typ::Inc }),
+        DefAux::Constraint(Typ::Id("c".to_string())),
+        DefAux::MutRec(vec![fundef.clone()]),
+        DefAux::Pragma(Pragma::Line("line".to_string(), "1".to_string())),
+        DefAux::Measure("f".to_string(), Pat::Wild, Exp::Lit(Lit::Unit)),
+        DefAux::LoopMeasures("f".to_string(), vec![(LoopKind::While, Exp::Lit(Lit::Unit))]),
+        DefAux::Scattered(ScatteredDef::End("f".to_string())),
+    ];
+    assert_eq!(auxes.len(), 23);
+    for a in &auxes {
+        let d = Def::Aux(a.clone());
+        assert_eq!(d.clone(), d);
+    }
+    // `def` wrappers + scattered/type sub-rules.
+    let inner = Def::Aux(DefAux::Constraint(Typ::Id("c".to_string())));
+    assert_eq!(Def::Private(Box::new(inner.clone())), Def::Private(Box::new(inner.clone())));
+    assert_eq!(
+        Def::Doc(DocComment::Line("d".to_string()), Box::new(inner.clone())),
+        Def::Doc(DocComment::Line("d".to_string()), Box::new(inner.clone()))
+    );
+    assert_eq!(
+        Def::Attr(vec![Attr { name: "a".to_string(), data: None }], Box::new(inner.clone())),
+        Def::Attr(vec![Attr { name: "a".to_string(), data: None }], Box::new(inner))
+    );
+    assert_eq!(
+        ScatteredDef::FunClause(funcl.clone()).clone(),
+        ScatteredDef::FunClause(funcl.clone())
+    );
+    assert_eq!(
+        TypeUnion::Id("c".to_string(), Typ::Id("t".to_string())).clone(),
+        TypeUnion::Id("c".to_string(), Typ::Id("t".to_string()))
+    );
+    assert_eq!(
+        IndexRange::Range(Typ::Id("a".to_string()), Typ::Id("b".to_string())).clone(),
+        IndexRange::Range(Typ::Id("a".to_string()), Typ::Id("b".to_string()))
+    );
+    assert_eq!(
+        AttrData::List(vec![AttrData::Bool(true)]).clone(),
+        AttrData::List(vec![AttrData::Bool(true)])
+    );
+}
+
+// ---------------------------------------------------------------------------
+// skeleton entry points
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_entry_points_report_skeleton_after_lexing() {
+    // Lexically valid inputs reach the skeleton notice …
+    assert_eq!(parse_file("function f(x) = x").unwrap_err(), SKELETON_MSG);
+    assert_eq!(parse_typ("int").unwrap_err(), SKELETON_MSG);
+    assert_eq!(parse_def("function f(x) = x").unwrap_err(), SKELETON_MSG);
+    assert_eq!(parse_exp("1 + 2").unwrap_err(), SKELETON_MSG);
+    assert_eq!(parse_pat("Some(x)").unwrap_err(), SKELETON_MSG);
+    // … while lexically invalid inputs report the lex error instead.
+    let err = parse_exp("`nope`").unwrap_err();
+    assert!(err.contains("unexpected character"), "got: {err}");
+    let err = parse_file("let `x` = 1").unwrap_err();
+    assert!(err.contains("unexpected character"), "got: {err}");
+}

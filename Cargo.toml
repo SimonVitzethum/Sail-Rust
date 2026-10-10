@@ -26,6 +26,7 @@ members = [
     "crates/sail-extern",
     "crates/sail-termination",
     "crates/sail-loops",
+    "crates/sail-grammar",
 ]
 resolver = "2"
 
