@@ -1,7 +1,7 @@
 //! Printer tests (streaming writer assertions).
 
 use super::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn printer() -> LeanPrinter {
     LeanPrinter::with_default()
@@ -36,7 +36,7 @@ fn prints_core_types() {
         ),
         (
             Typ::Vector(Box::new(Typ::Bool), Box::new(Nexp::Var("n".into()))),
-            "(Vector Bool n)",
+            "(Vector Bool k_n)",
         ),
     ];
     for (ty, want) in cases {
@@ -49,6 +49,8 @@ fn prints_core_types() {
 #[test]
 fn prints_nexp_with_precedence() {
     // `a + b * c` must not gain parens; `2 ^ (n-1)` shapes correctly.
+    // Size variables are kids and print with the OCaml `k_` prefix
+    // (`doc_kid`, `pretty_print_lean.ml#136-139`).
     let mut buf = String::new();
     let n = Nexp::Sum(
         Box::new(Nexp::Var("a".into())),
@@ -58,7 +60,7 @@ fn prints_nexp_with_precedence() {
         )),
     );
     LeanPrinter::print_nexp(&mut buf, &n).unwrap();
-    assert_eq!(buf, "a + b * c");
+    assert_eq!(buf, "k_a + k_b * k_c");
 
     buf.clear();
     let m = Nexp::Pow2(Box::new(Nexp::Minus(
@@ -66,11 +68,16 @@ fn prints_nexp_with_precedence() {
         Box::new(Nexp::Const(1)),
     )));
     LeanPrinter::print_nexp(&mut buf, &m).unwrap();
-    assert_eq!(buf, "2 ^ (n - 1)");
+    assert_eq!(buf, "2 ^ (k_n - 1)");
 
     buf.clear();
     LeanPrinter::print_nexp(&mut buf, &Nexp::Const(-3)).unwrap();
     assert_eq!(buf, "(-3)");
+
+    // A quoted kid spells the same.
+    buf.clear();
+    LeanPrinter::print_nexp(&mut buf, &Nexp::Var("'n".into())).unwrap();
+    assert_eq!(buf, "k_n");
 }
 
 #[test]
@@ -229,6 +236,10 @@ fn options_drive_prefixes() {
         line_width: 120,
         noncomputable: BTreeSet::from(["nc".to_string()]),
         partial: BTreeSet::from(["nc".to_string()]),
+        ctor_renames: BTreeMap::new(),
+        enum_members: BTreeSet::new(),
+        defined_functions: BTreeSet::new(),
+        out_name_camel: String::new(),
     };
     let p = LeanPrinter::new(opts);
     let sig = FunSig {
@@ -240,4 +251,169 @@ fn options_drive_prefixes() {
     };
     let got = p.render_fun_stub(&sig, Some("0")).unwrap();
     assert_eq!(got, "noncomputable partial def nc : Nat := 0\n");
+}
+
+#[test]
+fn fixup_match_id_matches_ocaml() {
+    // `pretty_print_lean.ml#506-510`.
+    assert_eq!(fixup_match_id("Some"), "some");
+    assert_eq!(fixup_match_id("None"), "none");
+    assert_eq!(fixup_match_id("early_return"), "throw");
+    assert_eq!(fixup_match_id("plain"), "plain");
+    assert_eq!(fixup_match_id("main"), "sail_main");
+}
+
+#[test]
+fn sanitize_matches_ocaml_fix_id() {
+    // `pretty_print_lean.ml#98-107`: `?`, `#`, OCaml keywords.
+    let p = printer();
+    let mut buf = String::new();
+    p.print_id_ctor(&mut buf, "a#b", false).unwrap();
+    assert_eq!(buf, "a_b");
+    buf.clear();
+    p.print_id_ctor(&mut buf, "?", false).unwrap();
+    assert_eq!(buf, "questionMark");
+    buf.clear();
+    p.print_id_ctor(&mut buf, "rec", false).unwrap();
+    assert_eq!(buf, "rec'");
+    buf.clear();
+    p.print_id_ctor(&mut buf, "_lean_wildcard", false).unwrap();
+    assert_eq!(buf, "_");
+    buf.clear();
+    p.print_id_ctor(&mut buf, "main", false).unwrap();
+    assert_eq!(buf, "sail_main");
+}
+
+#[test]
+fn print_lit_width_flag_matches_ocaml() {
+    // Expressions: `width:true` (#861); patterns: `width:false` (#525).
+    let p = printer();
+    let hex = Lit::Hex { digits: "ff".into(), width: Some(8) };
+    let mut buf = String::new();
+    p.print_lit(&mut buf, &hex).unwrap();
+    assert_eq!(buf, "0xFF#8");
+    buf.clear();
+    p.print_lit_with_width(&mut buf, &hex, false).unwrap();
+    assert_eq!(buf, "0xFF");
+    let bit = Lit::Bin { bits: "1".into(), width: Some(1) };
+    buf.clear();
+    p.print_lit_with_width(&mut buf, &bit, false).unwrap();
+    assert_eq!(buf, "1");
+}
+
+#[test]
+fn string_escapes_match_ocaml_lean_escape_string() {
+    // `lean_escape_string` (#395) ersetzt nur `"`.
+    let p = printer();
+    let mut buf = String::new();
+    p.print_lit(&mut buf, &Lit::Str("a\"b\\c".into())).unwrap();
+    assert_eq!(buf, "\"a\\\"b\\c\"");
+}
+
+#[test]
+fn kid_names_gain_k_prefix() {
+    // `doc_kid` (#136-139).
+    assert_eq!(print_kid_name("'n"), "k_n");
+    assert_eq!(print_kid_name("n"), "k_n");
+    let p = printer();
+    let mut buf = String::new();
+    p.print_typ(&mut buf, &Typ::Var("'n".into())).unwrap();
+    assert_eq!(buf, "k_n");
+}
+
+#[test]
+fn ctor_renames_and_shadowing_match_ocaml() {
+    // `rename_ctor` (#109-115) + `compute_ctor_renames` (#1673-1686).
+    let mut renames = BTreeMap::new();
+    renames.insert("C".to_string(), "T".to_string());
+    let opts = Options {
+        line_width: 100,
+        noncomputable: BTreeSet::new(),
+        partial: BTreeSet::new(),
+        ctor_renames: renames,
+        enum_members: BTreeSet::new(),
+        defined_functions: BTreeSet::from(["shadowed".to_string()]),
+        out_name_camel: "Out".to_string(),
+    };
+    let p = LeanPrinter::new(opts);
+    let mut buf = String::new();
+    p.print_id_ctor(&mut buf, "C", true).unwrap();
+    assert_eq!(buf, "T.C");
+    buf.clear();
+    p.print_id_ctor(&mut buf, "C", false).unwrap();
+    assert_eq!(buf, "C");
+    buf.clear();
+    p.print_id_ctor(&mut buf, "plain", true).unwrap();
+    assert_eq!(buf, "plain");
+    // `doc_id_typ_ctor` (#128-134).
+    buf.clear();
+    p.print_id_typ_ctor(&mut buf, "shadowed").unwrap();
+    assert_eq!(buf, "Out.shadowed");
+    buf.clear();
+    p.print_id_typ_ctor(&mut buf, "free").unwrap();
+    assert_eq!(buf, "free");
+}
+
+#[test]
+fn conv_vector_order_bitvector_and_bool_drop() {
+    use sail_ast::{
+        Interner, Name, NExpKind, SimpleInterner, TypArgKind, TypKind,
+    };
+
+    let mut it = SimpleInterner::new();
+    let name = |it: &mut SimpleInterner, text: &str| Name::dummy(it.intern(text));
+
+    // `vector(8, bool)` — Länge zuerst — wird `(Vector Bool 8)` (#302-304).
+    let eight = sail_ast::Node::dummy(NExpKind::Constant("8".to_string()));
+    let bool_ty = sail_ast::Node::dummy(TypKind::Id(name(&mut it, "bool")));
+    let vector = sail_ast::Node::dummy(TypKind::App {
+        name: name(&mut it, "vector"),
+        args: vec![
+            sail_ast::Node::dummy(TypArgKind::NExp(eight)),
+            sail_ast::Node::dummy(TypArgKind::Typ(bool_ty)),
+        ],
+    });
+    let lowered = crate::conv::typ_from_ast(&vector, &it).unwrap();
+    assert_eq!(
+        lowered,
+        Typ::Vector(Box::new(Typ::Bool), Box::new(Nexp::Const(8)))
+    );
+    let mut buf = String::new();
+    printer().print_typ(&mut buf, &lowered).unwrap();
+    assert_eq!(buf, "(Vector Bool 8)");
+
+    // `bits(n)` → `(BitVec n)` (#311-313); `bit` → `(BitVec 1)`.
+    let n = sail_ast::Node::dummy(NExpKind::Var(it.intern("n")));
+    let bits = sail_ast::Node::dummy(TypKind::App {
+        name: name(&mut it, "bits"),
+        args: vec![sail_ast::Node::dummy(TypArgKind::NExp(n))],
+    });
+    assert_eq!(
+        crate::conv::typ_from_ast(&bits, &it).unwrap(),
+        Typ::BitVec(Box::new(Nexp::Var("n".into())))
+    );
+    let bit = sail_ast::Node::dummy(TypKind::Id(name(&mut it, "bit")));
+    assert_eq!(
+        crate::conv::typ_from_ast(&bit, &it).unwrap(),
+        Typ::Bit("bit".into())
+    );
+
+    // `A_bool`-Argumente entfallen (`Only_relevant`, #290-296).
+    let t = sail_ast::Node::dummy(TypKind::Id(name(&mut it, "bool")));
+    let nc = sail_ast::Node::dummy(sail_ast::ConstraintKind::True);
+    let app = sail_ast::Node::dummy(TypKind::App {
+        name: name(&mut it, "mylist"),
+        args: vec![
+            sail_ast::Node::dummy(TypArgKind::Typ(t)),
+            sail_ast::Node::dummy(TypArgKind::Bool(Box::new(nc))),
+        ],
+    });
+    assert_eq!(
+        crate::conv::typ_from_ast(&app, &it).unwrap(),
+        Typ::Named {
+            name: "mylist".to_string(),
+            args: vec![crate::TypArg::Typ(Typ::Bool)],
+            span: sail_ast::Span::DUMMY,
+        }
+    );
 }
