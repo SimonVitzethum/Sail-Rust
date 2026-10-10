@@ -102,6 +102,21 @@ tmux -V                            # tmux installiert?
 
 Referenz-Umgebung (Lane-51-Abnahme): systemd 262, tmux 3.8.
 
+## Rig-Triage (Lane 117, keine Last)
+
+Neuestes `limited-run`-Log lesen, Errors clustern (Art / Datei:Zeile /
+Owner-Lane), `TRIAGE.md` schreiben:
+
+```sh
+./scripts/rig-triage.py                  # neuestes Log -> stdout + TRIAGE.md
+./scripts/rig-triage.py --no-write       # nur Issue-Liste zeigen
+./scripts/rig-triage.py --log DATEI --top 50   # bestimmtes Log, mehr Cluster
+```
+
+Nur stdlib-Python, startet nichts (E3); Owner-Lanes aus
+`docs/ARCHITECTURE.md` §2. Ohne vorhandenes `logs/limited-run-*.log`
+meldet das Skript Exit 2 statt leerer Triage.
+
 ## Dateien
 
 - `scripts/limited-run.sh` — Wrapper `systemd-run --user --scope
@@ -109,4 +124,6 @@ Referenz-Umgebung (Lane-51-Abnahme): systemd 262, tmux 3.8.
   Exit-Code-Weitergabe, Log-Rotation.
 - `scripts/tmux-test.sh` — Session-/Fenster-Layout, ein Fenster je Run,
   Cap-/Rotations-Weitergabe an `limited-run.sh` plus Pre-Prune (Lane 92).
+- `scripts/rig-triage.py` — Log→Issues: clustert Errors des neuesten
+  `limited-run`-Logs (Art/Datei:Zeile/Owner), schreibt `TRIAGE.md` (Lane 117).
 - `lanes/51-test-rig.md` — Lane-Spec.
