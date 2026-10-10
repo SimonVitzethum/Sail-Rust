@@ -2,5 +2,6 @@
 members = [
     "crates/sail-ast",
     "crates/sail-parse",
+    "crates/sail-resolve",
 ]
 resolver = "2"
