@@ -6,6 +6,14 @@
 //! `crates/sail-parse/AST_NEEDED.md` for the expected `sail-ast`
 //! interface and the migration path.
 //!
+//! Lane 61 status (MIGRATION.md #4–#7): [`Def`]/[`ParsedFile`]/
+//! [`SpannedDef`]/[`PragmaArg`] are retained — bodies are raw source
+//! text and only a real expression/type grammar (Lane 02) can lower
+//! them onto `sail_ast::DefKind` with genuine `Exp`/`Typ` nodes, and
+//! `sail-cli` consumes this skeleton API. Spans are already canonical
+//! (`sail_ast::Span`, #3); the crate depends on `sail-ast` so the swap
+//! seam is wired.
+//!
 //! Design (mirrors `DEF_*` in `sail/src/lib/extraction/Ast.ml`):
 //! * Every definition keeps its leading keyword span, its header data
 //!   (names, fixity, pragma args — cheap, extracted) and its raw source

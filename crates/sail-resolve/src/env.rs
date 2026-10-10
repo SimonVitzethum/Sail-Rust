@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use crate::mini_ast::Span;
+use sail_ast::Span;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeEntry {

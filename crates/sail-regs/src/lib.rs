@@ -11,6 +11,13 @@
 //! `sail-ast` `DefKind::Register(DecSpec)` (`typ`, `name`,
 //! `init: Option<Exp>`); see `REGS_NEEDED.md`. The local minimal types
 //! below are plain data so this crate builds standalone.
+//!
+//! Lane 61 status (MIGRATION.md #26/#27): [`MinimalDef`]/[`SailTyp`] are
+//! retained — renderings (`bits(64)` spellings, optional init text) need
+//! the Lane-10 `TypKind` pretty-printer and a real expression grammar
+//! before they can lower onto `DecSpec{typ: Typ, init: Option<Exp>}`,
+//! and `sail-cli` consumes this input API. The crate depends on
+//! `sail-ast` so the swap seam is wired.
 
 use sail_diag::{DiagCode, SailError, Span};
 use std::collections::BTreeMap;
