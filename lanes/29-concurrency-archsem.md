@@ -10,3 +10,8 @@ Concurrency-Interface V1/V2 (`ArchSem`, `Arch`-Instanz, `mem_acc`-Familie).
 
 ## Done
 - `tiny-arm` Arch-Instanz baut.
+
+## Single-Master-Regel (bindend, siehe `../DECISIONS.md` E1)
+- Lean ist Master (mit Beweisen), Rust ist Spiegel — keine eigene Speichermodell-Semantik in dieser Lane.
+- Jede Abweichung per Differentialtest belegen; Drift blockiert Merge.
+- Gilt auch gegenüber Gabbros arm/Arm/Mem-Track: kein zweites Modell.
