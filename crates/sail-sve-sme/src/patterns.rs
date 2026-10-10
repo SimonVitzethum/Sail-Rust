@@ -1,20 +1,29 @@
 //! Vector-pattern/loop catalog and shard-stage fail list for SVE/SME shards.
 //!
 //! Analysis runs on the *source slice* of each definition (via its
-//! [`crate::span::Span`], never on copied bodies): one comment- and
-//! string-aware token pass per definition, so peak memory stays proportional
-//! to a single definition plus the hit/fail records.
+//! canonical [`sail_parse::Span`] byte range, never on copied bodies): one
+//! comment- and string-aware token pass per definition, so peak memory stays
+//! proportional to a single definition plus the hit/fail records.
+//!
+//! The scanner (`sail-parse`, Lane 115 single truth) yields bare byte-range
+//! spans (`FileId(0)` per file); line/column for hits/fails is resolved once
+//! through the central [`sail_ast::FileTable`] and stored alongside the span
+//! so reports render `path:line:col-line:col` without re-slicing.
 //!
 //! * [`PatternKind`] — vector/loop idioms prioritized by this lane
 //!   (`foreach`, predicated execution, element/mask/register accessors,
-//!   VL dispatch, ...), each hit carrying an exact [`crate::span::Span`].
+//!   VL dispatch, ...), each hit carrying an exact span.
 //! * [`FailKind`] — constructs the shard stage cannot lower (KEIN Full-Build
 //!   in this lane), each with the owning lane that must handle it.
 //!   Fail counts are *sites*, not definitions.
 
-use crate::mini_ast::{Def, ParsedFile};
-use crate::span::{ParseError, Span};
+use sail_ast::{FileId, FileTable, Span};
+use sail_parse::{Def, ParseError, ParsedFile};
 use std::collections::BTreeMap;
+
+fn sat_u32(v: usize) -> u32 {
+    u32::try_from(v).unwrap_or(u32::MAX)
+}
 
 /// A vector/loop idiom found in a shard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -184,24 +193,58 @@ impl FailKind {
     }
 }
 
-/// One pattern occurrence with its exact source span.
+/// One pattern occurrence with its exact source span (canonical byte range
+/// plus resolved 1-based display lines/cols; columns count bytes, matching
+/// the `sail-ast` span contract — both shards are ASCII, so byte cols ==
+/// char cols).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
     pub kind: PatternKind,
     pub span: Span,
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
     /// Name of the enclosing `val`/`function` definition.
     pub def_name: String,
 }
 
-/// One non-lowerable site with its exact source span.
+impl Hit {
+    /// Display form `path:sl:sc-el:ec` for reports and tests.
+    #[must_use]
+    pub fn loc(&self, path: &str) -> String {
+        format!(
+            "{}:{}:{}-{}:{}",
+            path, self.start_line, self.start_col, self.end_line, self.end_col
+        )
+    }
+}
+
+/// One non-lowerable site with its exact source span (same span convention
+/// as [`Hit`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fail {
     pub kind: FailKind,
     pub span: Span,
+    pub start_line: u32,
+    pub start_col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
     /// Name of the enclosing `val`/`function` definition.
     pub def_name: String,
     /// Matched source text plus what is missing.
     pub detail: String,
+}
+
+impl Fail {
+    /// Display form `path:sl:sc-el:ec` for reports and tests.
+    #[must_use]
+    pub fn loc(&self, path: &str) -> String {
+        format!(
+            "{}:{}:{}-{}:{}",
+            path, self.start_line, self.start_col, self.end_line, self.end_col
+        )
+    }
 }
 
 /// Analysis result for one shard file.
@@ -232,53 +275,6 @@ impl FileReport {
     pub fn total_fails(&self) -> u64 {
         self.fail_counts.values().sum()
     }
-}
-
-/// Byte offset of every line start; maps absolute byte offsets to
-/// 1-based (line, col). Columns count bytes, matching the vendored parser
-/// convention (both shards are ASCII, so byte cols == char cols).
-#[derive(Debug, Clone)]
-struct LineTable {
-    starts: Vec<usize>,
-}
-
-impl LineTable {
-    fn new(src: &str) -> Self {
-        let bytes = src.as_bytes();
-        let mut starts = Vec::with_capacity(volving_estimate(src.len()));
-        starts.push(0);
-        for (i, b) in bytes.iter().enumerate() {
-            if *b == b'\n' && i + 1 < bytes.len() {
-                starts.push(i + 1);
-            }
-        }
-        LineTable { starts }
-    }
-
-    /// 1-based (line, col) for an absolute byte offset.
-    fn line_col(&self, off: usize) -> (u32, u32) {
-        let idx = self.starts.partition_point(|s| *s <= off);
-        let line_idx = idx.saturating_sub(1);
-        let line = (line_idx + 1) as u32;
-        let col = (off.saturating_sub(self.starts[line_idx]) + 1) as u32;
-        (line, col)
-    }
-
-    fn span(&self, file: &str, start: usize, end: usize) -> Span {
-        let (sl, sc) = self.line_col(start);
-        let (el, ec) = self.line_col(end);
-        Span::new(file, start, end, sl, sc, el, ec)
-    }
-
-    fn line_count(&self) -> u64 {
-        self.starts.len() as u64
-    }
-}
-
-fn volving_estimate(len: usize) -> usize {
-    // ~40 bytes/line average for these shards; over-allocating slightly is
-    // cheaper than re-allocating a 138k-entry table.
-    (len / 32).max(16)
 }
 
 /// One lexical token with offsets relative to the scanned slice.
@@ -411,16 +407,33 @@ fn is_val_def(def: &Def) -> bool {
 }
 
 struct Ctx<'a> {
-    file: &'a str,
-    lines: &'a LineTable,
+    table: &'a FileTable,
+    fid: FileId,
     report: FileReport,
 }
 
 impl Ctx<'_> {
+    fn site(&self, def_span_start: usize, start: usize, end: usize) -> (Span, u32, u32, u32, u32) {
+        let abs_start = def_span_start + start;
+        let abs_end = def_span_start + end;
+        let span = Span::new(self.fid, sat_u32(abs_start), sat_u32(abs_end));
+        let (sl, sc) = self.table.line_col(self.fid, sat_u32(abs_start)).unwrap_or((1, 1));
+        let (el, ec) = self.table.line_col(self.fid, sat_u32(abs_end)).unwrap_or((1, 1));
+        (span, sl, sc, el, ec)
+    }
+
     fn push_hit(&mut self, kind: PatternKind, def_span_start: usize, tok: &Tok<'_>, def: &str) {
-        let span = self.lines.span(self.file, def_span_start + tok.start, def_span_start + tok.end);
+        let (span, sl, sc, el, ec) = self.site(def_span_start, tok.start, tok.end);
         *self.report.pattern_counts.entry(kind.as_str()).or_insert(0) += 1;
-        self.report.hits.push(Hit { kind, span, def_name: def.to_owned() });
+        self.report.hits.push(Hit {
+            kind,
+            span,
+            start_line: sl,
+            start_col: sc,
+            end_line: el,
+            end_col: ec,
+            def_name: def.to_owned(),
+        });
     }
 
     fn push_hit_span(
@@ -431,9 +444,17 @@ impl Ctx<'_> {
         end: usize,
         def: &str,
     ) {
-        let span = self.lines.span(self.file, def_span_start + start, def_span_start + end);
+        let (span, sl, sc, el, ec) = self.site(def_span_start, start, end);
         *self.report.pattern_counts.entry(kind.as_str()).or_insert(0) += 1;
-        self.report.hits.push(Hit { kind, span, def_name: def.to_owned() });
+        self.report.hits.push(Hit {
+            kind,
+            span,
+            start_line: sl,
+            start_col: sc,
+            end_line: el,
+            end_col: ec,
+            def_name: def.to_owned(),
+        });
     }
 
     fn push_fail(
@@ -445,11 +466,15 @@ impl Ctx<'_> {
         def: &str,
         detail: &str,
     ) {
-        let span = self.lines.span(self.file, def_span_start + start, def_span_start + end);
+        let (span, sl, sc, el, ec) = self.site(def_span_start, start, end);
         *self.report.fail_counts.entry(kind.as_str()).or_insert(0) += 1;
         self.report.fails.push(Fail {
             kind,
             span,
+            start_line: sl,
+            start_col: sc,
+            end_line: el,
+            end_col: ec,
             def_name: def.to_owned(),
             detail: detail.to_owned(),
         });
@@ -458,12 +483,16 @@ impl Ctx<'_> {
 
 /// Analyze one already-parsed file. `src` must be the exact input `parsed`
 /// was built from (spans index into it); it is only borrowed, never copied.
+/// The single-file table maps `FileId(0)` (the `sail-parse` per-file
+/// convention) to `path`, so hit/fail spans resolve against it.
 pub fn analyze_parsed(path: &str, src: &str, parsed: &ParsedFile) -> FileReport {
-    let lines = LineTable::new(src);
-    let line_count = lines.line_count();
+    let mut table = FileTable::new();
+    let fid = table.add(path, src);
+    debug_assert_eq!(fid, FileId(0));
+    let line_count = table.get(fid).map(|f| u64::from(f.line_count())).unwrap_or(0);
     let mut ctx = Ctx {
-        file: path,
-        lines: &lines,
+        table: &table,
+        fid,
         report: FileReport {
             path: path.to_owned(),
             bytes: src.len(),
@@ -491,8 +520,8 @@ pub fn analyze_parsed(path: &str, src: &str, parsed: &ParsedFile) -> FileReport 
             _ => ctx.report.other_count += 1,
         }
         let name = def_name(&sd.def);
-        let base = sd.span.start_byte;
-        let end = sd.span.end_byte.min(src.len());
+        let base = sd.span.start as usize;
+        let end = (sd.span.end as usize).min(src.len());
         if base >= end || base >= src.len() {
             continue;
         }
@@ -834,9 +863,9 @@ fn analyze_def(ctx: &mut Ctx<'_>, def: &Def, name: &str, base: usize, slice: &st
     }
 }
 
-/// Parse one shard file and analyze it in a single pass.
+/// Parse one shard file and analyze it in a single pass (scanner: `sail-parse`).
 pub fn analyze_file(path: &str, src: &str) -> Result<FileReport, ParseError> {
-    let parsed = crate::parser::parse_file(path, src)?;
+    let parsed = sail_parse::parse_file(path, src)?;
     Ok(analyze_parsed(path, src, &parsed))
 }
 
@@ -863,7 +892,7 @@ pub fn analyze_files_parallel(inputs: &[(&str, &str)]) -> Vec<Result<FileReport,
                 (
                     usize::MAX,
                     Err(ParseError::new(
-                        Span::point("?", 0, 1, 1),
+                        Span::new(FileId(0), 0, 0),
                         "analyzer thread panicked",
                     )),
                 )
@@ -881,13 +910,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn line_table_basic() {
-        let lt = LineTable::new("ab\ncde\nf");
-        assert_eq!(lt.line_col(0), (1, 1));
-        assert_eq!(lt.line_col(2), (1, 3));
-        assert_eq!(lt.line_col(3), (2, 1));
-        assert_eq!(lt.line_col(7), (3, 1));
-        assert_eq!(lt.line_count(), 3);
+    fn file_table_resolves_hit_offsets() {
+        let mut t = FileTable::new();
+        let fid = t.add("s.sail", "ab\ncde\nf");
+        assert_eq!(t.line_col(fid, 0), Some((1, 1)));
+        assert_eq!(t.line_col(fid, 2), Some((1, 3)));
+        assert_eq!(t.line_col(fid, 3), Some((2, 1)));
+        assert_eq!(t.line_col(fid, 7), Some((3, 1)));
+        assert_eq!(t.get(fid).map(|f| f.line_count()), Some(3));
     }
 
     #[test]

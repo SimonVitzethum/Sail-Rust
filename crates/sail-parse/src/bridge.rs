@@ -104,12 +104,8 @@ impl Bridge {
     }
 }
 
-fn sat_u32(b: usize) -> u32 {
-    u32::try_from(b).unwrap_or(u32::MAX)
-}
-
 fn cvt_span(fid: FileId, s: &MiniSpan) -> AstSpan {
-    AstSpan::new(fid, sat_u32(s.start_byte), sat_u32(s.end_byte.max(s.start_byte)))
+    AstSpan::new(fid, s.start, s.end.max(s.start))
 }
 
 /// Byte-Heuristik (Fallback): kein Ident-Start → Operator-Name.
