@@ -64,6 +64,17 @@ lifted onto the Sail rules in this lane:
    private rule alongside (only used inside `MPExp`; the wiring below
    never listed an `MPatParser`).
 
+6. **`RDefBody` strict (Lane 87, E4 `Block` shape)**: the old
+    `(<RIdDef> ",")* <RIdDef>?` list was nullable AND used as `RDefBody?`
+    in the `bitfield` arm, so `{}` had two trees (Rig: local ambiguity
+    at `sail.lalrpop:1288:5-1291:5`). The list is now strict — non-empty,
+    right-recursive, explicit trailing-, arm, exactly the validated
+    `Block` shape from the E4 toy — while the use site keeps `RDefBody?`,
+    so `{}` still parses (via `None`) and every non-empty body parses to
+    the same single tree as before. Accepted language unchanged (no
+    corpus impact; `tests/grammar_coverage.rs` pins `{}` / trailing-,
+    shapes on the Rig).
+
 ## D1/D2 — unchanged, evaluated per corpus
 
 - **D1** (`AtomicIndexRange`: `Typ (".." Typ)?` competing with tuple `,`

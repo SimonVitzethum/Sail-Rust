@@ -22,6 +22,12 @@
 //     way to write `(a..b)` / `(a@b)`. Bare `a..b` / `a@b` still parse;
 //     parenthesised ranges are rejected (see GRAMMAR.md; 0 occurrences in
 //     `sail-lib`, checked by `tests/corpus.rs` on the Rig).
+//   - `RDefBody` strict (Lane 87, E4 `Block` shape): non-empty,
+//     right-recursive, explicit trailing-"," arm. The old nullable
+//     `(<RIdDef> ",")* <RIdDef>?` list was used as `RDefBody?`, so `{}`
+//     had two trees (Rig local ambiguity at 1288:5-1291:5); the use site
+//     keeps `?`, so `{}` still parses, unambiguously, and the accepted
+//     language is unchanged.
 //   - D1/D2 (`Typ` index-range vs tuple, paren vs tuple): UNCHANGED, pending
 //     corpus evaluation via `tests/corpus.rs` (see GRAMMAR.md).
 // - Every Menhir `A | A B` common-prefix rule is factored to `A B?` with
@@ -1284,11 +1290,20 @@ RIdDef: RegField = {
     <n:Ident> ":" <r:IndexRange> => RegField::Item(n, r),
 }
 
+// `r_id_def` list: E4-strict (Lane 87) — non-empty and right-recursive with
+// an explicit trailing-"," arm (exactly the validated `Block` shape), so a
+// trailing `,` parses but the empty body does not. The use site keeps
+// `RDefBody?`, hence `{}` still parses — via exactly one tree (the old
+// nullable `(<RIdDef> ",")* <RIdDef>?` list gave `{}` two trees: Rig local
+// ambiguity at 1288:5-1291:5). Accepted language is unchanged.
 RDefBody: Vec<RegField> = {
-    <mut v:(<RIdDef> ",")*> <last:RIdDef?> => {
-        if let Some(r) = last { v.push(r); }
+    <i:RIdDef> => vec![i],
+    <i:RIdDef> "," <b:RDefBody> => {
+        let mut v = vec![i];
+        v.extend(b);
         v
     },
+    <i:RIdDef> "," => vec![i],
 }
 
 // ---------------------------------------------------------------------------
