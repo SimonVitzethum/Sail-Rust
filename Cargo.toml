@@ -30,6 +30,7 @@ members = [
     "crates/sail-except",
     "crates/sail-archsem",
     "crates/sail-sysregs-shard",
+    "crates/sail-sve-sme",
 ]
 resolver = "2"
 

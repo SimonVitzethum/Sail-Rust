@@ -1,0 +1,13 @@
+[package]
+name = "sail-sve-sme"
+version = "0.1.0"
+edition = "2021"
+description = "ARMv9 SVE/SME instruction shards: definition-level parse, vector-pattern catalog, span-annotated fail list (Lane 32)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_sve_sme"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
