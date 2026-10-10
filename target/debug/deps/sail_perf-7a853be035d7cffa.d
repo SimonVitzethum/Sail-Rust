@@ -1,0 +1,9 @@
+/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-15/target/debug/deps/sail_perf-7a853be035d7cffa.d: crates/sail-perf/src/lib.rs Cargo.toml
+
+/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-15/target/debug/deps/libsail_perf-7a853be035d7cffa.rmeta: crates/sail-perf/src/lib.rs Cargo.toml
+
+crates/sail-perf/src/lib.rs:
+Cargo.toml:
+
+# env-dep:CLIPPY_ARGS=-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__
+# env-dep:CLIPPY_CONF_DIR
