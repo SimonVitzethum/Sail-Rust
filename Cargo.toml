@@ -15,6 +15,7 @@ members = [
     "crates/sail-perf",
     "crates/sail-shard",
     "crates/sail-cli",
+    "crates/sail-lex",
 ]
 resolver = "2"
 
