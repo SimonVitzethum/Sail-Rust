@@ -9,6 +9,14 @@
 //! bitvector externs from `sail/lib/vector.sail`; `_lean_div` is `/`.
 
 /// Classification of a Lean extern name.
+///
+/// Lane-127-Wahrheit: die kanonische Operator-Tabelle ist
+/// [`sail_extern::Op`]/[`sail_extern::op_of_extern`] (`sail-extern`,
+/// Lane 25, vollstaendig gegen `test/lean/extern*.expected.lean`
+/// gepinnt). [`LeanOp`] bleibt als kompatible Sicht mit der
+/// historischen `Option<&str>`-Signatur (`None` = kein Extern =
+/// [`LeanOp::NotOp`); neue Aufrufer nutzen `sail-extern` direkt.
+/// Paritaet pinnt `tests/op_parity.rs` (Code, E3: ungeprueft).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LeanOp {
     /// Binary operator, e.g. `+i`.
@@ -74,13 +82,19 @@ pub fn unop_prefix(lean_extern: Option<&str>) -> Option<&'static str> {
 
 /// Render `(lhs op rhs)`; the backend always parenthesizes operator
 /// applications.
+///
+/// Kanonische Implementierung: [`sail_extern::render_binop`]; diese
+/// Huelle delegiert nur (kein Drift moeglich).
 pub fn render_binop(op: &str, lhs: &str, rhs: &str) -> String {
-    format!("({lhs} {op} {rhs})")
+    sail_extern::render_binop(op, lhs, rhs)
 }
 
 /// Render `(op operand)` for prefix operators.
+///
+/// Kanonische Implementierung: [`sail_extern::render_unop`]; diese
+/// Huelle delegiert nur (kein Drift moeglich).
 pub fn render_unop(op: &str, operand: &str) -> String {
-    format!("({op} {operand})")
+    sail_extern::render_unop(op, operand)
 }
 
 #[cfg(test)]
