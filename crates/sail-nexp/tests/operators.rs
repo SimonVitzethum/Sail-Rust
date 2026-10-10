@@ -5,10 +5,10 @@
 
 use sail_ast::{Interner as _, SimpleInterner};
 use sail_nexp::{
-    int_kind, lean_type_name, normalize, normalize_constraint, provably_neg, provably_neg_in,
-    provably_nneg, provably_nneg_in, provably_nonpos, provably_nonpos_in, provably_nonzero,
-    provably_nonzero_in, provably_pos, provably_pos_in, provably_zero, provably_zero_in, simplify,
-    simplify_constraint, Facts, Kid, NConstraint, NExp, TypArg,
+    int_kind, int_kind_in, lean_type_name, normalize, normalize_constraint, provably_neg,
+    provably_neg_in, provably_nneg, provably_nneg_in, provably_nonpos, provably_nonpos_in,
+    provably_nonzero, provably_nonzero_in, provably_pos, provably_pos_in, provably_zero,
+    provably_zero_in, simplify, simplify_constraint, Facts, Kid, NConstraint, NExp, TypArg,
 };
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -162,7 +162,14 @@ fn provably_family_covers_all_operators() {
     assert!(provably_nonpos(&c(0)) && provably_zero(&c(0)) && provably_nonzero(&c(2)));
     assert!(!provably_zero(&c(2)) && !provably_nonzero(&c(0)));
     // App-Operatoren ohne Kontext.
-    assert!(provably_pos(&NExp::Exp(Box::new(v(n)))));
+    // Lane 124: `2^n` mit offenem `n` ist nicht positiv-beweisbar (ein
+    // negativer Exponent denotiert nicht einmal); mit Konstante oder
+    // Kontext schon.
+    assert!(!provably_pos(&NExp::Exp(Box::new(v(n)))));
+    assert!(!provably_nneg(&NExp::Exp(Box::new(v(n)))));
+    assert!(provably_pos(&NExp::Exp(Box::new(c(3)))));
+    let nneg = Facts::new().with_lower(n, 0);
+    assert!(provably_pos_in(&NExp::Exp(Box::new(v(n))), &nneg));
     assert!(provably_nneg(&NExp::abs(v(n))));
     assert!(!provably_pos(&NExp::abs(v(n))));
     assert!(provably_nneg(&NExp::modulo(v(n), c(4))));
@@ -285,14 +292,19 @@ fn simplify_identities_per_operator() {
     // Sum/Times/Minus/Neg/Exp/Div/Mod/Abs/If-Matrix je einmal.
     assert_eq!(simplify(&NExp::Sum(Box::new(v(n)), Box::new(c(0)))), v(n));
     assert_eq!(simplify(&NExp::Times(Box::new(v(n)), Box::new(c(1)))), v(n));
-    assert_eq!(simplify(&NExp::Times(Box::new(v(n)), Box::new(c(0)))), c(0));
-    assert_eq!(simplify(&NExp::Minus(Box::new(v(n)), Box::new(v(n)))), c(0));
+    // Lane 124: `0 * x`, `a - a` und `x % 1` falten nicht mehr (kein
+    // OCaml-Gegenstueck; wuerden `None` in `Some` verwandeln).
+    let zero_times = NExp::Times(Box::new(v(n)), Box::new(c(0)));
+    assert_eq!(simplify(&zero_times), zero_times);
+    let self_minus = NExp::Minus(Box::new(v(n)), Box::new(v(n)));
+    assert_eq!(simplify(&self_minus), self_minus);
+    let mod_one = NExp::modulo(v(n), c(1));
+    assert_eq!(simplify(&mod_one), mod_one);
     assert_eq!(simplify(&NExp::Neg(Box::new(NExp::Neg(Box::new(v(n)))))), v(n));
     assert_eq!(simplify(&NExp::Neg(Box::new(c(3)))), c(-3));
     assert_eq!(simplify(&NExp::Exp(Box::new(c(0)))), c(1));
     assert_eq!(simplify(&NExp::div(v(n), c(1))), v(n));
     assert_eq!(simplify(&NExp::div(c(7), c(2))), c(3));
-    assert_eq!(simplify(&NExp::modulo(v(n), c(1))), c(0));
     assert_eq!(simplify(&NExp::abs(c(-4))), c(4));
     assert_eq!(
         simplify(&NExp::Times(
@@ -305,7 +317,8 @@ fn simplify_identities_per_operator() {
     let x = NExp::Times(Box::new(v(b)), Box::new(v(a)));
     let y = NExp::Times(Box::new(v(a)), Box::new(v(b)));
     assert_eq!(normalize(&x), normalize(&y));
-    // Constraint-Faltung je Vergleich.
+    // Constraint-Faltung je Vergleich: nur Konstanten falten (Lane 124:
+    // kein `a cmp a`, keine gemischten Sorten).
     let wrap = |e: NExp| Box::new(TypArg::NExp(e));
     assert_eq!(
         simplify_constraint(&NConstraint::Equal(wrap(c(2)), wrap(c(2)))),
@@ -315,22 +328,14 @@ fn simplify_identities_per_operator() {
         simplify_constraint(&NConstraint::NotEqual(wrap(c(2)), wrap(c(2)))),
         NConstraint::False
     );
-    assert_eq!(
-        simplify_constraint(&NConstraint::Ge(Box::new(v(n)), Box::new(v(n)))),
-        NConstraint::True
-    );
-    assert_eq!(
-        simplify_constraint(&NConstraint::Gt(Box::new(v(n)), Box::new(v(n)))),
-        NConstraint::False
-    );
-    assert_eq!(
-        simplify_constraint(&NConstraint::Le(Box::new(v(n)), Box::new(v(n)))),
-        NConstraint::True
-    );
-    assert_eq!(
-        simplify_constraint(&NConstraint::Lt(Box::new(v(n)), Box::new(v(n)))),
-        NConstraint::False
-    );
+    for cc in [
+        NConstraint::Ge(Box::new(v(n)), Box::new(v(n))),
+        NConstraint::Gt(Box::new(v(n)), Box::new(v(n))),
+        NConstraint::Le(Box::new(v(n)), Box::new(v(n))),
+        NConstraint::Lt(Box::new(v(n)), Box::new(v(n))),
+    ] {
+        assert_eq!(simplify_constraint(&cc), cc);
+    }
     assert_eq!(
         simplify_constraint(&NConstraint::Set(Box::new(c(2)), vec![3, 2, 2])),
         NConstraint::True
@@ -350,7 +355,15 @@ fn lean_mapping_per_operator() {
     use sail_nexp::IntKind;
     assert_eq!(lean_type_name(&c(0)), "Nat");
     assert_eq!(lean_type_name(&c(-1)), "Int");
-    assert_eq!(lean_type_name(&NExp::Exp(Box::new(v(n)))), "Nat");
+    // Lane 124: offener Exponent => `Int` (kein unbelegtes `Nat`);
+    // belegter Exponent (Konstante/Kontext) => `Nat`.
+    assert_eq!(lean_type_name(&NExp::Exp(Box::new(v(n)))), "Int");
+    assert_eq!(lean_type_name(&NExp::Exp(Box::new(c(4)))), "Nat");
+    let backed = Facts::new().with_lower(n, 0);
+    assert_eq!(
+        int_kind_in(&NExp::Exp(Box::new(v(n))), &backed),
+        IntKind::Nat
+    );
     assert_eq!(lean_type_name(&NExp::abs(v(n))), "Nat");
     assert_eq!(lean_type_name(&NExp::Neg(Box::new(c(1)))), "Int");
     assert_eq!(int_kind(&v(n)), IntKind::Int);

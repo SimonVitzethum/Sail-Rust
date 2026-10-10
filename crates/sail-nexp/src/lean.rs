@@ -91,7 +91,18 @@ mod tests {
     #[test]
     fn shapes_map() {
         let kid = n();
-        assert_eq!(lean_type_name(&NExp::Exp(Box::new(NExp::Var(kid)))), "Nat");
+        // Lane 124: an open exponent backs no positivity (`Int`); with
+        // a backed exponent (`Facts`) or a constant, `2^x` is `Nat`.
+        assert_eq!(lean_type_name(&NExp::Exp(Box::new(NExp::Var(kid)))), "Int");
+        assert_eq!(
+            lean_type_name(&NExp::Exp(Box::new(NExp::Constant(3)))),
+            "Nat"
+        );
+        let f = Facts::new().with_lower(kid, 0);
+        assert_eq!(
+            lean_type_name_in(&NExp::Exp(Box::new(NExp::Var(kid))), &f),
+            "Nat"
+        );
         assert_eq!(lean_type_name(&NExp::abs(NExp::Var(kid))), "Nat");
         assert_eq!(
             lean_type_name(&NExp::Neg(Box::new(NExp::Constant(1)))),

@@ -744,10 +744,10 @@ impl NConstraint {
 ///   under every total environment.
 /// - `(NExp, NExp)` and `(Bool, Bool)` pairs compare by recursive
 ///   valuation.
-/// - Mixed sorts are never equal (`Some(false)`): different `typ_arg`
-///   constructors cannot denote the same value.
-/// - Syntactically different types stay conservative (`None`): type
-///   identity has no numeric valuation.
+/// - Mixed sorts and syntactically different types stay conservative
+///   (`None`): a static `false` would be a proof about a possibly
+///   ill-formed goal (OCaml's `constraint_simp` leaves it unfolded;
+///   the solver decides it if it ever arrives well-formed).
 fn typarg_eq(a: &TypArg, b: &TypArg, env: &BTreeMap<Kid, i128>) -> Option<bool> {
     if a == b {
         return Some(true);
@@ -755,8 +755,7 @@ fn typarg_eq(a: &TypArg, b: &TypArg, env: &BTreeMap<Kid, i128>) -> Option<bool> 
     match (a, b) {
         (TypArg::NExp(x), TypArg::NExp(y)) => Some(x.eval(env)? == y.eval(env)?),
         (TypArg::Bool(x), TypArg::Bool(y)) => Some(x.eval(env)? == y.eval(env)?),
-        (TypArg::Typ(_), TypArg::Typ(_)) => None,
-        _ => Some(false),
+        _ => None,
     }
 }
 

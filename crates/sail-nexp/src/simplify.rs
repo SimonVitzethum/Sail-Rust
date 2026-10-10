@@ -8,12 +8,17 @@
 //! operands of associative-commutative `Sum`/`Times` for a canonical
 //! syntactic form.
 //!
-//! Semantics contract: simplification never changes a *defined* value —
-//! if `e.eval(env) == Some(v)` then `simplify(e).eval(env) == Some(v)`
-//! (and likewise for [`normalize`]). Rules such as `n * 0 -> 0` may turn
-//! an *undefined* valuation (`None` from an unbound variable) into a
-//! defined one; under total environments evaluation is preserved
-//! exactly.
+//! Semantics contract: simplification preserves [`NExp::eval`] exactly —
+//! for every environment, `simplify(e).eval(env) == e.eval(env)`,
+//! *including* `None` (unbound variables, division by zero, overflow).
+//! Rules that OCaml's `nexp_simp`/`constraint_simp` (`ast_util.ml`) lack
+//! (`0 * x -> 0`, `a - a -> 0`, `x >= x -> True`, `if c then t else t ->
+//! t`, `x % 1 -> 0`, `abs(2^x) -> 2^x`, empty-`Set` folding,
+//! mixed-sort equality folding) are deliberately absent: under a partial
+//! valuation they turn `None` into `Some`, and in the SMT (total-`Int`)
+//! reading they belong to the solver, not to a syntactic rewrite. The
+//! same holds for [`normalize`]/[`normalize_constraint`], which only
+//! iterate this pass plus order-canonicalization.
 
 use std::borrow::Cow;
 
@@ -54,17 +59,17 @@ pub fn simplify_cow(e: &NExp) -> Cow<'_, NExp> {
                 && matches!(tc, Cow::Borrowed(_))
                 && matches!(bc, Cow::Borrowed(_));
             if all_borrowed {
-                // Children untouched: only the `True`/`False`/dedup rules
-                // can still fire (checked on refs, no allocation).
+                // Children untouched: only the `True`/`False` rules can
+                // still fire (checked on refs, no allocation). There is
+                // deliberately no `t == b -> t` rule (OCaml has none;
+                // with an undefined condition it would turn `None` into
+                // `Some`).
                 let is_true = matches!(cc.as_ref(), NConstraint::True);
                 let is_false = matches!(cc.as_ref(), NConstraint::False);
-                let same = tc.as_ref() == bc.as_ref();
                 if is_true {
                     tc
                 } else if is_false {
                     bc
-                } else if same {
-                    tc
                 } else {
                     Cow::Borrowed(e)
                 }
@@ -73,7 +78,6 @@ pub fn simplify_cow(e: &NExp) -> Cow<'_, NExp> {
                 Cow::Owned(match c {
                     NConstraint::True => t,
                     NConstraint::False => b,
-                    _ if t == b => t,
                     _ => NExp::If(Box::new(c), Box::new(t), Box::new(b)),
                 })
             }
@@ -171,11 +175,11 @@ fn sum_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a, N
     Cow::Owned(sum_owned(a.into_owned(), b.into_owned()))
 }
 
-/// Owned `minus` kernel: the pre-Lane-90 `minus` body, verbatim in behaviour.
+/// Owned `minus` kernel: constant folding, `x - 0`, `0 - x` and the
+/// `(x + c1) - c2` chain rule. There is deliberately no `a - a -> 0`
+/// rule (OCaml's `nexp_simp` has none; with an exceptional `a` such as
+/// `1 div 0` it would turn `None` into `Some(0)`).
 fn minus_owned(a: NExp, b: NExp) -> NExp {
-    if a == b {
-        return NExp::Constant(0);
-    }
     match (a, b) {
         (NExp::Constant(x), NExp::Constant(y)) => match x.checked_sub(y) {
             Some(v) => NExp::Constant(v),
@@ -203,11 +207,9 @@ fn minus_owned(a: NExp, b: NExp) -> NExp {
 
 /// Join already-simplified `minus` children (see [`sum_join`]).
 fn minus_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a, NExp> {
-    // `x - 0 -> x` returns the child directly.
+    // `x - 0 -> x` returns the child directly. There is no `a - a -> 0`
+    // shortcut (see [`minus_owned`]).
     let take_a = is_zero(b.as_ref());
-    // `a - a -> 0` fires on refs (covers the kernel's early return,
-    // including the all-constant case, with identical values).
-    let same = a.as_ref() == b.as_ref();
     let folds = match (a.as_ref(), b.as_ref()) {
         (NExp::Constant(_), NExp::Constant(_)) => true,
         (NExp::Sum(_, c1), NExp::Constant(_)) => matches!(&**c1, NExp::Constant(_)),
@@ -217,9 +219,6 @@ fn minus_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a,
     let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
     if take_a {
         return a;
-    }
-    if same {
-        return Cow::Owned(NExp::Constant(0));
     }
     if !folds {
         return if unchanged {
@@ -231,14 +230,17 @@ fn minus_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a,
     Cow::Owned(minus_owned(a.into_owned(), b.into_owned()))
 }
 
-/// Owned `times` kernel: the pre-Lane-90 `times` body, verbatim in behaviour.
+/// Owned `times` kernel: constant folding, `1`-identities, `(-1) * x`
+/// and `(-a) * (-b)` (all `None`-preserving and exact). There is
+/// deliberately no `0 * x -> 0` rule (OCaml's `nexp_simp` has none;
+/// with an exceptional `x` such as `1 div 0` it would turn `None`
+/// into `Some(0)`).
 fn times_owned(a: NExp, b: NExp) -> NExp {
     match (a, b) {
         (NExp::Constant(x), NExp::Constant(y)) => match x.checked_mul(y) {
             Some(v) => NExp::Constant(v),
             None => NExp::Times(Box::new(NExp::Constant(x)), Box::new(NExp::Constant(y))),
         },
-        (x, y) if is_zero(&x) || is_zero(&y) => NExp::Constant(0),
         (x, y) if is_one(&x) => y,
         (x, y) if is_one(&y) => x,
         // (-1) * x -> -x
@@ -255,7 +257,6 @@ fn times_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a,
     // every `times_owned` arm (`1 * 1` reaches `1` either way).
     let take_b = is_one(a.as_ref());
     let take_a = is_one(b.as_ref());
-    let zero = is_zero(a.as_ref()) || is_zero(b.as_ref());
     let folds = matches!(
         (a.as_ref(), b.as_ref()),
         (NExp::Constant(_), NExp::Constant(_))
@@ -269,9 +270,6 @@ fn times_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a,
     }
     if take_a {
         return a;
-    }
-    if zero {
-        return Cow::Owned(NExp::Constant(0));
     }
     if !folds {
         return if unchanged {
@@ -360,7 +358,9 @@ fn app_folds(f: &str, args: &[NExp]) -> bool {
         "mod" => match args {
             [a, b] => match (num(a), num(b)) {
                 (Some(x), Some(y)) => x.checked_rem(y).is_some(),
-                _ => is_one(b) || (is_zero(a) && matches!(num(b), Some(d) if d != 0)),
+                // No `x % 1 -> 0` rule (same partiality reason as
+                // `0 * x`; OCaml folds constants only).
+                _ => is_zero(a) && matches!(num(b), Some(d) if d != 0),
             },
             _ => false,
         },
@@ -368,11 +368,12 @@ fn app_folds(f: &str, args: &[NExp]) -> bool {
             [a] => match num(a) {
                 // `checked_abs` fails only for `i128::MIN` (rebuilds).
                 Some(v) => v.checked_abs().is_some(),
-                // Nested `abs` unwraps one level, `2^x` is returned as-is;
-                // anything else rebuilds identically.
+                // Nested `abs` unwraps one level; anything else rebuilds
+                // identically. There is deliberately no
+                // `abs(2^x) -> 2^x` rule: it claims `2^x >= 0` without a
+                // backed premise (OCaml folds `abs` constants only).
                 None => {
                     matches!(a, NExp::App(g, _) if g.as_str() == "abs")
-                        || matches!(a, NExp::Exp(_))
                 }
             },
             _ => false,
@@ -412,7 +413,6 @@ fn simplify_app(f: &str, args: Vec<NExp>) -> NExp {
                     Some(v) => NExp::Constant(v),
                     None => NExp::modulo(NExp::Constant(x), NExp::Constant(y)),
                 },
-                _ if is_one(&b) => NExp::Constant(0),
                 _ if is_zero(&a) && matches!(num(&b), Some(d) if d != 0) => {
                     NExp::Constant(0)
                 }
@@ -427,11 +427,11 @@ fn simplify_app(f: &str, args: Vec<NExp>) -> NExp {
                     None => NExp::abs(NExp::Constant(v)),
                 },
                 None => match a {
-                    // abs is idempotent on applications of abs and on 2^x.
+                    // abs is idempotent on applications of abs (exact:
+                    // `abs(abs(x))` and `abs(x)` agree on `None` too).
                     NExp::App(g, inner) if g == "abs" => {
                         NExp::abs(inner.into_iter().next().unwrap_or(NExp::Constant(0)))
                     }
-                    NExp::Exp(_) => a,
                     NExp::Constant(_) => unreachable!(),
                     _ => NExp::abs(a),
                 },
@@ -489,9 +489,10 @@ pub fn simplify_constraint_cow(c: &NConstraint) -> Cow<'_, NConstraint> {
                     NConstraint::False
                 });
             }
-            if vs.is_empty() {
-                return Cow::Owned(NConstraint::False);
-            }
+            // No `[] -> False` fold for a non-constant member: OCaml's
+            // `constraint_simp` folds `NC_set` only against constants,
+            // and with an undefined member it would turn `None` into
+            // `Some(false)`.
             if matches!(rn, Cow::Borrowed(_)) && is_sorted_dedup(vs) {
                 // Unchanged child and an already-canonical set: also spares
                 // the `vs.clone()` the old pass did unconditionally.
@@ -558,8 +559,11 @@ fn is_sorted_dedup(vs: &[i128]) -> bool {
 /// (`a == b` first, then the fold), extended per sort:
 /// - `(NExp, NExp)`: constant fold (as before);
 /// - `(Bool, Bool)`: `True`/`False`-literal fold;
-/// - mixed sorts: never equal (different `typ_arg` constructors);
-/// - `(Typ, Typ)`: only the `a == b` rule fires (conservative).
+/// - mixed sorts and `(Typ, Typ)`: never folded (stay open). Different
+///   `typ_arg` constructors cannot denote the same value, but claiming
+///   `False` statically would be a proof about a possibly ill-formed
+///   goal; OCaml's `constraint_simp` leaves such goals unfolded, and
+///   the solver decides them if they ever arrive well-formed.
 fn eq_join<'a>(
     orig: &'a NConstraint,
     a: Cow<'a, TypArg>,
@@ -582,8 +586,8 @@ fn eq_join<'a>(
             _ => None,
         },
         (TypArg::Typ(_), TypArg::Typ(_)) => None,
-        // Mixed sorts are never equal.
-        _ => Some(false),
+        // Mixed sorts stay open (see above).
+        _ => None,
     };
     let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
     if provably_same {
@@ -862,9 +866,11 @@ fn or_join<'a>(
 
 /// Join already-simplified comparison children.
 ///
-/// Replaces the pre-Lane-90 `simplify_cmp` (same decisions, same odd
-/// `a == b` rule: constant for every operator, `True` iff `decide` is
-/// reflexive). An untouched node is borrowed instead of rebuilt.
+/// Constant-vs-constant folds only (like OCaml's `constraint_simp`).
+/// There is deliberately no `a == b` rule (`x >= x -> True` and
+/// friends): with an exceptional `a` such as `1 div 0` it would turn
+/// `None` into `Some`. An untouched node is borrowed instead of
+/// rebuilt.
 fn cmp_join<'a>(
     orig: &'a NConstraint,
     a: Cow<'a, NExp>,
@@ -872,22 +878,11 @@ fn cmp_join<'a>(
     decide: impl Fn(i128, i128) -> bool,
     rebuild: fn(Box<NExp>, Box<NExp>) -> NConstraint,
 ) -> Cow<'a, NConstraint> {
-    // `a == b` was checked before the numeric fold in the old body.
-    let provably_same = a.as_ref() == b.as_ref();
     let decided = match (num(a.as_ref()), num(b.as_ref())) {
         (Some(x), Some(y)) => Some(decide(x, y)),
         _ => None,
     };
     let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
-    if provably_same {
-        // A `cmp` of a value with itself is constant for every
-        // comparison operator (mirrors the old body exactly).
-        return Cow::Owned(if decide(1, 1) && decide(0, 0) {
-            NConstraint::True
-        } else {
-            NConstraint::False
-        });
-    }
     if let Some(v) = decided {
         return Cow::Owned(if v {
             NConstraint::True
@@ -1197,22 +1192,78 @@ mod tests {
         let (n, _m, _a, _b) = kids();
         assert_eq!(simplify(&Sum(Box::new(v(n)), Box::new(c(0)))), v(n));
         assert_eq!(simplify(&Times(Box::new(v(n)), Box::new(c(1)))), v(n));
-        assert_eq!(simplify(&Times(Box::new(v(n)), Box::new(c(0)))), c(0));
-        assert_eq!(simplify(&Minus(Box::new(v(n)), Box::new(v(n)))), c(0));
         assert_eq!(simplify(&Neg(Box::new(Neg(Box::new(v(n)))))), v(n));
     }
 
     #[test]
-    fn if_true_false_branches() {
-        let (n, _m, _a, b) = kids();
-        let t = NExp::If(Box::new(NConstraint::True), Box::new(c(1)), Box::new(c(2)));
-        assert_eq!(simplify(&t), c(1));
-        let same = NExp::If(
-            Box::new(NConstraint::Var(b)),
+    fn unsound_folds_are_gone() {
+        // Lane 124: rewrites without an OCaml (`nexp_simp`/
+        // `constraint_simp`) counterpart stay unfolded, so `eval` is
+        // preserved exactly (including `None` under partial envs).
+        let (n, _m, _a, _b) = kids();
+        let keep: Vec<NExp> = vec![
+            // `0 * x -> 0` would hide exceptional `x` (`1 div 0`).
+            Times(Box::new(c(0)), Box::new(v(n))),
+            Times(Box::new(v(n)), Box::new(c(0))),
+            // `a - a -> 0` likewise.
+            Minus(Box::new(v(n)), Box::new(v(n))),
+            // `x % 1 -> 0` likewise.
+            NExp::modulo(v(n), c(1)),
+            // `abs(2^x) -> 2^x` claims `2^x >= 0` unbacked.
+            NExp::abs(NExp::Exp(Box::new(v(n)))),
+        ];
+        for e in &keep {
+            assert_eq!(simplify(e), *e, "must stay unfolded: {e:?}");
+        }
+        let empty: BTreeMap<Kid, i128> = BTreeMap::new();
+        for e in &keep {
+            assert_eq!(simplify(e).eval(&empty), None, "eval stays None: {e:?}");
+        }
+        // Same for constraints: self-comparisons, non-constant empty
+        // `Set`, mixed-sort equality (plus `if`-dedup below, which is an
+        // `NExp`).
+        let wrap = |e: NExp| Box::new(TypArg::NExp(e));
+        let keep_c: Vec<NConstraint> = vec![
+            NConstraint::Ge(Box::new(v(n)), Box::new(v(n))),
+            NConstraint::Gt(Box::new(v(n)), Box::new(v(n))),
+            NConstraint::Le(Box::new(v(n)), Box::new(v(n))),
+            NConstraint::Lt(Box::new(v(n)), Box::new(v(n))),
+            NConstraint::Set(Box::new(v(n)), vec![]),
+            NConstraint::Equal(wrap(v(n)), Box::new(TypArg::Bool(Box::new(NConstraint::True)))),
+            NConstraint::NotEqual(wrap(v(n)), Box::new(TypArg::Bool(Box::new(NConstraint::True)))),
+        ];
+        for cc in &keep_c {
+            assert_eq!(simplify_constraint(cc), *cc, "must stay unfolded: {cc:?}");
+        }
+        for cc in &keep_c {
+            assert_eq!(
+                simplify_constraint(cc).eval(&empty),
+                cc.eval(&empty),
+                "constraint eval preserved: {cc:?}"
+            );
+        }
+        // `if c then t else t -> t` is gone as well.
+        let ite = NExp::If(
+            Box::new(NConstraint::Var(n)),
             Box::new(v(n)),
             Box::new(v(n)),
         );
-        assert_eq!(simplify(&same), v(n));
+        assert_eq!(simplify(&ite), ite);
+        assert_eq!(simplify(&ite).eval(&empty), ite.eval(&empty));
+    }
+
+    #[test]
+    fn if_true_false_branches() {
+        let (_n, _m, _a, b) = kids();
+        let t = NExp::If(Box::new(NConstraint::True), Box::new(c(1)), Box::new(c(2)));
+        assert_eq!(simplify(&t), c(1));
+        // No `t == b -> t` dedup (Lane 124): identical branches stay.
+        let same = NExp::If(
+            Box::new(NConstraint::Var(b)),
+            Box::new(c(1)),
+            Box::new(c(1)),
+        );
+        assert_eq!(simplify(&same), same);
     }
 
     #[test]
@@ -1248,11 +1299,13 @@ mod tests {
     #[test]
     fn normalize_preserves_semantics() {
         let (n, _m, _a, _b) = kids();
+        // Lane 124: `0 * n` no longer folds (stays a `Times`); only the
+        // constant half still folds to `0`, absorbed by `x + 0 -> x`.
         let e = Sum(
             Box::new(Times(Box::new(v(n)), Box::new(c(0)))),
             Box::new(Minus(Box::new(c(5)), Box::new(c(5)))),
         );
-        assert_eq!(normalize(&e), c(0));
+        assert_eq!(normalize(&e), Times(Box::new(v(n)), Box::new(c(0))));
         let env: BTreeMap<Kid, i128> = [(n, 7)].into_iter().collect();
         let orig = Sum(Box::new(v(n)), Box::new(c(0)));
         assert_eq!(orig.eval(&env), normalize(&orig).eval(&env));
@@ -1311,8 +1364,15 @@ mod tests {
             (NExp::div(v(n), c(1)), v(n)),
             (NExp::div(c(0), c(5)), c(0)),
             (NExp::modulo(c(7), c(2)), c(1)),
-            (NExp::modulo(v(n), c(1)), c(0)),
-            (NExp::abs(NExp::Exp(Box::new(v(n)))), NExp::Exp(Box::new(v(n)))),
+            // Lane 124: `x % 1` stays unfolded (no solver backing).
+            (
+                NExp::modulo(v(n), c(1)),
+                NExp::modulo(v(n), c(1)),
+            ),
+            (
+                NExp::abs(NExp::Exp(Box::new(v(n)))),
+                NExp::abs(NExp::Exp(Box::new(v(n)))),
+            ),
             (
                 NExp::abs(NExp::App("abs".to_string(), vec![v(n)])),
                 NExp::abs(v(n)),
@@ -1373,11 +1433,11 @@ mod tests {
             ),
             (
                 NConstraint::Ge(Box::new(v(n)), Box::new(v(n))),
-                NConstraint::True,
+                NConstraint::Ge(Box::new(v(n)), Box::new(v(n))),
             ),
             (
                 NConstraint::Lt(Box::new(v(n)), Box::new(v(n))),
-                NConstraint::False,
+                NConstraint::Lt(Box::new(v(n)), Box::new(v(n))),
             ),
             (
                 NConstraint::Set(Box::new(c(2)), vec![3, 1, 2]),

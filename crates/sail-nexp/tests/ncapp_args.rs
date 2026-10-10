@@ -171,14 +171,15 @@ fn equal_not_equal_eval_per_sort() {
         NConstraint::NotEqual(bo(NConstraint::True), bo(NConstraint::False)).eval(&e),
         Some(true)
     );
-    // Gemischte Sorten sind nie gleich.
+    // Gemischte Sorten bleiben offen (Lane 124: kein statisches
+    // `false` ueber ggf. missgeformten Zielen).
     assert_eq!(
         NConstraint::Equal(ne(c(1)), bo(NConstraint::True)).eval(&e),
-        Some(false)
+        None
     );
     assert_eq!(
         NConstraint::NotEqual(ne(c(1)), ty(NTyp::Unknown)).eval(&e),
-        Some(true)
+        None
     );
     // Verschiedene Typen: konservativ None; App bleibt uninterpretiert.
     assert_eq!(
@@ -204,15 +205,11 @@ fn simplify_folds_per_sort() {
         )),
         NConstraint::False
     );
-    // Gemischte Sorten falten sofort.
-    assert_eq!(
-        simplify_constraint(&NConstraint::Equal(ne(c(1)), ty(NTyp::Unknown))),
-        NConstraint::False
-    );
-    assert_eq!(
-        simplify_constraint(&NConstraint::NotEqual(ne(c(1)), bo(NConstraint::True))),
-        NConstraint::True
-    );
+    // Gemischte Sorten falten nicht (Lane 124: bleiben offen).
+    let mixed_eq = NConstraint::Equal(ne(c(1)), ty(NTyp::Unknown));
+    assert_eq!(simplify_constraint(&mixed_eq), mixed_eq);
+    let mixed_neq = NConstraint::NotEqual(ne(c(1)), bo(NConstraint::True));
+    assert_eq!(simplify_constraint(&mixed_neq), mixed_neq);
     // NExp-Konstanten wie bisher; Bool-Literale falten.
     assert_eq!(
         simplify_constraint(&NConstraint::Equal(ne(c(2)), ne(c(3)))),

@@ -4,11 +4,12 @@
 //! beweisen `Valid`/`Invalid`, konservative fallen auf `Unknown` zurueck.
 //! Laeuft nur mit `--features z3` (C-Dep).
 
+use sail_ast::{Interner as _, SimpleInterner};
 use sail_nexp::{NConstraint, NExp, TypArg};
 use sail_solver::{Constraint, Solver, SolverQuery, SolverVerdict, Z3Solver};
 
-fn v(n: &str) -> NExp {
-    NExp::var(n)
+fn v(ix: &mut SimpleInterner, n: &str) -> NExp {
+    NExp::Var(ix.intern(n))
 }
 fn c(i: i128) -> NExp {
     NExp::Constant(i)
@@ -20,13 +21,14 @@ fn eq(a: NExp, b: NExp) -> NConstraint {
 #[test]
 fn z3_proves_exact_operators() {
     let s = Z3Solver::new();
+    let mut ix = SimpleInterner::new();
     assert_eq!(s.name(), "z3");
     // Arithmetik + Vergleiche exakt.
     let two_plus_two = eq(NExp::Sum(Box::new(c(2)), Box::new(c(2))), c(4));
     assert_eq!(s.prove_nconstraint(&two_plus_two), SolverVerdict::Valid);
     assert_eq!(s.prove_nconstraint(&eq(c(2), c(3))), SolverVerdict::Invalid);
     // `abs`/`If`/`2^x` exakt.
-    let abs_nneg = NConstraint::Ge(Box::new(NExp::abs(v("n"))), Box::new(c(0)));
+    let abs_nneg = NConstraint::Ge(Box::new(NExp::abs(v(&mut ix, "n"))), Box::new(c(0)));
     assert_eq!(s.prove_nconstraint(&abs_nneg), SolverVerdict::Valid);
     let ite = eq(
         NExp::If(Box::new(NConstraint::True), Box::new(c(1)), Box::new(c(2))),
@@ -56,26 +58,57 @@ fn z3_proves_exact_operators() {
         SolverVerdict::Invalid
     );
     assert_eq!(
-        s.prove_nconstraint(&NConstraint::Set(Box::new(v("n")), vec![])),
+        s.prove_nconstraint(&NConstraint::Set(Box::new(v(&mut ix, "n")), vec![])),
         SolverVerdict::Invalid
     );
 }
 
 #[test]
+fn z3_separates_id_and_var_namespaces() {
+    // Lane 124: `Nexp_id "n"` (benannter numerischer Typ) und
+    // `Nexp_var n` (Kind-Variable) teilen keine Z3-Konstante —
+    // `n_id == n_var` ist erfuellbar und widerlegbar, also `Unknown`
+    // (mit der alten Id/Var-Verwechslung waere es faelschlich `Valid`).
+    let s = Z3Solver::new();
+    let mut ix = SimpleInterner::new();
+    let n = ix.intern("n");
+    let same = eq(NExp::Id("n".to_string()), NExp::Var(n));
+    assert_eq!(s.prove_nconstraint(&same), SolverVerdict::Unknown);
+    // Boolesche Seite: `NC_id "b"` vs. `NC_var b` ebenso getrennt.
+    let b = ix.intern("b");
+    let bsame = NConstraint::Equal(
+        Box::new(TypArg::Bool(Box::new(NConstraint::Id("b".to_string())))),
+        Box::new(TypArg::Bool(Box::new(NConstraint::Var(b)))),
+    );
+    assert_eq!(s.prove_nconstraint(&bsame), SolverVerdict::Unknown);
+    // Gemischte `typ_arg`-Sorten: nie statisch `false` (frische
+    // Konstante => `Unknown`, kein erfundenes `Invalid`).
+    let mixed = NConstraint::Equal(
+        Box::new(TypArg::NExp(NExp::Var(n))),
+        Box::new(TypArg::Bool(Box::new(NConstraint::True))),
+    );
+    assert_eq!(s.prove_nconstraint(&mixed), SolverVerdict::Unknown);
+}
+
+#[test]
 fn z3_is_conservative_where_inexact() {
     let s = Z3Solver::new();
+    let mut ix = SimpleInterner::new();
     // Offene Variable: erfuellbar und widerlegbar => Unknown.
-    let open = NConstraint::Gt(Box::new(v("n")), Box::new(c(5)));
+    let open = NConstraint::Gt(Box::new(v(&mut ix, "n")), Box::new(c(5)));
     assert_eq!(s.prove_nconstraint(&open), SolverVerdict::Unknown);
     // `div` ohne exakte Entsprechung: frische Konstante => Unknown
     // (kein falsches Valid/Invalid).
     let div_eq = eq(NExp::div(c(4), c(2)), c(2));
     assert_eq!(s.prove_nconstraint(&div_eq), SolverVerdict::Unknown);
     // Unbekannte Apps/Praedikate/Ids: Unknown.
-    let uf = eq(NExp::App("uf".to_string(), vec![v("n")]), c(0));
+    let uf = eq(NExp::App("uf".to_string(), vec![v(&mut ix, "n")]), c(0));
     assert_eq!(s.prove_nconstraint(&uf), SolverVerdict::Unknown);
     assert_eq!(
-        s.prove_nconstraint(&NConstraint::App("ok".to_string(), vec![TypArg::NExp(v("n"))])),
+        s.prove_nconstraint(&NConstraint::App(
+            "ok".to_string(),
+            vec![TypArg::NExp(v(&mut ix, "n"))]
+        )),
         SolverVerdict::Unknown
     );
     assert_eq!(

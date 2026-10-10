@@ -12,18 +12,28 @@
 //! ## NExp/NConstraint-Mapping (vollstaendig, siehe Operator-Tabelle in
 //! `docs/nexp-solver-operators.md`)
 //!
-//! - Exakt: Konstanten (beliebig gross, Horner-Basis `2^32`), Variablen
-//!   (gleicher Name = gleiche Z3-Konstante), `+`/`-`/`*`/unary `-`,
-//!   Vergleiche, `=`/`!=`, `Set` (als `Or` von Gleichungen), `And`/`Or`/
-//!   `Not`, `abs` und `If` (via `ite`).
+//! - Exakt: Konstanten (beliebig gross, Horner-Basis `2^32`),
+//!   `+`/`-`/`*`/unary `-`, Vergleiche, `=`/`!=` ueber `(NExp, NExp)`
+//!   und `(Bool, Bool)`, `Set` (als `Or` von Gleichungen),
+//!   `And`/`Or`/`Not`, `abs` und `If` (via `ite`).
+//! - Variablen in getrennten Namensraeumen (Lane 124):
+//!   `Nexp_var`/`NC_var` (Kind-Variablen) als `sail_nvar_<id>`/
+//!   `sail_cvar_<id>` — query-lokal konsistent (jeder `prove`-Aufruf
+//!   baut einen frischen Solver; alle Kids einer Anfrage stammen aus
+//!   einem Interner); `Nexp_id`/`NC_id` (benannte numerische Typen /
+//!   Constraints) als `sail_nid_<name>`/`sail_cid_<name>` — global
+//!   stabil wie OCaml-`abstract_decs`. Gleicher Name im gleichen Raum
+//!   = gleiche Konstante; die Raeume kollidieren nie. Eine
+//!   Id/Var-Verwechslung waere unbeweisgesund (abstrakter Typ `n` ist
+//!   nicht die Kind-Variable `n`).
 //! - Konservativ (frische uninterpretierte Konstante, beweisgesund: eine
 //!   freie Variable staerkt die zu beweisende Formel, verliert also nur
 //!   Praezision Richtung `Unknown`, luegt nie `Valid`/`Invalid`):
 //!   `div`/`mod` (Sail trunkiert wie Rust, Z3-`div`/`rem` weichen bei
 //!   negativen Operanden ab), nicht-konstante `2^x` (Z3-`power` liefert
-//!   `Real`, kein `Int`), unbekannte `Nexp_app`s, `Nexp_id`,
-//!   `NC_app`-Praedikate ueber `typ_arg`-Sorten (`A_nexp`/`A_typ`/`A_bool`,
-//!   Lane 108), boolesche `NC_id`/`NC_var`.
+//!   `Real`, kein `Int`), unbekannte `Nexp_app`s, ungleiche Typen und
+//!   gemischte `typ_arg`-Sorten in `=`/`!=`, `NC_app`-Praedikate ueber
+//!   `typ_arg`-Sorten (`A_nexp`/`A_typ`/`A_bool`, Lane 108).
 //! - `2 ^ c` mit konstantem `c` in `[0, 127)` wird exakt gefaltet
 //!   (gleiche Domaene wie [`sail_nexp::NExp::eval`]).
 
@@ -64,13 +74,15 @@ impl Z3Solver {
 
 /// Bildet einen [`NExp`] auf einen Z3-`Int`-AST ab.
 ///
-/// Variablen mit gleichem Namen teilen sich die Z3-Konstante
-/// (`Int::new_const` interniert per Namen); alles Nichtlineare ohne
-/// exakte Entsprechung wird eine frische Konstante (siehe Modul-Doku).
+/// Kind-Variablen (`Var`) und benannte numerische Typen (`Id`) teilen
+/// sich je ihren Namensraum (`sail_nvar_<id>` bzw. `sail_nid_<name>`,
+/// siehe Modul-Doku); alles Nichtlineare ohne exakte Entsprechung wird
+/// eine frische Konstante.
 pub fn nexp_to_int(e: &NExp) -> Int {
     match e {
         NExp::Constant(v) => int_literal(*v),
-        NExp::Var(kid) | NExp::Id(kid) => Int::new_const(kid.as_str()),
+        NExp::Var(kid) => Int::new_const(format!("sail_nvar_{}", kid.0)),
+        NExp::Id(name) => Int::new_const(format!("sail_nid_{name}")),
         NExp::App(f, args) => nexp_app_to_int(f, args),
         NExp::If(c, t, b) => nconstraint_to_bool(c).ite(&nexp_to_int(t), &nexp_to_int(b)),
         NExp::Times(a, b) => Int::mul(&[nexp_to_int(a), nexp_to_int(b)]),
@@ -86,9 +98,11 @@ pub fn nconstraint_to_bool(c: &NConstraint) -> Bool {
     match c {
         NConstraint::True => Bool::from_bool(true),
         NConstraint::False => Bool::from_bool(false),
-        // Boolesche Atome als uninterpretierte Konstanten (beweisgesund:
-        // freie Variablen koennen `Valid` nicht erschleichen).
-        NConstraint::Id(name) | NConstraint::Var(name) => Bool::new_const(name.as_str()),
+        // Boolesche Atome spiegeln die `NExp`-Raumtrennung: `NC_id`
+        // (benannter Constraint) per globalem Namen, `NC_var`
+        // (Bool-Kind-Variable) per query-lokaler Id — nie vermischt.
+        NConstraint::Id(name) => Bool::new_const(format!("sail_cid_{name}")),
+        NConstraint::Var(kid) => Bool::new_const(format!("sail_cvar_{}", kid.0)),
         NConstraint::Equal(a, b) => typarg_eq_bool(a, b),
         NConstraint::NotEqual(a, b) => typarg_eq_bool(a, b).not(),
         NConstraint::Ge(a, b) => nexp_to_int(a).ge(nexp_to_int(b)),
@@ -121,9 +135,10 @@ pub fn nconstraint_to_bool(c: &NConstraint) -> Bool {
 
 /// Bildet eine `NC_equal`-Gleichung ueber `typ_arg`-Sorten auf Z3 ab
 /// (Lane 108): `(NExp, NExp)` exakt wie bisher, `(Bool, Bool)` exakt
-/// (`iff`), gleiche Typen exakt `true`, gemischte Sorten exakt `false`
-/// (verschiedene `typ_arg`-Konstruktoren sind nie gleich); verschiedene
-/// Typen konservativ frisch (beweisgesund, siehe Modul-Doku).
+/// (`iff`), gleiche Typen exakt `true`; ungleiche Typen und gemischte
+/// Sorten konservativ frisch (beweisgesund, siehe Modul-Doku) — ein
+/// statisches `false` fuer gemischte Sorten waere ein Beweis ueber ein
+/// ggf. missgeformtes Ziel.
 fn typarg_eq_bool(a: &TypArg, b: &TypArg) -> Bool {
     match (a, b) {
         (TypArg::NExp(x), TypArg::NExp(y)) => Ast::eq(&nexp_to_int(x), &nexp_to_int(y)),
@@ -134,7 +149,7 @@ fn typarg_eq_bool(a: &TypArg, b: &TypArg) -> Bool {
         (TypArg::Typ(_, _), TypArg::Typ(_, _)) => {
             Bool::fresh_const("sail_nconstraint_typarg_eq")
         }
-        _ => Bool::from_bool(false),
+        _ => Bool::fresh_const("sail_nconstraint_typarg_eq_mixed"),
     }
 }
 
