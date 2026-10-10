@@ -20,7 +20,8 @@
 //! exhaustiveness analysis itself is untouched.
 
 use sail_ast::{
-    Interner, Lit, LitKind, Name, Node, Pat as AstPat, PatKind, StructName, TypPat, TypPatKind,
+    Interner, Lit, LitKind, Name, Node, Pat as AstPat, PatKind, StructName, TypKind, TypPat,
+    TypPatKind,
 };
 
 use crate::Pat;
@@ -122,8 +123,8 @@ fn lit_payload(lit: &Lit) -> String {
 }
 
 /// Lift a canonical node back onto a local pattern. `None` for shapes
-/// with no local counterpart (`Not`, `VectorSubrange`, non-string
-///binders are mapped to `"_"`).
+/// with no local counterpart (`Not`, `VectorSubrange`); binder names
+/// without a canonical slot map to `"_"`.
 pub fn pat_from_ast(p: &AstPat, it: &impl Interner) -> Option<Pat> {
     match &p.kind {
         PatKind::Lit(l) => Some(Pat::Lit(lit_payload(l))),

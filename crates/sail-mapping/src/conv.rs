@@ -59,7 +59,7 @@ fn mk_pexp(kind: PExpKind) -> PExp {
 pub fn pat_to_ast(p: &Pat, it: &mut impl Interner) -> AstPat {
     match p {
         Pat::Lit(s) => mk_pat(PatKind::Lit(Node::dummy(LitKind::String(s.clone())))),
-        Pat::Var(v) => mk_pat(PatKind::Var {
+        Pat::Var(_) => mk_pat(PatKind::Var {
             pat: Box::new(mk_pat(PatKind::Wild)),
             typ_pat: Node::dummy(sail_ast::TypPatKind::Wild),
         }),

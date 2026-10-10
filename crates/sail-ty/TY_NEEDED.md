@@ -1,4 +1,15 @@
 # `TY_NEEDED.md` — what `sail-ty` needs from `sail-ast` / `sail-nexp`
+
+> Lane 61 status (MIGRATION.md #17–#25): **SPAN CLOSED, BRIDGES WIRED**.
+> `error::Span` is `sail_ast::Span` (#25). `src/conv.rs` lowers
+> `Nexp`/`NConstraint`/`MiniTyp`/`TypQuant`/`MiniExp` onto canonical
+> nodes and back (#17–#21; Div/Mod/Abs as `Nexp_app`, Eq/Neq via
+> `Typ_arg`, Range as reversible `range`-app, currying/existentials as
+> `None` pending Lanes 02/09). `Kind` erases `KNat→Int`, never
+> silently recovered (#22). `KindEnv`/`TypeEnv` retained: no `Env.t`
+> target in `sail-ast` yet (#23/#24). `Solver`/`CachingSolver`
+> untouched. Checklist items 2–5 become Lane 02/04/09 follow-ups;
+> item 1 done, item 6 holds.
 Lane 05 defines local minimal types (`sail_ty::nexp::{Nexp, NConstraint, MiniTyp, MiniExp, TypQuant}`)
 because Lane 01 (`sail-ast`) and Lane 04 (`sail-nexp`) are not merged yet.
 This file is the swap contract: when those crates land, replace the minimals field-by-field.
