@@ -91,13 +91,13 @@ impl std::error::Error for ParseTimeVError {}
 
 fn parse_u64_field(line: &str, key: &str) -> Option<u64> {
     line.strip_prefix(key)
-        .and_then(|rest| rest.trim().split_whitespace().next())
+        .and_then(|rest| rest.split_whitespace().next())
         .and_then(|tok| tok.parse::<u64>().ok())
 }
 
 fn parse_f64_field(line: &str, key: &str) -> Option<f64> {
     line.strip_prefix(key)
-        .and_then(|rest| rest.trim().split_whitespace().next())
+        .and_then(|rest| rest.split_whitespace().next())
         .and_then(|tok| tok.parse::<f64>().ok())
 }
 
@@ -142,19 +142,27 @@ pub fn parse_time_v_output(stderr: &str) -> Result<TimeVReport, ParseTimeVError>
     for raw in stderr.lines() {
         let line = raw.trim();
         if let Some(v) = line.strip_prefix("Maximum resident set size (kbytes):") {
-            max_rss_kb = v.trim().split_whitespace().next().and_then(|t| t.parse().ok());
+            if let Ok(n) = v.split_whitespace().next().unwrap_or("").parse() {
+                max_rss_kb = Some(n);
+            }
         } else if let Some(v) = line.strip_prefix("Elapsed (wall clock) time (h:mm:ss or m:ss):") {
-            wall_s = v.trim().split_whitespace().next().and_then(parse_elapsed);
+            wall_s = v.split_whitespace().next().and_then(parse_elapsed);
         } else if line.starts_with("User time (seconds):") {
-            parse_f64_field(line, "User time (seconds):").map(|v| user_s = v);
+            if let Some(v) = parse_f64_field(line, "User time (seconds):") {
+                user_s = v;
+            }
         } else if line.starts_with("System time (seconds):") {
-            parse_f64_field(line, "System time (seconds):").map(|v| sys_s = v);
+            if let Some(v) = parse_f64_field(line, "System time (seconds):") {
+                sys_s = v;
+            }
         } else if line.starts_with("Major (requiring I/O) page faults:") {
-            parse_u64_field(line, "Major (requiring I/O) page faults:").map(|v| major_faults = v);
+            if let Some(v) = parse_u64_field(line, "Major (requiring I/O) page faults:") {
+                major_faults = v;
+            }
         } else if line.starts_with("Minor (reclaiming a frame) page faults:") {
-            parse_u64_field(line, "Minor (reclaiming a frame) page faults:").map(|v| {
-                minor_faults = v
-            });
+            if let Some(v) = parse_u64_field(line, "Minor (reclaiming a frame) page faults:") {
+                minor_faults = v;
+            }
         } else if line.starts_with("Swaps from disk") {
             // Heuristik: letzte Zahl der Zeile ("Swaps from disk (now unused): 0").
             if let Some(tok) = line.split_whitespace().last().and_then(|t| t.parse().ok()) {
@@ -163,7 +171,7 @@ pub fn parse_time_v_output(stderr: &str) -> Result<TimeVReport, ParseTimeVError>
         } else if let Some(v) = line.strip_prefix("Command being timed:") {
             command = v.trim().trim_matches('"').to_string();
         } else if let Some(v) = line.strip_prefix("Exit status:") {
-            exit_status = v.trim().split_whitespace().next().and_then(|t| t.parse().ok());
+            exit_status = v.split_whitespace().next().and_then(|t| t.parse().ok());
         }
     }
 
