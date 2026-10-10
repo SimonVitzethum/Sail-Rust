@@ -18,3 +18,11 @@
   Lieber harter Fehler als stilles `sorry` (`ArmExtras.lean`: `decreasing_trivial` ohne `sorry`-Fallback).
 - CI-Gate (Lane 15): `grep -rn "sorry" --include="*.lean"` über generiertem Projekt muss leer sein.
 - Lane 26 schuldet echte Terminierungsmaße statt `sorry`-Fallback; Lane 12 darf nie `sorry` emittieren.
+
+## E3 — Test-Moratorium (OOM-Schutz, kein Swap auf der Maschine)
+
+- Lane-Agents führen KEINE Builds/Tests aus: kein `cargo test/build/check`, kein `lake build`,
+  kein `sail`-Lauf. Grund: parallele Toolchain-Läufe über ~40 Worktrees treiben die Maschine
+  ohne Swap in den OOM-Killer, der dann den OpenCode-Desktop/Server trifft.
+- Verifikation nur per Code-Review + später zentral durch den Integrator mit Memory-Limits.
+- Done-Kriterium „Tests grün" ist bis dahin ausgesetzt; ersatzweise: saubere Typen, kleine Commits.
