@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Source spans: file handle plus byte offsets. No path strings stored here;
-//! file-table ownership stays with a later lane (parser/driver).
+//! file-table ownership is [`crate::FileTable`] (Lane 72, central driver
+//! table: path + source + line resolution for these byte ranges).
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

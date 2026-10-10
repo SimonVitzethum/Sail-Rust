@@ -9,6 +9,10 @@
 //!
 //! [`Spanned`] and [`ParseError`] are kept here: they belong to Lane
 //! error-diagnostics (35), not `sail-ast` (MIGRATION.md §3).
+//!
+//! Line/column resolution lives in the central [`sail_ast::FileTable`]
+//! (Lane 72); the `FileId(0)`-per-`parse_file` convention matches its
+//! insertion order (first added file is `FileId(0)`).
 
 use std::fmt;
 

@@ -7,11 +7,19 @@
 //! - Names are interned [`Symbol`]s; see [`Interner`] / [`SimpleInterner`].
 //! - [`Ast`] is the snapshot root with a JSON roundtrip
 //!   ([`Ast::to_json`] / [`Ast::from_json`]).
+//! - [`FileTable`] owns paths + source text + line resolution for [`Span`]
+//!   byte ranges (central driver table).
 //! - All types are `Clone + Send + Sync` and `serde`-serializable.
 
+mod files;
 mod id;
 mod interner;
 mod span;
+
+pub mod ast;
+pub mod json;
+
+pub use files::{FileInfo, FileTable};
 
 pub mod ast;
 pub mod json;
