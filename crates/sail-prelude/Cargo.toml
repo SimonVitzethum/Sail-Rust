@@ -8,3 +8,6 @@ license = "BSD-2-Clause"
 [lib]
 name = "sail_prelude"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

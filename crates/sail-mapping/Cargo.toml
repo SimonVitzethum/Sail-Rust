@@ -8,3 +8,6 @@ license = "BSD-2-Clause"
 [lib]
 name = "sail_mapping"
 path = "src/lib.rs"
+
+[lints]
+workspace = true
