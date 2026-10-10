@@ -1,0 +1,15 @@
+[package]
+name = "sail-ooc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Out-of-core-Geruests (Lane 60, E4): Phasen-Barrieren, Warm-Layer (safe, read-mostly), Memo-Spills mit Content-Hash, Cross-Shard-Summaries"
+license.workspace = true
+
+[dependencies]
+sail-shard = { path = "../sail-shard" }
+sail-cache = { path = "../sail-cache" }
+blake3 = "1"
+
+[lints]
+workspace = true
