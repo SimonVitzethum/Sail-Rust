@@ -3,7 +3,7 @@ name = "sail-par-pipe"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Shard-parallele Pipeline-Orchestrierung Parse→Check→Emit (Lane 69, Skizze)"
+description = "Shard-parallele Pipeline-Orchestrierung Parse→Check→Emit (Lane 84, Implementierung)"
 license.workspace = true
 
 [dependencies]

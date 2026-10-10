@@ -1,4 +1,4 @@
-//! Deterministischer Merge der Shard-Ergebnisse (Skizze).
+//! Deterministischer Merge der Shard-Ergebnisse (Implementierung, Lane 84).
 //!
 //! Alle Pipeline-Ausgaben tragen ihren Eingangsindex (`order`); der Merge
 //! sortiert danach und macht das Ergebnis unabhängig vom Thread-Scheduling

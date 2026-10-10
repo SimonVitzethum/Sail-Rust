@@ -1,4 +1,5 @@
-//! Shard-parallele Pipeline-Orchestrierung (Lane 69, Skizze).
+//! Shard-parallele Pipeline-Orchestrierung (Lane 84, Implementierung der
+//! Lane-69-Skizze).
 //!
 //! Führt die drei Compiler-Stufen **Parse → Check → Emit** shard-parallel aus:
 //! ein Shard pro Worker, begrenzte Queues (Backpressure), deterministische
