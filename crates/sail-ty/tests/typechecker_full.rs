@@ -400,26 +400,59 @@ fn scheme_depth_fuel() {
 
 #[test]
 fn quant_freshen_instantiate() {
-    // Q-Freshen: telescopes are renamed capture-avoidingly, in order.
+    // Q-Freshen: telescopes are renamed with gensym names (OCaml
+    // `Type_env.fresh_kid`), never predictable `{base}{i}` names.
     let q = TypQuant {
         quants: vec![("n".to_string(), Kind::KInt), ("m".to_string(), Kind::KNat)],
         constraint: NConstraint::Ge(Box::new(var("n")), Box::new(const_(0))),
         typ: MiniTyp::Bits(Box::new(var("n"))),
     };
     let f = freshen_scheme(&q, "f");
-    assert_eq!(
-        f.quants,
-        vec![("f0".to_string(), Kind::KInt), ("f1".to_string(), Kind::KNat)]
-    );
+    assert_eq!(f.quants.len(), 2);
+    let names: Vec<&str> = f.quants.iter().map(|(v, _)| v.as_str()).collect();
+    // Gensym shape: derived from base+index, carrying `#fv`, distinct from
+    // the bound names and from each other.
+    assert_ne!(names[0], names[1]);
+    for n in &names {
+        assert!(n.contains("#fv"), "gensym shape, got {n}");
+        assert!(*n != "n" && *n != "m");
+    }
+    assert_eq!(f.quants[0].1, Kind::KInt);
+    assert_eq!(f.quants[1].1, Kind::KNat);
+    // Constraint/body renamed consistently onto the first fresh name.
     assert_eq!(
         f.constraint,
-        NConstraint::Ge(Box::new(var("f0")), Box::new(const_(0)))
+        NConstraint::Ge(Box::new(var(names[0])), Box::new(const_(0)))
     );
-    assert_eq!(f.typ, MiniTyp::Bits(Box::new(var("f0"))));
-    // Q-Inst: instantiation splits off the obligation with the `inst` base.
+    assert_eq!(f.typ, MiniTyp::Bits(Box::new(var(names[0]))));
+    // No capture: a scheme already binding `f0` (the old predictable
+    // output) is renamed away from it.
+    let tricky = TypQuant {
+        quants: vec![("f0".to_string(), Kind::KInt)],
+        constraint: NConstraint::True,
+        typ: MiniTyp::Bits(Box::new(var("f0"))),
+    };
+    let f2 = freshen_scheme(&tricky, "f");
+    assert_ne!(f2.quants[0].0, "f0");
+    assert_eq!(f2.typ, MiniTyp::Bits(Box::new(var(&f2.quants[0].0))));
+    // Freshness across calls: two freshenings never share names.
+    let g = freshen_scheme(&q, "f");
+    assert_ne!(f.quants[0].0, g.quants[0].0);
+    // Q-Inst: instantiation splits off the obligation with gensym names.
     let (obl, typ) = instantiate_scheme(&q);
-    assert_eq!(obl, NConstraint::Ge(Box::new(var("inst0")), Box::new(const_(0))));
-    assert_eq!(typ, MiniTyp::Bits(Box::new(var("inst0"))));
+    match &obl {
+        NConstraint::Ge(lo, hi) => {
+            assert_eq!(**hi, const_(0));
+            match &**lo {
+                Nexp::Var(v) => {
+                    assert!(v.contains("#fv"), "gensym shape, got {v}");
+                    assert_eq!(typ, MiniTyp::Bits(Box::new(Nexp::Var(v.clone()))));
+                }
+                _ => panic!("obligation must mention the fresh var"),
+            }
+        }
+        _ => panic!("expected Ge obligation, got {obl}"),
+    }
     // Monomorphic schemes instantiate to themselves with a `True` obligation.
     let (obl, typ) = instantiate_scheme(&TypQuant::monomorphic(MiniTyp::Int));
     assert_eq!((obl, typ), (NConstraint::True, MiniTyp::Int));
@@ -449,14 +482,23 @@ fn val_defs() {
     assert!(c
         .check_val_def("z", &impossible, &MiniExp::IntLit(7), &env, dummy())
         .is_err());
-    // D-ValPoly: polymorphic bodies are accepted abstractly (full
-    // instantiation is Lane 09) — even a body that only matches abstractly.
+    // D-ValPoly: polymorphic bodies are checked under the skolemized
+    // (gensym-freshened) scheme — an ill-typed body is rejected, not
+    // silently accepted (full instantiation stays Lane 09).
     let poly = TypQuant {
         quants: vec![("n".to_string(), Kind::KInt)],
         constraint: NConstraint::Ge(Box::new(var("n")), Box::new(const_(0))),
         typ: MiniTyp::Bits(Box::new(var("n"))),
     };
-    let sum = c.check_val_def("w", &poly, &MiniExp::IntLit(1), &env, dummy()).unwrap();
+    assert!(c.check_val_def("w", &poly, &MiniExp::IntLit(1), &env, dummy()).is_err());
+    // … while a well-typed polymorphic body passes: `int` body against a
+    // `forall 'n. true => int` scheme checks under skolemization.
+    let poly_int = TypQuant {
+        quants: vec![("n".to_string(), Kind::KInt)],
+        constraint: NConstraint::True,
+        typ: MiniTyp::Int,
+    };
+    let sum = c.check_val_def("w", &poly_int, &MiniExp::IntLit(1), &env, dummy()).unwrap();
     assert_eq!(sum.name, "w");
 }
 
@@ -512,8 +554,10 @@ fn infer_poly_var() {
     let s = StubSolver::new();
     let c = checker(&s);
     let mut env = TypeEnv::new();
-    // I-VarPoly: polymorphic val schemes instantiate (Unknown precondition
-    // keeps the abstract body, mirroring `check_val_def`).
+    // I-VarPoly: polymorphic val schemes instantiate, but only on `Proved`
+    // preconditions — `infer` returns just the type, so an `Unknown`
+    // obligation has no channel to travel on and must be a loud error, not
+    // a silently dropped burden (rule `Z-UnknownSound`).
     env.add_val(
         "w",
         TypQuant {
@@ -522,10 +566,27 @@ fn infer_poly_var() {
             typ: MiniTyp::Bits(Box::new(var("n"))),
         },
     );
-    assert_eq!(
-        c.infer(&MiniExp::Var("w".into()), &env, dummy()).unwrap(),
-        MiniTyp::Bits(Box::new(var("inst0")))
+    assert!(c.infer(&MiniExp::Var("w".into()), &env, dummy()).is_err());
+    // … while a scheme with a provable (`True`) precondition instantiates
+    // to its freshened body type (gensym name, never the bound `n`).
+    env.add_val(
+        "open",
+        TypQuant {
+            quants: vec![("n".to_string(), Kind::KInt)],
+            constraint: NConstraint::True,
+            typ: MiniTyp::Bits(Box::new(var("n"))),
+        },
     );
+    match c.infer(&MiniExp::Var("open".into()), &env, dummy()).unwrap() {
+        MiniTyp::Bits(n) => match *n {
+            Nexp::Var(v) => {
+                assert_ne!(v, "n");
+                assert!(v.contains("#fv"), "gensym shape, got {v}");
+            }
+            _ => panic!("instantiation must yield the freshened var"),
+        },
+        _ => panic!("expected bits(..)"),
+    }
     // … including polymorphic registers.
     env.add_register(
         "mem",
@@ -535,10 +596,10 @@ fn infer_poly_var() {
             typ: MiniTyp::Bits(Box::new(var("n"))),
         },
     );
-    assert_eq!(
+    assert!(matches!(
         c.infer(&MiniExp::Var("mem".into()), &env, dummy()).unwrap(),
-        MiniTyp::Bits(Box::new(var("inst0")))
-    );
+        MiniTyp::Bits(_)
+    ));
     // Refuted preconditions are hard errors at use sites too.
     env.add_val(
         "bad",

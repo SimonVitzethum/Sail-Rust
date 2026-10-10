@@ -25,6 +25,12 @@
 //! All synthesized nodes carry `NodeId::DUMMY`/`Span::DUMMY`; names are
 //! interned through the caller's interner. Behaviour of the local types
 //! (folding, kind checking, solving) is untouched.
+//!
+//! Span hygiene: `Span::DUMMY` is the `FileId(u32::MAX)` sentinel, never
+//! file 0 — synthesized nodes can never be mistaken for `file0:0-0`.
+//! Conversely `Span::default()` (file 0, `0..0`) is a REAL span, not a
+//! placeholder; it must never stand in for "no location" (use
+//! `Span::DUMMY`, tested by `synthesized_spans_are_dummy_never_file_zero`).
 
 use sail_ast::{
     Constraint, ConstraintKind, Exp, ExpKind, FExp, Interner, Kind as AstKind, KOpt, LExp,
@@ -938,6 +944,19 @@ pub fn miniexp_from_ast(e: &Exp, it: &impl Interner) -> Option<MiniExp> {
 mod tests {
     use super::*;
     use sail_ast::SimpleInterner;
+
+    #[test]
+    fn synthesized_spans_are_dummy_never_file_zero() {
+        // DUMMY-span hygiene: lowered nodes carry the `FileId(u32::MAX)`
+        // sentinel, never a file-0 span that could alias a real location.
+        let mut it = SimpleInterner::new();
+        let ast = typ_to_ast(&MiniTyp::Bits(Box::new(Nexp::Const(8))), &mut it);
+        assert!(ast.span.is_dummy());
+        assert_ne!(ast.span.file, sail_ast::FileId(0));
+        // `Span::default()` (file 0, `0..0`) is a REAL span, not a
+        // placeholder — it must never be treated as "no location".
+        assert!(!Span::default().is_dummy());
+    }
 
     #[test]
     fn not_constraint_roundtrips() {

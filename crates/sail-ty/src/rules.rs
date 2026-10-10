@@ -65,14 +65,16 @@ pub enum RuleId {
     QEscape,
     /// Depth bound ⇒ termination even for adversarial schemes.
     QDepthFuel,
-    /// Instantiation at use sites: freshen + discharge precondition.
+    /// Instantiation at use sites: gensym freshen + discharge precondition.
     QInst,
-    /// Capture-avoiding freshening of telescopes.
+    /// Capture-avoiding freshening of telescopes (gensym, OCaml `fresh_kid`).
     QFreshen,
     // -- Definitions --
     /// Monomorphic `val` body checked against the scheme type.
     DValMono,
-    /// Polymorphic `val`: body checked abstractly (full instantiation Lane 09).
+    /// Polymorphic `val`: skolemized body check — telescope freshened with
+    /// gensym names, precondition discharged, body checked against the
+    /// freshened body type (full instantiation stays Lane 09).
     DValPoly,
     /// Refuted scheme preconditions are hard errors.
     DValPreRefuted,
@@ -83,7 +85,9 @@ pub enum RuleId {
     /// Ill-kinded register types are rejected.
     DRegBad,
     /// `scattered` clauses: closed schemes, clause `i` discharged under
-    /// the constraints of `clauses[..i]` (accumulated solver context).
+    /// the constraints of `clauses[..i]` (accumulated solver context),
+    /// summaries namespaced per `ScatteredKind` (`function`/`mapping`/
+    /// `union`/`enum`).
     DScattered,
     // -- Inference (`infer`) --
     /// Integer literals synthesize `int`.
@@ -92,7 +96,9 @@ pub enum RuleId {
     IBool,
     /// Monomorphic variables / locals.
     IVarMono,
-    /// Polymorphic `val`/register use: instantiation (see `Q-Inst`).
+    /// Polymorphic `val`/register use: instantiation (see `Q-Inst`); only
+    /// `Proved` preconditions yield a type — open obligations have no
+    /// channel on `infer` and are loud errors (rule `Z-UnknownSound`).
     IVarPoly,
     /// `e : t` synthesizes `t` after checking `e <= t`.
     IAnnot,
