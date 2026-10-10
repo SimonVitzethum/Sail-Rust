@@ -9,7 +9,9 @@ use crate::env::TypeEnv;
 use crate::error::{Span, TypeError, TypeErrorKind, TypeResult};
 use crate::kind::{KindEnv, check_constraint_kind, check_typ_kind};
 use crate::nexp::{MiniExp, MiniTyp, NConstraint, Nexp, TypQuant};
+use crate::pat::MiniPat;
 use crate::solver::{ProveResult, Solver};
+use crate::subsume::{check_subtype, instantiate_scheme};
 
 /// Fuel / depth limits. Defaults are generous for the `test/lean` subset
 /// while still guaranteeing termination without a solver.
@@ -158,6 +160,19 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
         })
     }
 
+    /// Check a value pattern against a scrutinee type (rules `P-*`).
+    ///
+    /// Returns the bindings in left-to-right order. Fuel-guarded like the
+    /// expression entry points.
+    pub fn check_pat(
+        &self,
+        pat: &MiniPat,
+        expected: &MiniTyp,
+        span: Span,
+    ) -> TypeResult<Vec<(String, MiniTyp)>> {
+        self.check_pat_fuel(pat, expected, span, self.limits.max_steps)
+    }
+
     // -- internals -------------------------------------------------------
 
     fn ctx(&self, name: &str, span: Span, e: TypeError) -> TypeError {
@@ -186,9 +201,33 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
         match exp {
             MiniExp::IntLit(_) => Ok(MiniTyp::Int),
             MiniExp::BoolLit(_) => Ok(MiniTyp::Bool),
-            MiniExp::Var(v) => env
-                .lookup(v)
-                .ok_or_else(|| TypeError::unbound_var(span, v.clone())),
+            MiniExp::Var(v) => {
+                // Fast path: locals + monomorphic schemes (rules `E-*`).
+                if let Some(t) = env.lookup(v) {
+                    return Ok(t);
+                }
+                // Polymorphic instantiation (rules `Q-Inst`, `I-VarPoly`):
+                // freshen the scheme, discharge the precondition, yield the
+                // body type. `Unknown` keeps the abstract body (mirrors the
+                // `check_val_def` precondition policy); `Refuted` is a hard
+                // error. Monomorphic behaviour above is unchanged.
+                let scheme = env
+                    .lookup_val(v)
+                    .or_else(|| env.lookup_register(v))
+                    .cloned();
+                match scheme {
+                    Some(q) => {
+                        let (obl, typ) = instantiate_scheme(&q);
+                        match self.solver.prove(&obl) {
+                            ProveResult::Proved | ProveResult::Unknown => Ok(typ),
+                            ProveResult::Refuted => {
+                                Err(TypeError::constraint_not_proved(span, &obl))
+                            }
+                        }
+                    }
+                    None => Err(TypeError::unbound_var(span, v.clone())),
+                }
+            }
             MiniExp::Annot(e, t) => {
                 self.check_fuel(e, t, env, span, fuel)?;
                 Ok(t.clone())
@@ -302,10 +341,10 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
         }
     }
 
-    /// Structural unification (skeleton): equal constructors unify;
-    /// `int` vs `range` delegates to the solver via `check_fuel`-style
-    /// obligations at the call site. Here: `Int` unifies with `Range` only
-    /// if bounds are constant-covering — else error (needs solver context).
+    /// Structural subsumption (Sail `subtyp`, rules `S-*`/`X-*`): equal
+    /// constructors unify; `range <: int` holds; `bits` lengths and `range`
+    /// inclusions delegate to the solver (sound on `Unknown`, see
+    /// [`check_subtype`]).
     fn unify(&self, inferred: &MiniTyp, expected: &MiniTyp, span: Span) -> TypeResult<()> {
         if inferred == expected {
             // Discharge well-kindedness of level terms with kind env built
@@ -315,45 +354,69 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
             check_typ_kind(expected, &kenv, span)?;
             return Ok(());
         }
-        match (inferred, expected) {
-            (MiniTyp::Int, MiniTyp::Range(lo, hi)) | (MiniTyp::Range(lo, hi), MiniTyp::Int) => {
-                match (lo.as_const(), hi.as_const()) {
-                    (Some(_), Some(_)) => {
-                        // `int` is the supertype of any `range`: accept.
-                        Ok(())
+        let _ = check_subtype(self.solver, inferred, expected, span)?;
+        // Well-kindedness of the expected skeleton (opaque level vars).
+        let kenv = opaque_kenv(expected);
+        check_typ_kind(expected, &kenv, span)?;
+        Ok(())
+    }
+
+    fn check_pat_fuel(
+        &self,
+        pat: &MiniPat,
+        expected: &MiniTyp,
+        span: Span,
+        mut fuel: u64,
+    ) -> TypeResult<Vec<(String, MiniTyp)>> {
+        self.take_fuel(&mut fuel, span)?;
+        match pat {
+            // `P-Wild`: binds nothing.
+            MiniPat::Wild => Ok(Vec::new()),
+            // `P-Var`: binds the scrutinee type.
+            MiniPat::Var(v) => Ok(vec![(v.clone(), expected.clone())]),
+            // `P-Lit`: the literal must check against the scrutinee type.
+            MiniPat::IntLit(c) => {
+                let empty = TypeEnv::new();
+                self.check_fuel(&MiniExp::IntLit(*c), expected, &empty, span, fuel)?;
+                Ok(Vec::new())
+            }
+            MiniPat::BoolLit(b) => {
+                let empty = TypeEnv::new();
+                self.check_fuel(&MiniExp::BoolLit(*b), expected, &empty, span, fuel)?;
+                Ok(Vec::new())
+            }
+            // `P-Tuple`: pointwise against a same-arity tuple type.
+            MiniPat::Tuple(ps) => match expected {
+                MiniTyp::Tuple(ts) => {
+                    if ps.len() != ts.len() {
+                        return Err(TypeError {
+                            span,
+                            kind: TypeErrorKind::ArityMismatch {
+                                expected: ts.len(),
+                                found: ps.len(),
+                            },
+                        });
                     }
-                    _ => Err(TypeError::mismatch(
-                        span,
-                        expected.to_string(),
-                        inferred.to_string(),
-                    )),
+                    let mut out = Vec::new();
+                    for (p, t) in ps.iter().zip(ts.iter()) {
+                        self.take_fuel(&mut fuel, span)?;
+                        out.extend(self.check_pat_fuel(p, t, span, fuel)?);
+                    }
+                    Ok(out)
                 }
-            }
-            (MiniTyp::Fun(a1, b1), MiniTyp::Fun(a2, b2)) => {
-                self.unify(a1, a2, span)?;
-                self.unify(b1, b2, span)?;
-                Ok(())
-            }
-            (MiniTyp::Tuple(ts1), MiniTyp::Tuple(ts2)) => {
-                if ts1.len() != ts2.len() {
-                    return Err(TypeError {
-                        span,
-                        kind: TypeErrorKind::ArityMismatch {
-                            expected: ts2.len(),
-                            found: ts1.len(),
-                        },
-                    });
-                }
-                for (a, b) in ts1.iter().zip(ts2.iter()) {
-                    self.unify(a, b, span)?;
-                }
-                Ok(())
-            }
-            _ => Err(TypeError::mismatch(
-                span,
-                expected.to_string(),
-                inferred.to_string(),
-            )),
+                _ => Err(TypeError::mismatch(
+                    span,
+                    expected.to_string(),
+                    "tuple pattern".to_string(),
+                )),
+            },
+            // `P-Annot`: check inside against the annotation, then require
+            // the annotation to be a subtype of the scrutinee type.
+            MiniPat::Annot(inner, annot) => {
+                let bindings = self.check_pat_fuel(inner, annot, span, fuel)?;
+                let _ = check_subtype(self.solver, annot, expected, span)?;
+                Ok(bindings)
+            },
         }
     }
 }
