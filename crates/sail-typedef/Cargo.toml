@@ -1,0 +1,16 @@
+[package]
+name = "sail-typedef"
+version = "0.1.0"
+edition = "2021"
+description = "Lane 30: Sail struct/enum/union/abbrev typedefs — doc_typdef port (structure/inductive/abbrev + deriving + open emits)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_typedef"
+path = "src/lib.rs"
+
+[dependencies]
+sail-ast = { path = "../sail-ast" }
+
+[lints]
+workspace = true
