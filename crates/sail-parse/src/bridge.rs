@@ -30,7 +30,7 @@
 
 use sail_ast::{
     Ast, ConstraintKind, DecSpec, Def, DefKind, Exp, ExpKind, FileId, Fixity as AstFixity,
-    Funcl, IdGen, Interner as _, Mapcl, MapclKind, Name, Node, NodeId, Order, PExp, PExpKind,
+    Funcl, IdGen, Interner, Mapcl, MapclKind, Name, Node, NodeId, Order, PExp, PExpKind,
     Pat, PatKind, RecOpt, ScatteredDef, SimpleInterner, Span as AstSpan, Subst, Symbol,
     TAnnotOpt, Typ, TypArgKind, TypKind, TypSchm, TypeDefKind, ValSpec,
 };
