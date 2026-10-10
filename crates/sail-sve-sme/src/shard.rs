@@ -150,7 +150,7 @@ pub fn render_failures_md(
                 if n >= SAMPLES_PER_FAIL_KIND {
                     break;
                 }
-                let _ = writeln!(md, "- `{}` in `{}` — {}", f.span, f.def_name, f.detail);
+                let _ = writeln!(md, "- `{}` in `{}` — {}", f.loc(&r.path), f.def_name, f.detail);
                 n += 1;
             }
             if n > 0 {

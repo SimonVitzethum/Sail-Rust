@@ -3,8 +3,13 @@
 //! Fixtures are tiny but structurally faithful excerpts (val + execute +
 //! decode with `foreach`, predication, `assert(constraint(...))`, `throw`,
 //! `match VL`; SME with nested `foreach` + tile accessor).
+//!
+//! Scanner single truth (Lane 115): spans are canonical `sail-ast` byte
+//! ranges (`FileId(0)` per file); `path:line:col-line:col` display comes
+//! from the resolved hit/fail lines via [`Hit::loc`](sail_sve_sme::Hit::loc)
+//! / [`Fail::loc`](sail_sve_sme::Fail::loc).
 
-use sail_sve_sme::{FailKind, PatternKind, analyze_file, analyze_files_parallel};
+use sail_sve_sme::{FailKind, FileId, PatternKind, analyze_file, analyze_files_parallel};
 
 fn fixture(name: &str) -> String {
     let dir = env!("CARGO_MANIFEST_DIR");
@@ -60,10 +65,12 @@ fn sve_fixture_fail_counts() {
     assert_eq!(r.fail_count(FailKind::VlDispatch), 1);
     assert_eq!(r.fail_count(FailKind::UndefinedInit), 1);
     assert_eq!(r.total_fails(), 14);
-    // Every fail carries its owning lane via the kind.
+    // Every fail carries its owning lane via the kind, a canonical
+    // single-file span, and resolved display lines.
     for f in &r.fails {
         assert!(!f.kind.lane().is_empty());
-        assert_eq!(f.span.file, "sve_mini.sail");
+        assert_eq!(f.span.file, FileId(0));
+        assert!(f.loc(&r.path).starts_with("sve_mini.sail:"));
         assert!(!f.def_name.is_empty());
         assert!(!f.detail.is_empty());
     }
@@ -74,7 +81,7 @@ fn sve_fixture_exact_spans() {
     let src = fixture("sve_mini.sail");
     let r = analyze_file("sve_mini.sail", &src).unwrap();
     let span_of = |k: PatternKind| {
-        r.hits.iter().find(|h| h.kind == k).unwrap().span.to_string()
+        r.hits.iter().find(|h| h.kind == k).unwrap().loc(&r.path)
     };
     assert_eq!(span_of(PatternKind::ForeachInc), "sve_mini.sail:7:5-7:12");
     assert_eq!(span_of(PatternKind::VlDispatch), "sve_mini.sail:20:5-20:13");
@@ -82,8 +89,12 @@ fn sve_fixture_exact_spans() {
     let throws: Vec<_> =
         r.hits.iter().filter(|h| h.kind == PatternKind::ThrowUndef).collect();
     assert_eq!(throws.len(), 2);
-    assert_eq!(throws[0].span.to_string(), "sve_mini.sail:16:9-16:14");
-    assert_eq!(throws[1].span.to_string(), "sve_mini.sail:22:14-22:19");
+    assert_eq!(throws[0].loc(&r.path), "sve_mini.sail:16:9-16:14");
+    assert_eq!(throws[1].loc(&r.path), "sve_mini.sail:22:14-22:19");
+    // Canonical byte ranges agree with the display lines (slice check).
+    let inc = r.hits.iter().find(|h| h.kind == PatternKind::ForeachInc).unwrap();
+    assert_eq!(inc.span.file, FileId(0));
+    assert_eq!(&src[inc.span.start as usize..inc.span.end as usize], "foreach");
 }
 
 #[test]
@@ -101,10 +112,10 @@ fn sme_fixture_nested_foreach_and_tile() {
     assert_eq!(r.fail_count(FailKind::LoopLowering), 2);
 
     let nested = r.hits.iter().find(|h| h.kind == PatternKind::NestedForeach).unwrap();
-    assert_eq!(nested.span.to_string(), "sme_mini.sail:6:9-6:16");
+    assert_eq!(nested.loc(&r.path), "sme_mini.sail:6:9-6:16");
     assert_eq!(nested.def_name, "execute_TILE");
     let tile = r.hits.iter().find(|h| h.kind == PatternKind::TileAccess).unwrap();
-    assert_eq!(tile.span.to_string(), "sme_mini.sail:10:27-10:38");
+    assert_eq!(tile.loc(&r.path), "sme_mini.sail:10:27-10:38");
 }
 
 #[test]
@@ -126,5 +137,18 @@ fn val_dependent_sig_points_at_forall() {
     let r = analyze_file("sve_mini.sail", &src).unwrap();
     let sig = r.hits.iter().find(|h| h.kind == PatternKind::DependentSig).unwrap();
     assert_eq!(sig.def_name, "execute_MINI");
-    assert_eq!(sig.span.start_line, 1);
+    assert_eq!(sig.start_line, 1);
+}
+
+#[test]
+fn scanner_single_truth_with_sail_parse() {
+    // Lane 115: `sail-sve-sme` re-exports the `sail-parse` scanner — the same
+    // input parses identically through both paths (no vendored duplicate).
+    let src = fixture("sve_mini.sail");
+    let via_sve = sail_sve_sme::parse_file("sve_mini.sail", &src).unwrap();
+    let via_parse = sail_parse::parse_file("sve_mini.sail", &src).unwrap();
+    assert_eq!(via_sve, via_parse);
+    // Re-exported item types are the same type (compile-time truth).
+    fn assert_same<T>(_: &T, _: &T) {}
+    assert_same(&via_sve.defs, &via_parse.defs);
 }

@@ -9,5 +9,9 @@ license = "MIT OR Apache-2.0"
 name = "sail_sve_sme"
 path = "src/lib.rs"
 
+[dependencies]
+sail-parse = { path = "../sail-parse" }
+sail-ast = { path = "../sail-ast" }
+
 [lints]
 workspace = true
