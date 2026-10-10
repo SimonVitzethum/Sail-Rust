@@ -8,7 +8,9 @@ name = "sail_regs"
 path = "src/lib.rs"
 
 [dependencies]
+sail-ast = { path = "../sail-ast" }
 sail-diag = { path = "../sail-diag" }
+sail-lean = { path = "../sail-lean" }
 
 [lints]
 workspace = true

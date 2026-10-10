@@ -24,3 +24,12 @@ When the real AST is wired up, conversion is:
 No other frontend data is needed: synonym expansion (`Env.expand_synonyms`)
 and bitfield base types (`regval_base_typ`) stay the typechecker's job;
 callers pass the already-expanded spelling.
+
+## Lane-64-Bridge (#26/#27, `src/bridge.rs`)
+
+`extract_registers_ast(&[sail_ast::Def], &impl Interner)` implements the mapping
+above over real AST defs; `dec_spec_to_minimal` is the 1:1 `DecSpec` conversion.
+`render_sail_typ`/`try_render_sail_exp` produce the Sail spellings, and
+`lean_typ_of_ast` maps onto the Lane-10 printer types (`sail_lean::{Typ,Nexp}`,
+printer used read-only via `LeanPrinter::print_typ`, never modified) with
+spelling fallback outside the printer subset. `sail-lean` itself is untouched.
