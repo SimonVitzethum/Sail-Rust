@@ -160,6 +160,38 @@ Merge-Notizen:
   ausser forbid-Zeilen. Build-Verifikation offen (Rig der Haupt-Session).
 - Identitaet unverstellt (SimonVitzethum).
 
+E3-Integration Welle 6 (10.10.2026, Integrator — KEINE Builds, nur Merges):
+3 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer, Message endet mit
+Co-authored-by), Branches + Worktrees geloescht: Lane 99, 100, 101.
+Keine Lane uebersprungen (alle 3 vorhanden).
+Uebersprungen + Grund:
+- lane/41-lang-delta, lane/42-shared-mem, lane/43-scheduler-replay,
+  lane/44-el3-psci-boot, lane/58-ram-opt: gesperrt — NICHT angefasst
+  (Branches + Worktrees ungeprueft stehen gelassen).
+Merge-Notizen:
+- Lane 99 (konfliktfrei): Restlisten + Makro-Reste nach E4-Muster
+  (sail.lalrpop + grammar_coverage.rs + GRAMMAR.md); Generierung wieder
+  scharf geschaltet (gewollt, Rig prueft als Naechstes).
+- Lane 100 (konfliktfrei): Typ-Fixes — Display fuer Symbol zentral
+  (sail-ast/interner), Serialize/Deserialize/PartialEq/Eq fuer SharedTables
+  (sail-ty/env), PatKind::Typ-Feldanpassung pat-statt-inner (sail-bitvec/conv),
+  ConstraintKind::Not + Call-Sites (bridge/conv/typedef).
+- Lane 101 (3 Konflikte, von Hand aufgeloest): query.rs Symbol-Keys
+  (kid.0 statt Display, konfliktfrei) + Not-Dopplung gegen Lane-100-Stand —
+  bridge.rs Lane-101-Seite ('(!...)', passt zur C-Operator-Konvention &/|
+  statt '~(...)'); typedef Lane-101-Seite ('¬(...)' geklammert,
+  praezedenzsicher statt nacktem '¬'); conv.rs beide Not-Roundtrip-Tests
+  vereint (Namen disjunkt, keine Dublette).
+- lanes/-Specs je Lane mit uebernommen (99 per Branch-Commit; 100/101
+  uncommitted aus Worktrees kopiert + in den Merge-Commit aufgenommen:
+  100 per Amend nachtraeglich, 101 direkt im Merge-Commit).
+- .gitignore unveraendert (worktrees/+target/+Cargo.lock+logs/).
+- Checks je Merge: kein Cargo.lock getrackt, keine Konfliktmarker,
+  forbid(unsafe_code) in allen geaenderten Crate-Roots (sail-regs/query via
+  lib.rs-Roots), kein unsafe-Token ausser forbid-Zeilen.
+  Build-Verifikation offen (Rig der Haupt-Session).
+- Identitaet unverstellt (SimonVitzethum).
+
 E3-Integration (10.10.2026, Integrator — KEINE Builds, nur Merges):
 10 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer), Branches +
 Worktrees geloescht: Lane 62, 63, 64, 65, 66, 67, 69, 70, 58 (selektiv),
