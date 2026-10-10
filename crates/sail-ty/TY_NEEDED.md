@@ -25,7 +25,7 @@ This file is the swap contract: when those crates land, replace the minimals fie
 | `TypQuant { quants, constraint, typ }` | `TypQ_aux::{TypQ_tq,TypQ_no_forall}` + `kind_aux::{K_int,K_bool,K_type}` | `quants: Vec<(String, Kind)>` ≈ `quant_item` telescope |
 | `MiniExp::{IntLit,BoolLit,Var,Let,App,Tuple,Annot,If}` | `Exp_aux` (tiny subset) | Full `Exp_aux` port is Lane 02/03; checker matches on subsets |
 | `Kind::{KInt,KNat,KBool,KType}` | `kind_aux::{K_int,K_bool,K_type}` | `KNat` is a `sail-ty`-local refinement sub-kind for the Lean `Nat`/`Int` mapping (Lane 04/10); erase to `K_int` when converting |
-| `TypeEnv { vals, locals, registers }` | `Env.t` (`env.ml`: val specs, registers, scattered defs) | Real env carries kinds + constraints + locations; `TypeEnv` is the closed test skeleton |
+| `TypeEnv { shared(vals, registers via Arc), locals }` | `Env.t` (`env.ml`: val specs, registers, scattered defs) | Real env carries kinds + constraints + locations; `TypeEnv` is the closed test skeleton; Lane 68 shares program tables via `Arc` (cheap `Clone` snapshots for workers) |
 
 ## From `sail-nexp` (Lane 04)
 

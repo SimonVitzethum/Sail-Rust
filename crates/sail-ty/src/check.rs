@@ -214,7 +214,7 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
                 self.check_fuel(bound, &ascribed, env, span, fuel)?;
                 let mut inner = env.clone();
                 inner.add_local(var.clone(), ascribed);
-                self.infer_fuel(&inner_body(body), &inner, span, fuel)
+                self.infer_fuel(body, &inner, span, fuel)
             }
             MiniExp::App(f, x) => {
                 let tf = self.infer_fuel(f, env, span, fuel)?;
@@ -372,10 +372,6 @@ fn opaque_kenv(typ: &MiniTyp) -> KindEnv {
         }
     }
     kenv
-}
-
-fn inner_body(body: &MiniExp) -> MiniExp {
-    body.clone()
 }
 
 fn disp(e: &TypeError) -> String {

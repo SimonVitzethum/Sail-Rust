@@ -187,83 +187,89 @@ impl Env {
     }
 
     // -- global tables ---------------------------------------------------
+    //
+    // RAM diet (Lane 68): all inserts move the entry in (`entry` API, one
+    // key clone for the map slot). The old code cloned key *and* value on
+    // every insert and re-inserted the previous entry on the duplicate
+    // path; now the duplicate path only reads the stored span.
+
     pub(crate) fn insert_type(&mut self, e: TypeEntry) -> Result<(), ResolveError> {
-        let prev = self.types.insert(e.name.clone(), e.clone());
-        match prev {
-            None => Ok(()),
-            Some(p) => {
-                self.types.insert(p.name.clone(), p.clone());
-                Err(ResolveError {
-                    kind: ResolveErrorKind::DuplicateType,
-                    name: e.name,
-                    first: p.span,
-                    second: e.span,
-                })
+        use std::collections::hash_map::Entry;
+        match self.types.entry(e.name.clone()) {
+            Entry::Vacant(v) => {
+                v.insert(e);
+                Ok(())
             }
+            Entry::Occupied(o) => Err(ResolveError {
+                kind: ResolveErrorKind::DuplicateType,
+                name: e.name,
+                first: o.get().span,
+                second: e.span,
+            }),
         }
     }
 
     pub(crate) fn insert_ctor(&mut self, e: CtorEntry) -> Result<(), ResolveError> {
-        let prev = self.ctors.insert(e.name.clone(), e.clone());
-        match prev {
-            None => Ok(()),
-            Some(p) => {
-                self.ctors.insert(p.name.clone(), p.clone());
-                Err(ResolveError {
-                    kind: ResolveErrorKind::DuplicateCtor,
-                    name: e.name,
-                    first: p.span,
-                    second: e.span,
-                })
+        use std::collections::hash_map::Entry;
+        match self.ctors.entry(e.name.clone()) {
+            Entry::Vacant(v) => {
+                v.insert(e);
+                Ok(())
             }
+            Entry::Occupied(o) => Err(ResolveError {
+                kind: ResolveErrorKind::DuplicateCtor,
+                name: e.name,
+                first: o.get().span,
+                second: e.span,
+            }),
         }
     }
 
     pub(crate) fn insert_valspec(&mut self, e: ValSpecEntry) -> Result<(), ResolveError> {
-        let prev = self.valspecs.insert(e.name.clone(), e.clone());
-        match prev {
-            None => Ok(()),
-            Some(p) => {
-                self.valspecs.insert(p.name.clone(), p.clone());
-                Err(ResolveError {
-                    kind: ResolveErrorKind::DuplicateValSpec,
-                    name: e.name,
-                    first: p.span,
-                    second: e.span,
-                })
+        use std::collections::hash_map::Entry;
+        match self.valspecs.entry(e.name.clone()) {
+            Entry::Vacant(v) => {
+                v.insert(e);
+                Ok(())
             }
+            Entry::Occupied(o) => Err(ResolveError {
+                kind: ResolveErrorKind::DuplicateValSpec,
+                name: e.name,
+                first: o.get().span,
+                second: e.span,
+            }),
         }
     }
 
     pub(crate) fn insert_register(&mut self, e: RegisterEntry) -> Result<(), ResolveError> {
-        let prev = self.registers.insert(e.name.clone(), e.clone());
-        match prev {
-            None => Ok(()),
-            Some(p) => {
-                self.registers.insert(p.name.clone(), p.clone());
-                Err(ResolveError {
-                    kind: ResolveErrorKind::DuplicateRegister,
-                    name: e.name,
-                    first: p.span,
-                    second: e.span,
-                })
+        use std::collections::hash_map::Entry;
+        match self.registers.entry(e.name.clone()) {
+            Entry::Vacant(v) => {
+                v.insert(e);
+                Ok(())
             }
+            Entry::Occupied(o) => Err(ResolveError {
+                kind: ResolveErrorKind::DuplicateRegister,
+                name: e.name,
+                first: o.get().span,
+                second: e.span,
+            }),
         }
     }
 
     pub(crate) fn insert_mapping(&mut self, e: MappingEntry) -> Result<(), ResolveError> {
-        let prev = self.mappings.insert(e.name.clone(), e.clone());
-        match prev {
-            None => Ok(()),
-            Some(p) => {
-                self.mappings.insert(p.name.clone(), p.clone());
-                Err(ResolveError {
-                    kind: ResolveErrorKind::DuplicateMapping,
-                    name: e.name,
-                    first: p.span,
-                    second: e.span,
-                })
+        use std::collections::hash_map::Entry;
+        match self.mappings.entry(e.name.clone()) {
+            Entry::Vacant(v) => {
+                v.insert(e);
+                Ok(())
             }
+            Entry::Occupied(o) => Err(ResolveError {
+                kind: ResolveErrorKind::DuplicateMapping,
+                name: e.name,
+                first: o.get().span,
+                second: e.span,
+            }),
         }
     }
 
@@ -291,5 +297,105 @@ impl Env {
     #[must_use]
     pub fn lookup_mapping(&self, name: &str) -> Option<&MappingEntry> {
         self.mappings.get(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sail_ast::{FileId, Span};
+
+    fn span_at(start: u32) -> Span {
+        Span::new(FileId(0), start, start + 1)
+    }
+
+    #[test]
+    fn insert_type_duplicate_keeps_first_and_reports_both_spans() {
+        let mut env = Env::new();
+        let first = span_at(0);
+        let second = span_at(10);
+        assert!(
+            env.insert_type(TypeEntry {
+                name: "T".to_string(),
+                span: first,
+                is_union: false,
+            })
+            .is_ok()
+        );
+        let err = env
+            .insert_type(TypeEntry {
+                name: "T".to_string(),
+                span: second,
+                is_union: true,
+            })
+            .unwrap_err();
+        assert_eq!(err.kind, ResolveErrorKind::DuplicateType);
+        assert_eq!(err.name, "T");
+        assert_eq!(err.first, first);
+        assert_eq!(err.second, second);
+        // The winner stays the first entry (restore-on-duplicate).
+        assert_eq!(
+            env.lookup_type("T").map(|e| (e.span, e.is_union)),
+            Some((first, false))
+        );
+    }
+
+    #[test]
+    fn insert_tables_accept_distinct_names() {
+        let mut env = Env::new();
+        let span = span_at(0);
+        assert!(
+            env.insert_ctor(CtorEntry {
+                name: "A".to_string(),
+                owner: "U".to_string(),
+                span,
+            })
+            .is_ok()
+        );
+        assert!(
+            env.insert_valspec(ValSpecEntry { name: "f".to_string(), span })
+                .is_ok()
+        );
+        assert!(
+            env.insert_register(RegisterEntry { name: "x".to_string(), span })
+                .is_ok()
+        );
+        assert!(
+            env.insert_mapping(MappingEntry { name: "m".to_string(), span })
+                .is_ok()
+        );
+        assert_eq!(env.lookup_ctor("A").map(|c| c.owner.as_str()), Some("U"));
+        assert!(env.lookup_valspec("f").is_some());
+        assert!(env.lookup_register("x").is_some());
+        assert!(env.lookup_mapping("m").is_some());
+    }
+
+    #[test]
+    fn insert_ctor_duplicate_reports_without_clobbering() {
+        let mut env = Env::new();
+        let first = span_at(1);
+        let second = span_at(2);
+        assert!(
+            env.insert_ctor(CtorEntry {
+                name: "A".to_string(),
+                owner: "U".to_string(),
+                span: first,
+            })
+            .is_ok()
+        );
+        let err = env
+            .insert_ctor(CtorEntry {
+                name: "A".to_string(),
+                owner: "V".to_string(),
+                span: second,
+            })
+            .unwrap_err();
+        assert_eq!(err.kind, ResolveErrorKind::DuplicateCtor);
+        assert_eq!(err.first, first);
+        assert_eq!(err.second, second);
+        assert_eq!(
+            env.lookup_ctor("A").map(|c| c.owner.as_str()),
+            Some("U")
+        );
     }
 }

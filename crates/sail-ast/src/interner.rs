@@ -4,6 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Interned string handle. `Copy + Send + Sync`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -32,10 +33,17 @@ pub trait Interner: Send + Sync {
 
 /// Minimal `HashMap`-backed interner. Single-threaded use via `&mut`;
 /// cheap to clone per worker for parallel lanes (merge stays a later lane).
+///
+/// RAM diet (Lane 68): each distinct string is allocated **once** as
+/// `Arc<str>` and shared between the lookup map (key) and the resolve
+/// vector (entry). Previously the interner stored every string twice
+/// (`HashMap<String, _>` key plus `Vec<String>` entry, two `to_owned`
+/// calls per `intern`). Behaviour (stable `Symbol`s, JSON shape) is
+/// unchanged.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SimpleInterner {
-    map: HashMap<String, Symbol>,
-    vec: Vec<String>,
+    map: HashMap<Arc<str>, Symbol>,
+    vec: Vec<Arc<str>>,
 }
 
 impl SimpleInterner {
@@ -54,13 +62,15 @@ impl Interner for SimpleInterner {
             return sym;
         }
         let sym = Symbol(self.vec.len() as u32);
-        self.vec.push(text.to_owned());
-        self.map.insert(text.to_owned(), sym);
+        // Single allocation, shared by map key and vec entry.
+        let shared: Arc<str> = Arc::from(text);
+        self.vec.push(Arc::clone(&shared));
+        self.map.insert(shared, sym);
         sym
     }
 
     fn resolve(&self, symbol: Symbol) -> Option<&str> {
-        self.vec.get(symbol.0 as usize).map(String::as_str)
+        self.vec.get(symbol.0 as usize).map(|s| &**s)
     }
 
     fn len(&self) -> usize {
@@ -96,5 +106,32 @@ mod tests {
     fn interner_is_send_sync() {
         assert_send_sync::<Symbol>();
         assert_send_sync::<SimpleInterner>();
+    }
+
+    #[test]
+    fn single_storage_shared_between_map_and_vec() {
+        let mut interner = SimpleInterner::new();
+        let sym = interner.intern("shared");
+        assert_eq!(interner.len(), 1);
+        // Exactly two owners (map key + vec entry): no third copy.
+        assert_eq!(Arc::strong_count(&interner.vec[sym.0 as usize]), 2);
+        // Re-interning allocates nothing and returns the same symbol.
+        assert_eq!(interner.intern("shared"), sym);
+        assert_eq!(interner.len(), 1);
+        assert_eq!(Arc::strong_count(&interner.vec[sym.0 as usize]), 2);
+        assert_eq!(interner.resolve(sym), Some("shared"));
+    }
+
+    #[test]
+    fn json_roundtrip_preserves_symbols() {
+        let mut interner = SimpleInterner::new();
+        let a = interner.intern("foo");
+        let b = interner.intern("bar");
+        let text = serde_json::to_string(&interner).expect("interner serializes");
+        let back: SimpleInterner = serde_json::from_str(&text).expect("interner deserializes");
+        assert_eq!(back, interner);
+        assert_eq!(back.resolve(a), Some("foo"));
+        assert_eq!(back.resolve(b), Some("bar"));
+        assert_eq!(back.len(), 2);
     }
 }
