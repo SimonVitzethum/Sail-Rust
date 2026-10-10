@@ -12,6 +12,7 @@
 //! `init: Option<Exp>`); see `REGS_NEEDED.md`. The local minimal types
 //! below are plain data so this crate builds standalone.
 
+use sail_diag::{DiagCode, SailError, Span};
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
@@ -389,21 +390,39 @@ impl RegisterInfo {
     /// Lean stub wiring the initial values into a `regstate`
     /// (`initial_regstate` hook the backend emits next to the
     /// `reset.sail` functions).
+    ///
+    /// E2 (`DECISIONS.md`): this crate never emits a `sorry` placeholder.
+    /// Translating the Sail initializer expressions in
+    /// [`Self::initial_values`] to Lean terms needs the Sail→Lean
+    /// expression printer, which is not wired up here — so a non-empty
+    /// register file is a hard [`SailError`]
+    /// ([`DiagCode::ExpressionNotTranslatable`], carrying the caller's
+    /// `span`) instead of a silent stub. Pass the definition site of the
+    /// register block (or [`Span::dummy`] for synthesized locations);
+    /// the error hint points at the owning lane. The empty register file
+    /// is exactly translatable (`regstate` is `Unit`), so it returns
+    /// `def initial_regstate : regstate := ()`.
     #[must_use]
-    pub fn initial_regstate_snippet(&self, grouped: bool) -> String {
-        let mut s = String::from("-- Initial values from `reset.sail` (see `initial_values`).\n");
-        if grouped {
-            let _ = writeln!(
-                s,
-                "def initial_regstate_grouped : regstate := sorry -- per-type `<stem>_reg` maps, keyed by register name"
-            );
-            return s;
+    pub fn initial_regstate_snippet(
+        &self,
+        grouped: bool,
+        span: Span,
+    ) -> Result<String, SailError> {
+        if self.registers.is_empty() {
+            return Ok("def initial_regstate : regstate := ()\n".to_owned());
         }
-        let _ = writeln!(s, "def initial_regstate : regstate where");
-        for v in self.initial_values() {
-            let _ = writeln!(s, "  {} := sorry -- {}", v.register, v.value_sail);
-        }
-        s
+        let first = &self.initial_values()[0];
+        Err(SailError::from_entry(
+            span,
+            DiagCode::ExpressionNotTranslatable,
+            format!(
+                "cannot emit `initial_regstate{}` for {} register(s): Sail initializer `{}` for `{}` is not translated to Lean; translate the `reset.sail` initializers to Lean terms first instead of emitting a placeholder",
+                if grouped { "_grouped" } else { "" },
+                self.registers.len(),
+                first.value_sail,
+                first.register,
+            ),
+        ))
     }
 }
 
@@ -539,9 +558,32 @@ register PSTATE : bits(32) = 0b00000000000000000000000000000000\n";
         assert!(vals[0].from_reset);
         assert!(!vals[1].from_reset);
         assert_eq!(vals[1].value_sail, "0b".to_owned() + &"0".repeat(64));
-        let snippet = small_info().initial_regstate_snippet(false);
-        assert!(snippet.contains("def initial_regstate : regstate where"), "{snippet}");
-        assert!(snippet.contains("PC :="), "{snippet}");
+    }
+
+    #[test]
+    fn initial_regstate_snippet_is_hard_error_not_sorry() {
+        for grouped in [false, true] {
+            let err = small_info()
+                .initial_regstate_snippet(grouped, Span::dummy())
+                .expect_err("non-empty regstate must be a hard error, never a placeholder stub");
+            assert_eq!(err.code, DiagCode::ExpressionNotTranslatable);
+            assert_eq!(err.code.code_str(), "E3512");
+            let text = err.to_string();
+            assert!(text.contains("E3512"), "{text}");
+            assert!(text.contains("initial_regstate"), "{text}");
+            assert!(!text.to_lowercase().contains("sorry"), "{text}");
+        }
+    }
+
+    #[test]
+    fn initial_regstate_snippet_empty_is_unit() {
+        for grouped in [false, true] {
+            let out = RegisterInfo::empty()
+                .initial_regstate_snippet(grouped, Span::dummy())
+                .expect("empty regstate is exactly translatable");
+            assert!(out.contains("()"), "{out}");
+            assert!(!out.to_lowercase().contains("sorry"), "{out}");
+        }
     }
 
     #[test]
