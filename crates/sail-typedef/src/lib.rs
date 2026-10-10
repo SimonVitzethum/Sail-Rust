@@ -41,12 +41,16 @@
 //! prove the variable non-negative (`provably_nneg`), and as `Int` otherwise
 //! — including in the `/-- Type quantifiers: … -/` comment, which is rendered
 //! *without* the new binders in scope and therefore always shows `Int`.
-//! This crate has no solver, so it approximates: a `K_int` kid prints as
-//! `Nat` in binder position iff the same quantifier list carries a constraint
-//! implying `kid ≥ 0` (`Ge`/`Gt`/`Le`/`Lt` against a constant, through
-//! top-level `And`). The quantifier comment always prints `Int`, matching the
-//! reference output (e.g. `struct.expected.lean` shows `k_n : Int` in the
-//! comment but `(k_n : Nat)` in the binders).
+//! This crate has no solver, so it implements the syntactic subset of
+//! `provably_nneg` that the typedef printer can decide locally: a constant
+//! `c ≥ 0`, or a kind variable bounded below by a non-negative constant in
+//! the typedef's own quantifier list (`k ≥ c`, `c ≤ k`, `k == c` with
+//! `c ≥ 0`, through top-level `And`; solver-backed proofs stay the
+//! typechecker's job, Lane 05). The same rule drives `atom(x)`/`range(lo,
+//! …)` bodies and `K_int` binder kinds. The quantifier comment always
+//! prints `Int`, matching the reference output (e.g.
+//! `struct.expected.lean` shows `k_n : Int` in the comment but
+//! `(k_n : Nat)` in the binders).
 //!
 //! ## Layout
 //!
@@ -160,6 +164,7 @@ impl TypedefPrinter {
         let cx = Cx {
             opts: &self.opts,
             ix,
+            quant: typedef_quant(td),
         };
         cx.print_typedef(out, td)
     }
@@ -180,12 +185,27 @@ impl TypedefPrinter {
 // Internal rendering context
 // ---------------------------------------------------------------------------
 
-struct Cx<'a, I: Interner + ?Sized> {
+struct Cx<'a, 'q, I: Interner + ?Sized> {
     opts: &'a Options,
     ix: &'a I,
+    /// Own quantifier list of the typedef under print: the constraint
+    /// context for the syntactic `provably_nneg` subset (OCaml adds the
+    /// `typquant` to the typechecker env before printing binders, ~line
+    /// 386; field/ctor/body types see the same context).
+    quant: &'q [QuantItem],
 }
 
-impl<I: Interner + ?Sized> Cx<'_, I> {
+/// Own quantifier list of a typedef (`&[]` for enum/abstract/bitfield).
+fn typedef_quant(td: &TypeDef) -> &[QuantItem] {
+    match &td.kind {
+        TypeDefKind::Record { quant, .. }
+        | TypeDefKind::Variant { quant, .. }
+        | TypeDefKind::Abbrev { quant, .. } => quant,
+        TypeDefKind::Enum { .. } | TypeDefKind::Abstract { .. } | TypeDefKind::Bitfield { .. } => &[],
+    }
+}
+
+impl<I: Interner + ?Sized> Cx<'_, '_, I> {
     // -- names -----------------------------------------------------------
 
     fn resolve(&self, symbol: Symbol, span: Span) -> Result<String, Error> {
@@ -482,13 +502,15 @@ impl<I: Interner + ?Sized> Cx<'_, I> {
                         }
                         _ => self.print_generic_app(out, ty.span, &head, args),
                     },
-                    // `atom(x)`: `Nat` when provably non-negative, else
-                    // `Int`. `int('n)` is accepted with the same rule: the
-                    // Sail frontend normalises it before Lean printing, and
+                    // `atom(x)`: `Nat` when the argument is provably
+                    // non-negative in the typedef's quantifier context
+                    // (`provably_nneg`, ~line 298), else `Int`. `int('n)`
+                    // is accepted with the same rule: the Sail frontend
+                    // normalises it before Lean printing, and
                     // `struct.expected.lean` shows `size : int('n)` as `Int`.
                     "atom" | "int" => match args.as_slice() {
                         [m] if is_nexp_arg(m) => {
-                            out.write_str(if nexp_is_nat_const(expect_nexp(m)) {
+                            out.write_str(if self.nexp_provably_nneg(expect_nexp(m)) {
                                 "Nat"
                             } else {
                                 "Int"
@@ -539,7 +561,7 @@ impl<I: Interner + ?Sized> Cx<'_, I> {
                     }
                     "range" => match args.as_slice() {
                         [lo, _] if is_nexp_arg(lo) => {
-                            out.write_str(if nexp_is_nat_const(expect_nexp(lo)) {
+                            out.write_str(if self.nexp_provably_nneg(expect_nexp(lo)) {
                                 "Nat"
                             } else {
                                 "Int"
@@ -782,6 +804,28 @@ impl<I: Interner + ?Sized> Cx<'_, I> {
         }
     }
 
+    // -- non-negativity ----------------------------------------------------
+
+    /// Syntactic subset of the typechecker's `provably_nneg`
+    /// (`pretty_print_lean.ml:298`, `Type_check.prove … (nc_gteq x 0)`):
+    /// a constant `c ≥ 0`, or a kind variable the typedef's own
+    /// quantifier constraints prove non-negative (`implies_nneg` over
+    /// `self.quant`, the context OCaml builds with `Env.add_typquant`).
+    /// Full solver-backed proofs stay the typechecker's job (Lane 05);
+    /// anything beyond constants and direct kid bounds prints `Int`.
+    fn nexp_provably_nneg(&self, n: &NExp) -> bool {
+        if nexp_const_ge(n, 0) {
+            return true;
+        }
+        if let NExpKind::Var(kid) = &n.kind {
+            return self.quant.iter().filter_map(|item| match item {
+                QuantItem::Constraint(nc) => Some(&nc.kind),
+                QuantItem::Id(_) => None,
+            }).any(|nc| implies_nneg(nc, *kid));
+        }
+        false
+    }
+
     // -- constraints ------------------------------------------------------------
 
     fn print_constraint(
@@ -910,8 +954,9 @@ fn fix_id(name: &str) -> String {
     out
 }
 
-/// `K_int` binder names: `Nat` when the quantifier list proves non-negativity
-/// (heuristic stand-in for `provably_nneg`), else `Int`.
+/// `K_int` binder kind: `Nat` when the quantifier list proves non-negativity
+/// (syntactic `provably_nneg` subset, shared with `atom`/`range` bodies),
+/// else `Int`.
 fn binder_kind(quant: &[QuantItem], kopt: &sail_ast::KOpt) -> &'static str {
     match kopt.kind {
         Kind::Type => "Type",
@@ -942,7 +987,7 @@ fn comment_kind(kind: Kind) -> &'static str {
     }
 }
 
-/// Heuristic stand-in for the typechecker's `provably_nneg`: does this
+/// Syntactic subset of the typechecker's `provably_nneg`: does this
 /// constraint imply `kid ≥ 0`?
 fn implies_nneg(nc: &ConstraintKind, kid: Symbol) -> bool {
     match nc {
@@ -951,6 +996,12 @@ fn implies_nneg(nc: &ConstraintKind, kid: Symbol) -> bool {
         ConstraintKind::Gt(a, b) => nexp_is_kid(a, kid) && nexp_const_ge(b, -1),
         ConstraintKind::Le(a, b) => nexp_is_kid(b, kid) && nexp_const_ge(a, 0),
         ConstraintKind::Lt(a, b) => nexp_is_kid(b, kid) && nexp_const_ge(a, -1),
+        // `k == c` with `c ≥ 0` (either side) pins `k` to a non-negative
+        // constant, hence proves `k ≥ 0`.
+        ConstraintKind::Equal(a, b) => {
+            (typarg_nexp_is_kid(a, kid) && typarg_nexp_const_ge(b, 0))
+                || (typarg_nexp_is_kid(b, kid) && typarg_nexp_const_ge(a, 0))
+        }
         ConstraintKind::And(x, y) => implies_nneg(&x.kind, kid) || implies_nneg(&y.kind, kid),
         _ => false,
     }
@@ -971,9 +1022,18 @@ fn nexp_const_ge(n: &NExp, bound: i128) -> bool {
     nexp_const(n).is_some_and(|c| c >= bound)
 }
 
-/// `atom(x)` / `range(lo, _)` print as `Nat` for constant `x`/`lo ≥ 0`.
-fn nexp_is_nat_const(n: &NExp) -> bool {
-    nexp_const_ge(n, 0)
+fn typarg_nexp_is_kid(arg: &TypArg, kid: Symbol) -> bool {
+    match &arg.kind {
+        TypArgKind::NExp(n) => nexp_is_kid(n, kid),
+        _ => false,
+    }
+}
+
+fn typarg_nexp_const_ge(arg: &TypArg, bound: i128) -> bool {
+    match &arg.kind {
+        TypArgKind::NExp(n) => nexp_const_ge(n, bound),
+        _ => false,
+    }
 }
 
 fn is_typ_arg(arg: &TypArg) -> bool {
