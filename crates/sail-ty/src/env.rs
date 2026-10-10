@@ -2,6 +2,7 @@
 //! Type environment: value specs + registers.
 
 use crate::nexp::{MiniTyp, TypQuant};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Global typing environment (immutable snapshots are `Clone`d per worker
@@ -10,7 +11,7 @@ use std::collections::HashMap;
 /// Retained (MIGRATION.md #24): `sail-ast` has no `Env.t` yet; the
 /// val/register/local tables stay here until that lane lands. Schemes
 /// lower onto `sail_ast::TypSchm` (see [`crate::conv`]).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeEnv {
     /// `val` specs: function name -> quantified scheme.
     vals: HashMap<String, TypQuant>,

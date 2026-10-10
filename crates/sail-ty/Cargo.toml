@@ -11,6 +11,12 @@ path = "src/lib.rs"
 
 [dependencies]
 sail-ast = { path = "../sail-ast" }
+# MSRV 1.75: Mindestversionen pinnen (serde/serde_json mit hoeherer MSRV
+# nur nach MSRV-Check in CI anheben).
+serde = { version = "1.0.203", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0.117"
 
 [lints]
 workspace = true

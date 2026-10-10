@@ -6,10 +6,11 @@
 
 use crate::error::{Span, TypeError, TypeResult};
 use crate::nexp::{MiniTyp, NConstraint, Nexp};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Sail kind.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Kind {
     /// `K_int`: level (numeric) kind.
     KInt,
@@ -52,7 +53,7 @@ impl std::fmt::Display for Kind {
 /// Retained (MIGRATION.md #23): a pure binding map, not an AST node;
 /// `sail-ast` has no kind-context type yet (future `Env.t` Ausschnitt).
 /// [`Kind`] itself erases onto `sail_ast::Kind` (see [`crate::conv`]).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KindEnv {
     vars: HashMap<String, Kind>,
 }

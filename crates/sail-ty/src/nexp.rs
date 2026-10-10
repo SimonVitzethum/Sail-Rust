@@ -13,8 +13,10 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Numeric type-level expression (subset of Sail `nexp`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Nexp {
     /// Integer constant.
     Const(i128),
@@ -139,7 +141,7 @@ impl fmt::Display for Nexp {
 }
 
 /// Boolean / numeric constraint over [`Nexp`] (subset of Sail `n_constraint`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum NConstraint {
     /// `true`
     True,
@@ -272,7 +274,7 @@ impl fmt::Display for NConstraint {
 
 /// Sail type (subset of Sail `typ`): enough for kind checking,
 /// register types, and the `test/lean`-subset smoke tests.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MiniTyp {
     /// `int`
     Int,
@@ -357,7 +359,7 @@ impl fmt::Display for MiniTyp {
 }
 
 /// Universally quantified type scheme: `forall 'n 'm. nc => typ`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypQuant {
     /// Bound kinded variables: `('n, K_int)`.
     pub quants: Vec<(String, crate::kind::Kind)>,
