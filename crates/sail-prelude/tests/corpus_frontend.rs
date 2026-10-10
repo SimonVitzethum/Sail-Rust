@@ -63,7 +63,7 @@ fn run_one(rel: &str, src: &str) -> FileReport {
     };
     let bridged_defs = bridged.ast.defs.len();
     let deferred = bridged.deferred.len();
-    let resolved = sail_resolve::resolve(&bridged.ast, &bridged.interner);
+    let resolved = sail_resolve::resolve::resolve(&bridged.ast, &bridged.interner);
     let resolve_errors = resolved.errors.len();
     let resolve_warnings = resolved.warnings.len();
     if !resolved.is_ok() {
