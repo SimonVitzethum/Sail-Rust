@@ -6,6 +6,7 @@
 //! `Nexp_app` nodes there, exposed here via [`NExp::div`],
 //! [`NExp::modulo`] and [`NExp::abs`] helpers.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Numeric kind variable (`kid` in the Sail AST), e.g. `"n"`.
@@ -56,6 +57,54 @@ pub enum NConstraint {
     And(Box<NConstraint>, Box<NConstraint>),
     Or(Box<NConstraint>, Box<NConstraint>),
     Not(Box<NConstraint>),
+}
+
+/// Rebuild a binary [`NExp`] node only when at least one side changed;
+/// otherwise borrow the original node (no fresh `Box`, no `clone`).
+fn subst_binary<'a>(
+    subst: &BTreeMap<Kid, NExp>,
+    orig: &'a NExp,
+    a: &'a NExp,
+    b: &'a NExp,
+    rebuild: fn(Box<NExp>, Box<NExp>) -> NExp,
+) -> Cow<'a, NExp> {
+    let (ra, rb) = (a.subst_cow(subst), b.subst_cow(subst));
+    if matches!(ra, Cow::Borrowed(_)) && matches!(rb, Cow::Borrowed(_)) {
+        Cow::Borrowed(orig)
+    } else {
+        Cow::Owned(rebuild(Box::new(ra.into_owned()), Box::new(rb.into_owned())))
+    }
+}
+
+/// Rebuild a unary [`NExp`] node only when the child changed.
+fn subst_unary<'a>(
+    subst: &BTreeMap<Kid, NExp>,
+    orig: &'a NExp,
+    x: &'a NExp,
+    rebuild: fn(Box<NExp>) -> NExp,
+) -> Cow<'a, NExp> {
+    let rx = x.subst_cow(subst);
+    if matches!(rx, Cow::Borrowed(_)) {
+        Cow::Borrowed(orig)
+    } else {
+        Cow::Owned(rebuild(Box::new(rx.into_owned())))
+    }
+}
+
+/// Rebuild a binary [`NConstraint`] node only when at least one side changed.
+fn subst_constraint_binary<'a>(
+    subst: &BTreeMap<Kid, NExp>,
+    orig: &'a NConstraint,
+    a: &'a NExp,
+    b: &'a NExp,
+    rebuild: fn(Box<NExp>, Box<NExp>) -> NConstraint,
+) -> Cow<'a, NConstraint> {
+    let (ra, rb) = (a.subst_cow(subst), b.subst_cow(subst));
+    if matches!(ra, Cow::Borrowed(_)) && matches!(rb, Cow::Borrowed(_)) {
+        Cow::Borrowed(orig)
+    } else {
+        Cow::Owned(rebuild(Box::new(ra.into_owned()), Box::new(rb.into_owned())))
+    }
 }
 
 impl NExp {
@@ -123,23 +172,59 @@ impl NExp {
     }
 
     /// Substitute kind variables according to `subst`.
+    ///
+    /// Unchanged subtrees are shared, not rebuilt: use
+    /// [`NExp::subst_cow`] directly when the caller can keep a borrow.
     pub fn subst(&self, subst: &BTreeMap<Kid, NExp>) -> NExp {
+        self.subst_cow(subst).into_owned()
+    }
+
+    /// Substitute kind variables, borrowing `self` wherever no variable
+    /// below the node is hit by `subst`.
+    ///
+    /// RAM diet (Lane 68): the old `subst` re-boxed every node on the
+    /// path even when nothing changed. A `Borrowed` result allocates
+    /// nothing — no `clone`, no fresh `Box`. Values are identical to
+    /// [`NExp::subst`].
+    pub fn subst_cow(&self, subst: &BTreeMap<Kid, NExp>) -> Cow<'_, NExp> {
         match self {
-            NExp::Id(_) | NExp::Constant(_) => self.clone(),
-            NExp::Var(k) => subst.get(k).cloned().unwrap_or_else(|| self.clone()),
+            NExp::Id(_) | NExp::Constant(_) => Cow::Borrowed(self),
+            NExp::Var(k) => match subst.get(k) {
+                Some(repl) => Cow::Owned(repl.clone()),
+                None => Cow::Borrowed(self),
+            },
             NExp::App(f, args) => {
-                NExp::App(f.clone(), args.iter().map(|a| a.subst(subst)).collect())
+                let rewritten: Vec<Cow<'_, NExp>> =
+                    args.iter().map(|a| a.subst_cow(subst)).collect();
+                if rewritten.iter().any(|c| matches!(c, Cow::Owned(_))) {
+                    Cow::Owned(NExp::App(
+                        f.clone(),
+                        rewritten.into_iter().map(Cow::into_owned).collect(),
+                    ))
+                } else {
+                    Cow::Borrowed(self)
+                }
             }
-            NExp::If(c, t, e) => NExp::If(
-                Box::new(c.subst(subst)),
-                Box::new(t.subst(subst)),
-                Box::new(e.subst(subst)),
-            ),
-            NExp::Times(a, b) => NExp::Times(Box::new(a.subst(subst)), Box::new(b.subst(subst))),
-            NExp::Sum(a, b) => NExp::Sum(Box::new(a.subst(subst)), Box::new(b.subst(subst))),
-            NExp::Minus(a, b) => NExp::Minus(Box::new(a.subst(subst)), Box::new(b.subst(subst))),
-            NExp::Exp(x) => NExp::Exp(Box::new(x.subst(subst))),
-            NExp::Neg(x) => NExp::Neg(Box::new(x.subst(subst))),
+            NExp::If(c, t, e) => {
+                let (cc, tc, ec) = (c.subst_cow(subst), t.subst_cow(subst), e.subst_cow(subst));
+                if matches!(cc, Cow::Borrowed(_))
+                    && matches!(tc, Cow::Borrowed(_))
+                    && matches!(ec, Cow::Borrowed(_))
+                {
+                    Cow::Borrowed(self)
+                } else {
+                    Cow::Owned(NExp::If(
+                        Box::new(cc.into_owned()),
+                        Box::new(tc.into_owned()),
+                        Box::new(ec.into_owned()),
+                    ))
+                }
+            }
+            NExp::Times(a, b) => subst_binary(subst, self, a, b, NExp::Times),
+            NExp::Sum(a, b) => subst_binary(subst, self, a, b, NExp::Sum),
+            NExp::Minus(a, b) => subst_binary(subst, self, a, b, NExp::Minus),
+            NExp::Exp(x) => subst_unary(subst, self, x, NExp::Exp),
+            NExp::Neg(x) => subst_unary(subst, self, x, NExp::Neg),
         }
     }
 
@@ -236,46 +321,63 @@ impl NConstraint {
     }
 
     /// Substitute kind variables according to `subst`.
+    ///
+    /// Unchanged subtrees are shared, not rebuilt: use
+    /// [`NConstraint::subst_cow`] directly when the caller can keep a borrow.
     pub fn subst(&self, subst: &BTreeMap<Kid, NExp>) -> NConstraint {
-        match self {
-            NConstraint::True | NConstraint::False | NConstraint::Id(_) => self.clone(),
-            NConstraint::Var(k) => self.clone().and_mark(k, subst),
-            NConstraint::Equal(a, b) => {
-                NConstraint::Equal(Box::new(a.subst(subst)), Box::new(b.subst(subst)))
-            }
-            NConstraint::NotEqual(a, b) => {
-                NConstraint::NotEqual(Box::new(a.subst(subst)), Box::new(b.subst(subst)))
-            }
-            NConstraint::Ge(a, b) => {
-                NConstraint::Ge(Box::new(a.subst(subst)), Box::new(b.subst(subst)))
-            }
-            NConstraint::Gt(a, b) => {
-                NConstraint::Gt(Box::new(a.subst(subst)), Box::new(b.subst(subst)))
-            }
-            NConstraint::Le(a, b) => {
-                NConstraint::Le(Box::new(a.subst(subst)), Box::new(b.subst(subst)))
-            }
-            NConstraint::Lt(a, b) => {
-                NConstraint::Lt(Box::new(a.subst(subst)), Box::new(b.subst(subst)))
-            }
-            NConstraint::Set(n, vs) => NConstraint::Set(Box::new(n.subst(subst)), vs.clone()),
-            NConstraint::And(a, b) => {
-                NConstraint::And(Box::new(a.subst(subst)), Box::new(b.subst(subst)))
-            }
-            NConstraint::Or(a, b) => {
-                NConstraint::Or(Box::new(a.subst(subst)), Box::new(b.subst(subst)))
-            }
-            NConstraint::Not(c) => NConstraint::Not(Box::new(c.subst(subst))),
-        }
+        self.subst_cow(subst).into_owned()
     }
 
-    /// Helper: a substituted boolean variable that maps to a constant
-    /// becomes `True`/`False` (non-zero is true).
-    fn and_mark(self, k: &Kid, subst: &BTreeMap<Kid, NExp>) -> NConstraint {
-        match subst.get(k) {
-            Some(NExp::Constant(0)) => NConstraint::False,
-            Some(NExp::Constant(_)) => NConstraint::True,
-            _ => self,
+    /// Substitute kind variables, borrowing `self` wherever no variable
+    /// below the node is hit by `subst` (see [`NExp::subst_cow`]).
+    ///
+    /// A substituted boolean variable mapping to a constant still folds
+    /// to `True`/`False` exactly like [`NConstraint::subst`] did.
+    pub fn subst_cow(&self, subst: &BTreeMap<Kid, NExp>) -> Cow<'_, NConstraint> {
+        match self {
+            NConstraint::True | NConstraint::False | NConstraint::Id(_) => Cow::Borrowed(self),
+            NConstraint::Var(k) => match subst.get(k) {
+                Some(NExp::Constant(0)) => Cow::Owned(NConstraint::False),
+                Some(NExp::Constant(_)) => Cow::Owned(NConstraint::True),
+                _ => Cow::Borrowed(self),
+            },
+            NConstraint::Equal(a, b) => {
+                subst_constraint_binary(subst, self, a, b, NConstraint::Equal)
+            }
+            NConstraint::NotEqual(a, b) => {
+                subst_constraint_binary(subst, self, a, b, NConstraint::NotEqual)
+            }
+            NConstraint::Ge(a, b) => subst_constraint_binary(subst, self, a, b, NConstraint::Ge),
+            NConstraint::Gt(a, b) => subst_constraint_binary(subst, self, a, b, NConstraint::Gt),
+            NConstraint::Le(a, b) => subst_constraint_binary(subst, self, a, b, NConstraint::Le),
+            NConstraint::Lt(a, b) => subst_constraint_binary(subst, self, a, b, NConstraint::Lt),
+            NConstraint::Set(n, vs) => {
+                let rewritten = n.subst_cow(subst);
+                if matches!(rewritten, Cow::Borrowed(_)) {
+                    // Unchanged: also spares the `vs.clone()` the old
+                    // `subst` did unconditionally.
+                    Cow::Borrowed(self)
+                } else {
+                    Cow::Owned(NConstraint::Set(
+                        Box::new(rewritten.into_owned()),
+                        vs.clone(),
+                    ))
+                }
+            }
+            NConstraint::And(a, b) => {
+                subst_constraint_binary(subst, self, a, b, NConstraint::And)
+            }
+            NConstraint::Or(a, b) => {
+                subst_constraint_binary(subst, self, a, b, NConstraint::Or)
+            }
+            NConstraint::Not(c) => {
+                let rewritten = c.subst_cow(subst);
+                if matches!(rewritten, Cow::Borrowed(_)) {
+                    Cow::Borrowed(self)
+                } else {
+                    Cow::Owned(NConstraint::Not(Box::new(rewritten.into_owned())))
+                }
+            }
         }
     }
 
@@ -348,6 +450,50 @@ mod tests {
             e.subst(&s),
             NExp::Sum(Box::new(NExp::constant(2)), Box::new(NExp::constant(2)))
         );
+    }
+
+    #[test]
+    fn subst_cow_borrows_fully_unchanged_tree() {
+        let e = NExp::Sum(Box::new(NExp::var("n")), Box::new(NExp::constant(1)));
+        let empty: BTreeMap<Kid, NExp> = BTreeMap::new();
+        assert!(matches!(e.subst_cow(&empty), Cow::Borrowed(_)));
+        // A miss in a non-empty map still borrows (no clone, no re-box).
+        let mut s = BTreeMap::new();
+        s.insert("m".to_string(), NExp::constant(2));
+        assert!(matches!(e.subst_cow(&s), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn subst_cow_rebuilds_only_on_hit_and_matches_subst() {
+        let e = NExp::Sum(Box::new(NExp::var("n")), Box::new(NExp::constant(1)));
+        let mut s = BTreeMap::new();
+        s.insert("n".to_string(), NExp::constant(2));
+        let cow = e.subst_cow(&s);
+        assert!(matches!(cow, Cow::Owned(_)));
+        assert_eq!(cow.into_owned(), e.subst(&s));
+        assert_eq!(
+            e.subst(&s),
+            NExp::Sum(Box::new(NExp::constant(2)), Box::new(NExp::constant(1)))
+        );
+    }
+
+    #[test]
+    fn subst_cow_constraint_keeps_bool_var_folding() {
+        let v = NConstraint::Var("b".to_string());
+        let mut s = BTreeMap::new();
+        s.insert("b".to_string(), NExp::constant(0));
+        assert_eq!(v.subst_cow(&s).into_owned(), NConstraint::False);
+        s.insert("b".to_string(), NExp::constant(7));
+        assert_eq!(v.subst_cow(&s).into_owned(), NConstraint::True);
+        // Non-constant mapping leaves the var borrowed (unchanged, as before).
+        s.insert("b".to_string(), NExp::var("n"));
+        assert!(matches!(v.subst_cow(&s), Cow::Borrowed(_)));
+        assert_eq!(v.subst(&s), NConstraint::Var("b".to_string()));
+        // Unchanged set-constraint borrows (old `subst` cloned `vs` always).
+        let set = NConstraint::Set(Box::new(NExp::var("n")), vec![1, 2, 3]);
+        let empty: BTreeMap<Kid, NExp> = BTreeMap::new();
+        assert!(matches!(set.subst_cow(&empty), Cow::Borrowed(_)));
+        assert_eq!(set.subst(&empty), set);
     }
 
     #[test]

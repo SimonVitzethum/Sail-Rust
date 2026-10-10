@@ -6,7 +6,7 @@
 
 use crate::error::{Span, TypeError, TypeErrorKind, TypeResult};
 use crate::kind::Kind;
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 
 /// A single quantified variable.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -46,22 +46,27 @@ impl QuantScope {
     }
 
     /// Bind `var` in the innermost scope. Errors on duplicate in same scope.
+    ///
+    /// RAM diet (Lane 68): single lookup via the `entry` API instead of
+    /// `contains_key` + `insert` (two hashes).
     pub fn bind(&mut self, var: QuantVar, span: Span) -> TypeResult<()> {
         if self.scopes.is_empty() {
             self.push_scope();
         }
         let top = self.scopes.last_mut().expect("scope just pushed");
-        if top.contains_key(&var.name) {
-            return Err(TypeError {
+        match top.entry(var.name) {
+            Entry::Occupied(o) => Err(TypeError {
                 span,
                 kind: TypeErrorKind::QuantError(format!(
                     "duplicate quantifier '{}'",
-                    var.name
+                    o.key()
                 )),
-            });
+            }),
+            Entry::Vacant(v) => {
+                v.insert(var.kind);
+                Ok(())
+            }
         }
-        top.insert(var.name, var.kind);
-        Ok(())
     }
 
     /// Bind a whole `forall` telescope at once.
@@ -92,7 +97,8 @@ impl QuantScope {
     /// skeleton used by later monomorphisation in Lane 09).
     #[must_use]
     pub fn freshen(&self, base: &str) -> HashMap<String, String> {
-        let mut out = HashMap::new();
+        let total: usize = self.scopes.iter().map(HashMap::len).sum();
+        let mut out = HashMap::with_capacity(total);
         let mut i = 0usize;
         for scope in &self.scopes {
             for name in scope.keys() {

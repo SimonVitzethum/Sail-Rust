@@ -6,7 +6,7 @@ description = "Sail2 core AST data types: generational IDs, spans, interner, ser
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 
 [dev-dependencies]
