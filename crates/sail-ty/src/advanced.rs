@@ -322,7 +322,10 @@ pub fn check_adv_kind(typ: &AdvTyp, env: &KindEnv, span: Span) -> TypeResult<Kin
             Ok(Kind::KType)
         }
         AdvTyp::Var { kid, kind } => match env.lookup(kid) {
-            Some(k) if k == *kind || (k == Kind::KInt && *kind == Kind::KNat) => Ok(*kind),
+            // `K_nat <: K_int`: a `KNat`-bound var may serve a `K_int`
+            // use, never the reverse (an `int` is not provably a `nat`).
+            // Same direction as [`Kind::subsumes`](crate::kind::Kind::subsumes).
+            Some(k) if k == *kind || (*kind == Kind::KInt && k == Kind::KNat) => Ok(*kind),
             Some(k) => Err(TypeError::kind_mismatch(span, *kind, k)),
             None => Err(TypeError::unbound_var(span, kid.clone())),
         },
@@ -374,8 +377,12 @@ pub fn check_adv_kind(typ: &AdvTyp, env: &KindEnv, span: Span) -> TypeResult<Kin
 // Substitution (Skizze, via NexpSubst)
 // ---------------------------------------------------------------------------
 
-/// Wendet eine Level-Substitution auf [`AdvTyp`] an (fängt `Exist`-Binder
-/// hygienisch: prallt die Substitution an gebundenen Namen ab).
+/// Wendet eine Level-Substitution auf [`AdvTyp`] an.
+///
+/// `Exist`-Binder werden NICHT hygienisch abgefangen: der Aufrufer muss
+/// vorher [`freshen_exist`] aufrufen (dessen Gensym-Namen per Konstruktion
+/// mit keinem Substitutions-Bild kollidieren können). Blinde Anwendung auf
+/// ungefrischte Binder riskiert Capture.
 #[must_use]
 pub fn subst_adv_typ(subst: &NexpSubst, typ: &AdvTyp) -> AdvTyp {
     match typ {
@@ -404,9 +411,9 @@ pub fn subst_adv_typ(subst: &NexpSubst, typ: &AdvTyp) -> AdvTyp {
             Box::new(subst_adv_typ(subst, a)),
             Box::new(subst_adv_typ(subst, b)),
         ),
-        // Skizze: Binder-Namen gelten als frisch (Freshen siehe
-        // `freshen_exist`); Kollisionen muss der Aufrufer durch
-        // vorheriges Freshen ausschließen.
+        // Skizze: Binder-Namen gelten als frisch (siehe `freshen_exist`,
+        // dessen Gensym-Namen nicht kollidieren können); ohne vorheriges
+        // Freshen riskiert diese Anwendung Capture.
         AdvTyp::Exist { binders, constraint, body } => AdvTyp::Exist {
             binders: binders.clone(),
             constraint: subst.apply_constraint(constraint),
@@ -415,16 +422,18 @@ pub fn subst_adv_typ(subst: &NexpSubst, typ: &AdvTyp) -> AdvTyp {
     }
 }
 
-/// Frischt die Binder einer [`AdvTyp::Exist`] auf (`exists 'n. …` →
-/// `exists 'base0. …`); Nicht-`Exist`-Typen kommen unverändert zurück.
+/// Frischt die Binder einer [`AdvTyp::Exist`] auf; Nicht-`Exist`-Typen
+/// kommen unverändert zurück. Namen kommen aus [`crate::nexp::gensym`]
+/// (OCaml `Type_env.fresh_kid`): `#` ist kein legales Sail-Bezeichnerzeichen,
+/// daher kann kein Quell-Binder kollidieren.
 #[must_use]
 pub fn freshen_exist(typ: &AdvTyp, base: &str) -> AdvTyp {
     match typ {
         AdvTyp::Exist { binders, constraint, body } => {
             let mut subst = NexpSubst::new();
             let mut fresh_binders = Vec::with_capacity(binders.len());
-            for (i, (v, k)) in binders.iter().enumerate() {
-                let fresh = format!("{base}{i}");
+            for (v, k) in binders.iter() {
+                let fresh = crate::nexp::gensym(base);
                 subst.bind(v.clone(), Nexp::Var(fresh.clone()));
                 fresh_binders.push((fresh, *k));
             }
@@ -791,10 +800,13 @@ mod tests {
         // (kein Fall-Splitting): die Skizze MUSS den `Unknown`-Pfad als
         // Fehler sichtbar machen, nicht still akzeptieren.
         let solver = StubSolver::new();
-        let (_, opened, _) =
+        let (binders, opened, _) =
             open_exist(&arm_exist_bits("n", &[8, 32]), "w").expect("exist opens");
+        assert_eq!(binders.len(), 1);
+        // Der Zeuge spricht über den frischen Binder (Gensym, nie `n`).
+        assert_ne!(binders[0].0, "n");
         let witness = NConstraint::Eq(
-            Box::new(Nexp::Var("w0".to_string())),
+            Box::new(Nexp::Var(binders[0].0.clone())),
             Box::new(Nexp::Const(32)),
         );
         assert!(prove_exist_open(&solver, &witness, &opened, dummy_span()).is_err());
@@ -818,6 +830,23 @@ mod tests {
             rhs: Box::new(AdvTyp::Bool),
         };
         assert!(check_bidir_sub(&solver, &same, &same, dummy_span()).is_ok());
+    }
+
+    #[test]
+    fn typ_var_kind_nat_direction() {
+        // `K_nat <: K_int` (eine Richtung): eine `KNat`-gebundene Variable
+        // bedient `K_int`-Verwendungen, niemals umgekehrt — ein `int` ist
+        // kein beweisbares `nat`. Die alte Prüfung hatte die Richtung
+        // vertauscht (`K_int`-Binder für `KNat`-Verwendung akzeptiert).
+        let mut env = KindEnv::new();
+        env.bind("m", Kind::KNat);
+        env.bind("n", Kind::KInt);
+        let int_use = AdvTyp::Var { kid: "m".to_string(), kind: Kind::KInt };
+        assert_eq!(check_adv_kind(&int_use, &env, dummy_span()), Ok(Kind::KInt));
+        let nat_use = AdvTyp::Var { kid: "n".to_string(), kind: Kind::KNat };
+        assert!(check_adv_kind(&nat_use, &env, dummy_span()).is_err());
+        let same = AdvTyp::Var { kid: "n".to_string(), kind: Kind::KInt };
+        assert_eq!(check_adv_kind(&same, &env, dummy_span()), Ok(Kind::KInt));
     }
 
     #[test]
