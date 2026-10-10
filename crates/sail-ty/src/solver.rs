@@ -2,9 +2,12 @@
 //! `Solver` trait + stub + bounded caching wrapper.
 //!
 //! Lane 06 implements this trait with the real Z3 backend. Everything in
-//! Lane 05 must work (and terminate) with [`StubSolver`].
+//! Lane 05 must work (and terminate) with [`StubSolver`]. Lane 107 adds the
+//! real `NC_set`/`NC_app`/`NC_var`/`NC_id` prove paths through this same
+//! trait (constant membership, singleton equations, opaque-bool soundness);
+//! Z3 still plugs in only via [`Solver`] (rule `Z-TraitOnly`).
 
-use crate::nexp::NConstraint;
+use crate::nexp::{NConstraint, Nexp};
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 use std::sync::Mutex;
@@ -39,8 +42,13 @@ pub trait Solver: Send + Sync {
 /// Stub solver for tests and for checking without Z3.
 ///
 /// Decides only what is syntactically obvious:
-/// - boolean constant folding (`True`/`False`, folded comparisons),
-/// - syntactic reflexivity (`n == n` is proved, `n != n` refuted),
+/// - boolean constant folding (`True`/`False`, folded comparisons,
+///   constant `Set` membership, empty `Set`),
+/// - syntactic reflexivity (`n == n` is proved, `n != n` refuted,
+///   singleton `Set(n, [v])` as `n == v`),
+/// - uninterpreted predicates (`App`) and opaque booleans (`Var`/`Id`)
+///   stay [`ProveResult::Unknown`] (sound: they never fold, they only
+///   propagate through `And`/`Or`/`Not` like any other open formula),
 /// - everything else is [`ProveResult::Unknown`].
 ///
 /// Always terminates in O(tree size) time.
@@ -86,6 +94,18 @@ impl Solver for StubSolver {
                 ProveResult::Refuted => ProveResult::Proved,
                 ProveResult::Unknown => ProveResult::Unknown,
             },
+            // `NC_set`: a singleton is that equation (recurses into the
+            // reflexivity/folding paths above); anything else non-foldable
+            // is open. (Constants and `[]` never reach here: `as_bool`
+            // folds them on the fast path.)
+            NConstraint::Set(n, vs) if vs.len() == 1 => {
+                self.prove(&NConstraint::Eq(n.clone(), Box::new(Nexp::Const(vs[0]))))
+            }
+            // `NC_app`/`NC_var`/`NC_id`: opaque — sound `Unknown`, never a
+            // fabricated proof (stronger backends decide via the trait).
+            NConstraint::Set(_, _) | NConstraint::App(_, _) | NConstraint::Var(_) | NConstraint::Id(_) => {
+                ProveResult::Unknown
+            }
             _ => ProveResult::Unknown,
         }
     }

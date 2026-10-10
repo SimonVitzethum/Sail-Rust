@@ -23,6 +23,7 @@ readers. Status values: `implemented` | `deferred` (with owner lane).
 |---|---|---|---|
 | CK-TrueFalse | constraint kind | implemented | `constraint_kinds` |
 | CK-Cmp | constraint kind (comparisons) | implemented | `constraint_kinds` |
+| CK-SetApp | `NC_set`/`NC_app`/`NC_var`/`NC_id` kinds + folding | implemented | `prove_set_app` |
 | CK-AndOr | constraint kind (`/\`/`\/`) | implemented | `constraint_kinds` |
 | CK-Not | constraint kind (`~`) | implemented | `constraint_kinds` |
 
@@ -58,6 +59,7 @@ readers. Status values: `implemented` | `deferred` (with owner lane).
 | D-RegMono | register checking (mono) | implemented | `registers` |
 | D-RegPoly | register checking (poly) | implemented | `registers` |
 | D-RegBad | ill-kinded registers rejected | implemented | `registers` |
+| D-Scattered | scattered clauses under accumulated solver context | implemented | `scattered_clauses` |
 
 ## Inference / checking
 
@@ -89,6 +91,7 @@ readers. Status values: `implemented` | `deferred` (with owner lane).
 |---|---|---|---|
 | Z-TraitOnly / Z-StubTotal / Z-UnknownSound | solver interface (trait-only, total stub, sound `Unknown`) | implemented | `solver_trait_only_backend` |
 | Z-CacheBounded / Z-FuelTerm | bounded cache + fuel termination | implemented | `caching_and_fuel` |
+| Z-ProveCtx | kind-checked goals + val/register/scattered assumptions via trait | implemented | `prove_solver_context` |
 | E-LocalShadow / E-MonoProject / E-PolyOpaque | environment scoping | implemented | `env_scoping` |
 
 ## Deferred (explicit, with owner)
@@ -98,4 +101,4 @@ readers. Status values: `implemented` | `deferred` (with owner lane).
 | X-Existential | `Typ_exist` elaboration lives in Lane 09 | `deferred_documented` |
 | X-FullExp | full `exp_aux` port lives in Lane 02 | `deferred_documented` |
 | X-FullPat | full `pat_aux` port lives in Lane 02 | `deferred_documented` |
-| X-NcSetApp | `NC_set`/`NC_app`/`NC_var` have no local counterpart; `conv` maps them to `None` | `deferred_documented` |
+| X-NcSetApp | foreign `NC_set`/`NC_app`/`NC_var` shapes only (`NExp_id`, non-`NExp` `typ_arg`s, unparseable `Set` members); local forms are implemented (CK-SetApp) | `deferred_documented` |

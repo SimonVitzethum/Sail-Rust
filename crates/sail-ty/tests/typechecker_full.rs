@@ -133,6 +133,16 @@ fn norm_constraint(c: &NConstraint) -> NConstraint {
             Box::new(norm_constraint(b)),
         ),
         NConstraint::Not(a) => NConstraint::Not(Box::new(norm_constraint(a))),
+        NConstraint::Set(n, vs) => {
+            let mut members = vs.clone();
+            members.sort();
+            members.dedup();
+            NConstraint::Set(Box::new(norm_nexp(n)), members)
+        }
+        NConstraint::App(f, args) => {
+            NConstraint::App(f.clone(), args.iter().map(norm_nexp).collect())
+        }
+        NConstraint::Var(_) | NConstraint::Id(_) => c.clone(),
     }
 }
 
@@ -167,6 +177,10 @@ impl Solver for ProvingSolver {
                 ProveResult::Refuted => ProveResult::Proved,
                 ProveResult::Unknown => ProveResult::Unknown,
             },
+            // Lane 107: singleton sets decide as equations (mirrors the stub).
+            NConstraint::Set(n, vs) if vs.len() == 1 => {
+                self.prove(&NConstraint::Eq(n.clone(), Box::new(Nexp::Const(vs[0]))))
+            }
             _ => ProveResult::Unknown,
         }
     }
@@ -1012,13 +1026,18 @@ fn rule_table_complete() {
         ("caching_and_fuel", caching_and_fuel),
         ("env_scoping", env_scoping),
         ("deferred_documented", deferred_documented),
+        // Lane-107 prove paths live in `tests/prove_ctx.rs` (separate test
+        // target, so no `fn()` pin here — the names below must match the
+        // `#[test]` fns there; `RULE_TABLE` entries point at them).
     ];
+    let lane107: &[&str] = &["prove_set_app", "prove_solver_context", "scattered_clauses"];
     let _ = rule_table_complete as fn();
     assert!(!RULE_TABLE.is_empty());
     for entry in RULE_TABLE {
         assert!(!entry.test.is_empty(), "rule {} has no test", entry.id.as_str());
         assert!(
-            known.iter().any(|(name, _)| *name == entry.test),
+            known.iter().any(|(name, _)| *name == entry.test)
+                || lane107.contains(&entry.test),
             "rule {} points at unknown test '{}'",
             entry.id.as_str(),
             entry.test

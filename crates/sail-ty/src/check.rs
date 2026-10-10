@@ -10,6 +10,7 @@ use crate::error::{Span, TypeError, TypeErrorKind, TypeResult};
 use crate::kind::{KindEnv, check_constraint_kind, check_typ_kind};
 use crate::nexp::{MiniExp, MiniTyp, NConstraint, Nexp, TypQuant};
 use crate::pat::MiniPat;
+use crate::prove::{SolverContext, kenv_of_quants, prove_in_context};
 use crate::solver::{ProveResult, Solver};
 use crate::subsume::{check_subtype, instantiate_scheme};
 
@@ -112,10 +113,39 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
         scheme: &TypQuant,
         span: Span,
     ) -> TypeResult<TypedDefSummary> {
+        self.check_register_in_context(name, scheme, &SolverContext::new(), span)
+    }
+
+    /// Check a register declaration under a solver context (Lane 107):
+    /// kind closure exactly like [`Self::check_register`], plus the scheme
+    /// precondition is discharged via [`prove_in_context`] — `Refuted`
+    /// preconditions are hard errors (wrapped as `RegisterError`),
+    /// `Proved`/`Unknown` keep the scheme (mirrors the `check_val_def`
+    /// precondition policy; sound on `Unknown`).
+    pub fn check_register_in_context(
+        &self,
+        name: &str,
+        scheme: &TypQuant,
+        ctx: &SolverContext,
+        span: Span,
+    ) -> TypeResult<TypedDefSummary> {
         self.check_scheme(name, scheme, span).map_err(|e| TypeError {
             span: e.span,
             kind: TypeErrorKind::RegisterError(format!("register '{name}': {:?}", e.kind)),
         })?;
+        let kenv = kenv_of_quants(&scheme.quants);
+        match prove_in_context(self.solver, &kenv, ctx, &scheme.constraint, span) {
+            ProveResult::Proved | ProveResult::Unknown => {}
+            ProveResult::Refuted => {
+                return Err(TypeError {
+                    span,
+                    kind: TypeErrorKind::RegisterError(format!(
+                        "register '{name}': {}",
+                        disp(&TypeError::constraint_not_proved(span, &scheme.constraint))
+                    )),
+                });
+            }
+        }
         Ok(TypedDefSummary {
             name: name.to_string(),
             scheme: scheme.clone(),
@@ -132,6 +162,23 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
         env: &TypeEnv,
         span: Span,
     ) -> TypeResult<TypedDefSummary> {
+        self.check_val_def_in_context(name, scheme, body, env, &SolverContext::new(), span)
+    }
+
+    /// Check a `val` spec + body under a solver context (Lane 107): same
+    /// policy as [`Self::check_val_def`], but the scheme precondition is
+    /// discharged via [`prove_in_context`] — the context carries the
+    /// `val`/`register`/`scattered` assumptions accumulated so far, all
+    /// through the [`Solver`] trait (Z3 only behind it, Lane 06/80).
+    pub fn check_val_def_in_context(
+        &self,
+        name: &str,
+        scheme: &TypQuant,
+        body: &MiniExp,
+        env: &TypeEnv,
+        ctx: &SolverContext,
+        span: Span,
+    ) -> TypeResult<TypedDefSummary> {
         self.check_scheme(name, scheme, span)?;
         // Skeleton instantiation: only monomorphic schemes apply to bodies
         // here; polymorphic instantiation is Lane 09 (monomorphisation).
@@ -144,10 +191,11 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
                 scheme: scheme.clone(),
             });
         }
-        // Discharge the scheme constraint with the solver; `Unknown` is not
-        // fatal here (kept as `Unknown`, body still checked) — but a
-        // `Refuted` precondition is a hard error.
-        match self.solver.prove(&scheme.constraint) {
+        // Discharge the scheme constraint under the solver context;
+        // `Unknown` is not fatal here (kept as `Unknown`, body still
+        // checked) — but a `Refuted` precondition is a hard error.
+        let kenv = kenv_of_quants(&scheme.quants);
+        match prove_in_context(self.solver, &kenv, ctx, &scheme.constraint, span) {
             ProveResult::Proved | ProveResult::Unknown => {}
             ProveResult::Refuted => {
                 return Err(TypeError::constraint_not_proved(span, &scheme.constraint));
@@ -158,6 +206,40 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
             name: name.to_string(),
             scheme: scheme.clone(),
         })
+    }
+
+    /// Check `scattered` clauses under an accumulated solver context
+    /// (Lane 107): every clause scheme must be closed
+    /// ([`Self::check_scheme`]); clause `i`'s precondition is discharged
+    /// via [`prove_in_context`] under the constraints of `clauses[..i]`
+    /// (same-telescope accumulation, Sail elaboration order) — `Refuted`
+    /// is a hard error, `Proved`/`Unknown` continue soundly. Returns one
+    /// summary per clause (`"<name>#<i>"`).
+    pub fn check_scattered(
+        &self,
+        name: &str,
+        clauses: &[TypQuant],
+        span: Span,
+    ) -> TypeResult<Vec<TypedDefSummary>> {
+        let mut ctx = SolverContext::new();
+        let mut out = Vec::with_capacity(clauses.len());
+        for (i, scheme) in clauses.iter().enumerate() {
+            let clause_name = format!("{name}#{i}");
+            self.check_scheme(&clause_name, scheme, span)?;
+            let kenv = kenv_of_quants(&scheme.quants);
+            match prove_in_context(self.solver, &kenv, &ctx, &scheme.constraint, span) {
+                ProveResult::Proved | ProveResult::Unknown => {}
+                ProveResult::Refuted => {
+                    return Err(TypeError::constraint_not_proved(span, &scheme.constraint));
+                }
+            }
+            ctx.assume(scheme.constraint.clone());
+            out.push(TypedDefSummary {
+                name: clause_name,
+                scheme: scheme.clone(),
+            });
+        }
+        Ok(out)
     }
 
     /// Check a value pattern against a scrutinee type (rules `P-*`).

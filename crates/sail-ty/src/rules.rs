@@ -36,6 +36,9 @@ pub enum RuleId {
     CKTrueFalse,
     /// `==`, `!=`, `>=`, `>`, `<=`, `<` over `K_int` sides.
     CKCmp,
+    /// `NC_set` membership (`K_int` scrutinee), `NC_app` over `K_int` args,
+    /// `NC_var` bound at `K_bool`, `NC_id` opaque `K_bool`.
+    CKSetApp,
     /// `/\`, `\/` over `K_bool` sides.
     CKAndOr,
     /// `~a` over a `K_bool` side.
@@ -79,6 +82,9 @@ pub enum RuleId {
     DRegPoly,
     /// Ill-kinded register types are rejected.
     DRegBad,
+    /// `scattered` clauses: closed schemes, clause `i` discharged under
+    /// the constraints of `clauses[..i]` (accumulated solver context).
+    DScattered,
     // -- Inference (`infer`) --
     /// Integer literals synthesize `int`.
     IInt,
@@ -157,6 +163,10 @@ pub enum RuleId {
     ZCacheBounded,
     /// Fuel/depth limits guarantee termination without a solver.
     ZFuelTerm,
+    /// `goal` proved under a [`crate::prove::SolverContext`] (kind-checked
+    /// goal, `val`/`register`/`scattered` assumptions as one implication)
+    /// through the [`crate::solver::Solver`] trait only.
+    ZProveCtx,
     // -- Environment (`E-*`) --
     /// Locals shadow globals.
     ELocalShadow,
@@ -171,7 +181,9 @@ pub enum RuleId {
     XFullExp,
     /// Full Sail `pat` (`as`/`or`/vector/struct/…): Lane 02.
     XFullPat,
-    /// `NC_set` / `NC_app` / `NC_var` constraints: no local counterpart.
+    /// `NC_set` / `NC_app` / `NC_var` constraints: foreign shapes with no
+    /// local counterpart (`NExp_id`, non-`NExp` `typ_arg`s, unparseable
+    /// `Set` members) still lift to `None` in [`crate::conv`].
     XNcSetApp,
 }
 
@@ -191,6 +203,7 @@ impl RuleId {
             Self::KNatSub => "K-NatSub",
             Self::CKTrueFalse => "CK-TrueFalse",
             Self::CKCmp => "CK-Cmp",
+            Self::CKSetApp => "CK-SetApp",
             Self::CKAndOr => "CK-AndOr",
             Self::CKNot => "CK-Not",
             Self::TIntBoolBit => "T-IntBoolBit",
@@ -211,6 +224,7 @@ impl RuleId {
             Self::DRegMono => "D-RegMono",
             Self::DRegPoly => "D-RegPoly",
             Self::DRegBad => "D-RegBad",
+            Self::DScattered => "D-Scattered",
             Self::IInt => "I-Int",
             Self::IBool => "I-Bool",
             Self::IVarMono => "I-VarMono",
@@ -247,6 +261,7 @@ impl RuleId {
             Self::ZUnknownSound => "Z-UnknownSound",
             Self::ZCacheBounded => "Z-CacheBounded",
             Self::ZFuelTerm => "Z-FuelTerm",
+            Self::ZProveCtx => "Z-ProveCtx",
             Self::ELocalShadow => "E-LocalShadow",
             Self::EMonoProject => "E-MonoProject",
             Self::EPolyOpaque => "E-PolyOpaque",
@@ -273,6 +288,7 @@ impl RuleId {
             Self::CKTrueFalse | Self::CKCmp | Self::CKAndOr | Self::CKNot => {
                 "Sail n_constraint kind rule (K_bool introduction)"
             }
+            Self::CKSetApp => "Sail NC_set/NC_app/NC_var/NC_id kind rule (K_bool introduction)",
             Self::TIntBoolBit
             | Self::TBits
             | Self::TBitsNeg
@@ -287,6 +303,7 @@ impl RuleId {
             Self::DValMono | Self::DValPoly | Self::DValPreRefuted => {
                 "Sail val-spec / funcl body checking"
             }
+            Self::DScattered => "Sail scattered function clause checking",
             Self::DRegMono | Self::DRegPoly | Self::DRegBad => {
                 "Sail register type checking"
             }
@@ -322,13 +339,14 @@ impl RuleId {
             | Self::ZUnknownSound
             | Self::ZCacheBounded
             | Self::ZFuelTerm => "Sail constraint solver interface (prove-or-unknown)",
+            Self::ZProveCtx => "Sail solver context (assumptions + kind env, trait-only)",
             Self::ELocalShadow | Self::EMonoProject | Self::EPolyOpaque => {
                 "Sail typing environment (locals / val specs / registers)"
             }
             Self::XExistential => "Sail Typ_exist (deferred: Lane 09)",
             Self::XFullExp => "Sail full exp_aux (deferred: Lane 02)",
             Self::XFullPat => "Sail full pat_aux (deferred: Lane 02)",
-            Self::XNcSetApp => "Sail NC_set/NC_app/NC_var (no local counterpart)",
+            Self::XNcSetApp => "Sail NC_set/NC_app/NC_var foreign shapes (no local counterpart)",
         }
     }
 }
@@ -376,6 +394,7 @@ pub static RULE_TABLE: &[RuleEntry] = &[
     RuleEntry { id: RuleId::KNatSub, status: I, test: "kind_nexp_arith" },
     RuleEntry { id: RuleId::CKTrueFalse, status: I, test: "constraint_kinds" },
     RuleEntry { id: RuleId::CKCmp, status: I, test: "constraint_kinds" },
+    RuleEntry { id: RuleId::CKSetApp, status: I, test: "prove_set_app" },
     RuleEntry { id: RuleId::CKAndOr, status: I, test: "constraint_kinds" },
     RuleEntry { id: RuleId::CKNot, status: I, test: "constraint_kinds" },
     RuleEntry { id: RuleId::TIntBoolBit, status: I, test: "typ_kinds" },
@@ -396,6 +415,7 @@ pub static RULE_TABLE: &[RuleEntry] = &[
     RuleEntry { id: RuleId::DRegMono, status: I, test: "registers" },
     RuleEntry { id: RuleId::DRegPoly, status: I, test: "registers" },
     RuleEntry { id: RuleId::DRegBad, status: I, test: "registers" },
+    RuleEntry { id: RuleId::DScattered, status: I, test: "scattered_clauses" },
     RuleEntry { id: RuleId::IInt, status: I, test: "infer_lits_vars" },
     RuleEntry { id: RuleId::IBool, status: I, test: "infer_lits_vars" },
     RuleEntry { id: RuleId::IVarMono, status: I, test: "infer_lits_vars" },
@@ -432,6 +452,7 @@ pub static RULE_TABLE: &[RuleEntry] = &[
     RuleEntry { id: RuleId::ZUnknownSound, status: I, test: "solver_trait_only_backend" },
     RuleEntry { id: RuleId::ZCacheBounded, status: I, test: "caching_and_fuel" },
     RuleEntry { id: RuleId::ZFuelTerm, status: I, test: "caching_and_fuel" },
+    RuleEntry { id: RuleId::ZProveCtx, status: I, test: "prove_solver_context" },
     RuleEntry { id: RuleId::ELocalShadow, status: I, test: "env_scoping" },
     RuleEntry { id: RuleId::EMonoProject, status: I, test: "env_scoping" },
     RuleEntry { id: RuleId::EPolyOpaque, status: I, test: "env_scoping" },
@@ -452,7 +473,7 @@ pub static RULE_TABLE: &[RuleEntry] = &[
     },
     RuleEntry {
         id: RuleId::XNcSetApp,
-        status: RuleStatus::Deferred("NC_set/NC_app/NC_var have no local counterpart; conv maps them to None"),
+        status: RuleStatus::Deferred("foreign NC_set/NC_app/NC_var shapes (NExp_id, non-NExp typ_args, unparseable Set members) lift to None in conv"),
         test: "deferred_documented",
     },
 ];

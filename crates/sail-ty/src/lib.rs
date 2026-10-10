@@ -9,6 +9,9 @@
 //! - Subsumption + numeric coercions ([`subsume`])
 //! - Rule catalogue ([`rules::RULE_TABLE`], mirrored in `RULES.md`)
 //! - [`Solver`] trait (`prove(nc) -> ProveResult`) + [`StubSolver`] for tests
+//! - [`prove`]: solver context (`NC_set`/`NC_app` paths, kind environments,
+//!   `val`/`register` schemes and `scattered` clauses as assumptions —
+//!   Z3 only behind the trait, Lane 06/80)
 //!
 //! No Z3 binding here (Lane 06/80 implement [`Solver`] via their backends;
 //! rule `Z-TraitOnly`). Everything solver-dependent is generic over the
@@ -25,6 +28,7 @@ pub mod error;
 pub mod kind;
 pub mod nexp;
 pub mod pat;
+pub mod prove;
 pub mod quant;
 pub mod rules;
 pub mod solver;
@@ -42,6 +46,10 @@ pub use error::{Span, TypeError, TypeResult};
 pub use kind::Kind;
 pub use nexp::{MiniExp, MiniFExp, MiniLexp, MiniLoop, MiniOrder, MiniPExp, MiniTyp, NConstraint, Nexp, TypQuant};
 pub use pat::MiniPat;
+pub use prove::{
+    ScatteredClauses, SolverContext, assumption_from_register, assumption_from_val,
+    implication, kenv_of_quants, prove_in_context,
+};
 pub use quant::{QuantScope, QuantVar};
 pub use rules::{RuleEntry, RuleId, RuleStatus, RULE_TABLE};
 pub use solver::{CachingSolver, CacheStats, ProveResult, Solver, StubSolver};
