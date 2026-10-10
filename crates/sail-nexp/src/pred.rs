@@ -79,7 +79,7 @@ impl Facts {
                 // sorts are ignored (conservative).
                 if let (TypArg::NExp(x), TypArg::NExp(y)) = (&**a, &**b) {
                     if let (NExp::Var(k), NExp::Constant(0)) | (NExp::Constant(0), NExp::Var(k)) =
-                        (&**x, &**y)
+                        (x, y)
                     {
                         self.nonzero.insert(*k, ());
                     }
@@ -92,7 +92,7 @@ impl Facts {
                 // `(NExp, NExp)` pairs carry bounds.
                 if let (TypArg::NExp(x), TypArg::NExp(y)) = (&**a, &**b) {
                     if let (NExp::Var(k), NExp::Constant(c))
-                    | (NExp::Constant(c), NExp::Var(k)) = (&**x, &**y)
+                    | (NExp::Constant(c), NExp::Var(k)) = (x, y)
                     {
                         self.lower
                             .entry(*k)
@@ -457,6 +457,30 @@ mod tests {
         assert_eq!(f.upper(m), Some(-1));
         assert!(provably_pos_in(&v(n), &f));
         assert!(provably_neg_in(&v(m), &f));
+    }
+
+    #[test]
+    fn from_constraint_pins_equal_and_nonzero() {
+        // Lane 120 union (Lane 108 `TypArg` shape): `Equal`/`NotEqual`
+        // carry `Box<TypArg>` operands holding `NExp` by value — the
+        // inner match borrows them (no double deref).
+        let mut ix = table();
+        let n = ix.intern("n");
+        let m = ix.intern("m");
+        let eq = NConstraint::Equal(
+            Box::new(TypArg::NExp(v(n))),
+            Box::new(TypArg::NExp(c(3))),
+        );
+        let f = Facts::from_constraint(&eq);
+        assert_eq!(f.lower(n), Some(3));
+        assert_eq!(f.upper(n), Some(3));
+        let ne = NConstraint::NotEqual(
+            Box::new(TypArg::NExp(v(m))),
+            Box::new(TypArg::NExp(c(0))),
+        );
+        let f = Facts::from_constraint(&ne);
+        assert!(f.is_nonzero_var(m));
+        assert!(provably_nonzero_in(&v(m), &f));
     }
 
     #[test]

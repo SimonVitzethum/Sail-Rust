@@ -462,7 +462,7 @@ fn mk_typarg(kind: TypArgKind) -> TypArg {
 pub fn adv_arg_to_ast(arg: &AdvTypArg, it: &mut impl Interner) -> TypArg {
     match arg {
         AdvTypArg::Nexp(n) => mk_typarg(TypArgKind::NExp(nexp_to_ast(n, it))),
-        AdvTypArg::Typ(t) => mk_typarg(TypArgKind::Typ(Box::new(adv_to_ast(t, it)))),
+        AdvTypArg::Typ(t) => mk_typarg(TypArgKind::Typ(adv_to_ast(t, it))),
         AdvTypArg::Bool(c) => mk_typarg(TypArgKind::Bool(Box::new(constraint_to_ast(c, it)))),
     }
 }

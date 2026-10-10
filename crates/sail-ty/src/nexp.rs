@@ -595,8 +595,9 @@ pub enum MiniExp {
     },
     /// `assert(cond, msg)` (`E_assert`)
     Assert { cond: Box<MiniExp>, msg: Box<MiniExp> },
-    /// `var l = init in body` (`E_var`)
-    Var {
+    /// `var l = init in body` (`E_var`; distinct from [`MiniExp::Var`],
+    /// which is the `E_id` variable reference)
+    VarDecl {
         lexp: Box<MiniLexp>,
         init: Box<MiniExp>,
         body: Box<MiniExp>,

@@ -792,7 +792,7 @@ pub fn miniexp_to_ast(e: &MiniExp, it: &mut impl Interner) -> Option<Exp> {
             cond: Box::new(miniexp_to_ast(cond, it)?),
             msg: Box::new(miniexp_to_ast(msg, it)?),
         })),
-        MiniExp::Var { lexp, init, body } => Some(mk_exp(ExpKind::Var {
+        MiniExp::VarDecl { lexp, init, body } => Some(mk_exp(ExpKind::Var {
             lexp: Box::new(minilexp_to_ast(lexp, it)?),
             init: Box::new(miniexp_to_ast(init, it)?),
             body: Box::new(miniexp_to_ast(body, it)?),
@@ -923,7 +923,7 @@ pub fn miniexp_from_ast(e: &Exp, it: &impl Interner) -> Option<MiniExp> {
             cond: Box::new(miniexp_from_ast(cond, it)?),
             msg: Box::new(miniexp_from_ast(msg, it)?),
         }),
-        ExpKind::Var { lexp, init, body } => Some(MiniExp::Var {
+        ExpKind::Var { lexp, init, body } => Some(MiniExp::VarDecl {
             lexp: Box::new(minilexp_from_ast(lexp, it)?),
             init: Box::new(miniexp_from_ast(init, it)?),
             body: Box::new(miniexp_from_ast(body, it)?),
@@ -955,5 +955,25 @@ mod tests {
         let ast = constraint_to_ast(&c, &mut it);
         assert!(matches!(ast.kind, ConstraintKind::Not(_)));
         assert_eq!(constraint_from_ast(&ast, &it), Some(c));
+    }
+
+    #[test]
+    fn var_union_keeps_id_and_evar_distinct() {
+        // Lane 120 union: tuple `Var` is the `E_id` reference, `VarDecl`
+        // is the `E_var` declaration form — they must lower to distinct
+        // `ExpKind`s and roundtrip separately.
+        let mut it = SimpleInterner::new();
+        let id = MiniExp::Var("x".to_owned());
+        let ast = miniexp_to_ast(&id, &mut it).expect("id lowering must succeed");
+        assert!(matches!(ast.kind, ExpKind::Id(_)));
+        assert_eq!(miniexp_from_ast(&ast, &it), Some(id));
+        let decl = MiniExp::VarDecl {
+            lexp: Box::new(MiniLexp::Id("tmp".to_owned())),
+            init: Box::new(MiniExp::IntLit(0)),
+            body: Box::new(MiniExp::Var("tmp".to_owned())),
+        };
+        let ast = miniexp_to_ast(&decl, &mut it).expect("evar lowering must succeed");
+        assert!(matches!(ast.kind, ExpKind::Var { .. }));
+        assert_eq!(miniexp_from_ast(&ast, &it), Some(decl));
     }
 }

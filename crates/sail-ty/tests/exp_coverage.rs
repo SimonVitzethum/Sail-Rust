@@ -196,7 +196,7 @@ fn assert_roundtrip() {
 
 #[test]
 fn var_decl_roundtrip() {
-    let e = MiniExp::Var {
+    let e = MiniExp::VarDecl {
         lexp: Box::new(MiniLexp::Id("tmp".to_owned())),
         init: Box::new(int(0)),
         body: Box::new(var("tmp")),
