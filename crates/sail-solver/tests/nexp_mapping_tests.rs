@@ -2,7 +2,7 @@
 //! Lane-80-Tests (Code, E3: nicht ausfuehren): `from_nconstraint`-Bruecke
 //! (kanonische Keys), Bounded-LRU-Pflicht, Stub-/Pool-Verhalten.
 
-use sail_nexp::{NConstraint, NExp};
+use sail_nexp::{NConstraint, NExp, TypArg};
 use sail_solver::{
     Constraint, MemoSolver, Solver, SolverCacheConfig, SolverPool, SolverQuery, SolverVerdict,
     StubSolver,
@@ -31,11 +31,17 @@ fn from_nconstraint_maps_leaves_to_stable_atoms() {
         Constraint::atom("(>= (var n) (const 0))")
     );
     assert_eq!(
-        Constraint::from_nconstraint(&NConstraint::Equal(Box::new(v("n")), Box::new(c(2)))),
+        Constraint::from_nconstraint(&NConstraint::Equal(
+            Box::new(TypArg::NExp(v("n"))),
+            Box::new(TypArg::NExp(c(2)))
+        )),
         Constraint::atom("(= (var n) (const 2))")
     );
     assert_eq!(
-        Constraint::from_nconstraint(&NConstraint::NotEqual(Box::new(v("n")), Box::new(c(2)))),
+        Constraint::from_nconstraint(&NConstraint::NotEqual(
+            Box::new(TypArg::NExp(v("n"))),
+            Box::new(TypArg::NExp(c(2)))
+        )),
         Constraint::atom("(!= (var n) (const 2))")
     );
     assert_eq!(
@@ -43,7 +49,10 @@ fn from_nconstraint_maps_leaves_to_stable_atoms() {
         Constraint::atom("(in (var n) 1 3)")
     );
     assert_eq!(
-        Constraint::from_nconstraint(&NConstraint::App("ok".to_string(), vec![v("n")])),
+        Constraint::from_nconstraint(&NConstraint::App(
+            "ok".to_string(),
+            vec![TypArg::NExp(v("n"))]
+        )),
         Constraint::atom("(pred ok (var n))")
     );
     assert_eq!(

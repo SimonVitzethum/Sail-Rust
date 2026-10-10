@@ -45,6 +45,63 @@ pub enum NExp {
     Neg(Box<NExp>),
 }
 
+/// Type-level argument (`typ_arg` in the Sail AST, `Ast.ml`: `A_nexp n
+/// | A_typ t | A_bool nc`).
+///
+/// ARM constraints apply `NC_app`/`NC_equal`/`NC_not_equal` to all three
+/// sorts — modelling only numeric expressions is too narrow (Lane 108).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TypArg {
+    /// `A_nexp n` — numeric/size expression.
+    NExp(NExp),
+    /// `A_typ t` — type argument.
+    Typ(NTyp),
+    /// `A_bool nc` — boolean constraint argument.
+    Bool(Box<NConstraint>),
+}
+
+/// Structural type payload for [`TypArg::Typ`], mirroring the `typ_aux`
+/// shapes that can occur inside constraints. Predicate/identifier names
+/// stay plain `String`s (like [`NExp::Id`]/[`NConstraint::Id`]); kind
+/// variables stay interned [`Kid`]s.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NTyp {
+    /// Placeholder the typechecker fills in later (`Typ_unknown`).
+    Unknown,
+    /// Nullary named type (`Typ_id`).
+    Id(String),
+    /// Type variable (`Typ_var`).
+    Var(Kid),
+    /// Function type (`Typ_fn (args, ret)`).
+    Fn(Vec<NTyp>, Box<NTyp>),
+    /// Bidirectional type (`Typ_bidir (lhs, rhs)`).
+    Bidir(Box<NTyp>, Box<NTyp>),
+    /// Tuple type (`Typ_tuple ts`).
+    Tuple(Vec<NTyp>),
+    /// Type application (`Typ_app (name, args)`).
+    App(String, Vec<TypArg>),
+    /// Existential (`Typ_exist (binders, constraint, typ)`).
+    Exist(Vec<NQuant>, Box<NConstraint>, Box<NTyp>),
+}
+
+/// Kind-annotated binder for [`NTyp::Exist`] (mirrors `KOpt_kind`).
+/// [`NKind`] carries its own `Ord` (unlike `sail_ast::Kind`) so
+/// [`NTyp`] keeps the canonical ordering used by constraint
+/// normalization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NQuant {
+    pub kind: NKind,
+    pub kid: Kid,
+}
+
+/// Sail kinds (`Type`, `Int`, `Bool`) for [`NQuant`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NKind {
+    Type,
+    Int,
+    Bool,
+}
+
 /// Numeric constraint (`n_constraint` in the Sail AST).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NConstraint {
@@ -54,20 +111,19 @@ pub enum NConstraint {
     Id(String),
     /// Boolean kind variable used as a constraint.
     Var(Kid),
-    Equal(Box<NExp>, Box<NExp>),
-    NotEqual(Box<NExp>, Box<NExp>),
+    /// `NC_equal (t1, t2)` over `typ_arg` sorts.
+    Equal(Box<TypArg>, Box<TypArg>),
+    /// `NC_not_equal (t1, t2)` over `typ_arg` sorts.
+    NotEqual(Box<TypArg>, Box<TypArg>),
     Ge(Box<NExp>, Box<NExp>),
     Gt(Box<NExp>, Box<NExp>),
     Le(Box<NExp>, Box<NExp>),
     Lt(Box<NExp>, Box<NExp>),
     /// `NC_set (n, vs)` — `n` is one of `vs`.
     Set(Box<NExp>, Vec<i128>),
-    /// `NC_app (f, args)` — uninterpreted predicate application.
-    ///
-    /// Only `A_nexp` arguments are modelled; constraints over other
-    /// `typ_arg` sorts cannot be represented and must be abstracted by
-    /// the caller (`True`/`False`/fresh [`NConstraint::Id`]).
-    App(String, Vec<NExp>),
+    /// `NC_app (f, args)` — uninterpreted predicate application over
+    /// `typ_arg` sorts (`A_nexp`/`A_typ`/`A_bool`).
+    App(String, Vec<TypArg>),
     And(Box<NConstraint>, Box<NConstraint>),
     Or(Box<NConstraint>, Box<NConstraint>),
     Not(Box<NConstraint>),
@@ -135,6 +191,42 @@ fn subst_constraint_binary<'a>(
         Cow::Borrowed(orig)
     } else {
         Cow::Owned(rebuild(Box::new(ra.into_owned()), Box::new(rb.into_owned())))
+    }
+}
+
+/// Rebuild a binary [`NConstraint`] node over [`TypArg`]s only when at
+/// least one side changed (`NC_equal`/`NC_not_equal` hold
+/// `Box<TypArg>`, unlike the [`NExp`] operands handled by
+/// [`subst_constraint_binary`]).
+fn subst_typarg_pair<'a>(
+    subst: &BTreeMap<Kid, NExp>,
+    orig: &'a NConstraint,
+    a: &'a TypArg,
+    b: &'a TypArg,
+    rebuild: fn(Box<TypArg>, Box<TypArg>) -> NConstraint,
+) -> Cow<'a, NConstraint> {
+    let (ra, rb) = (a.subst_cow(subst), b.subst_cow(subst));
+    if matches!(ra, Cow::Borrowed(_)) && matches!(rb, Cow::Borrowed(_)) {
+        Cow::Borrowed(orig)
+    } else {
+        Cow::Owned(rebuild(Box::new(ra.into_owned()), Box::new(rb.into_owned())))
+    }
+}
+
+/// Rewrite a slice elementwise; `None` when every element borrows (no
+/// allocation, no clone), `Some` with the materialized values otherwise.
+///
+/// Same Cow idiom as the `App`-argument loops: the temporary `Vec<Cow>`
+/// is the only allocation on the unchanged path.
+fn rewrite_vec<'a, T: Clone>(
+    xs: &'a [T],
+    f: impl Fn(&'a T) -> Cow<'a, T>,
+) -> Option<Vec<T>> {
+    let rewritten: Vec<Cow<'a, T>> = xs.iter().map(f).collect();
+    if rewritten.iter().all(|c| matches!(c, Cow::Borrowed(_))) {
+        None
+    } else {
+        Some(rewritten.into_iter().map(Cow::into_owned).collect())
     }
 }
 
@@ -316,6 +408,192 @@ impl NExp {
     }
 }
 
+impl TypArg {
+    /// Free kind variables in first-occurrence order (see [`NExp::vars`];
+    /// [`NTyp::Exist`] binders shadow like binders should: bound
+    /// occurrences are not reported).
+    pub fn vars(&self) -> Vec<Kid> {
+        let mut acc = Vec::new();
+        let mut seen = BTreeSet::new();
+        self.collect_vars(&mut acc, &mut seen);
+        acc
+    }
+
+    fn collect_vars(&self, acc: &mut Vec<Kid>, seen: &mut BTreeSet<Kid>) {
+        match self {
+            TypArg::NExp(e) => e.collect_vars(acc, seen),
+            TypArg::Typ(t) => t.collect_vars(acc, seen),
+            TypArg::Bool(c) => c.collect_vars(acc, seen),
+        }
+    }
+
+    /// Substitute kind variables according to `subst` (see
+    /// [`NExp::subst_cow`] for the borrowing contract).
+    pub fn subst(&self, subst: &BTreeMap<Kid, NExp>) -> TypArg {
+        self.subst_cow(subst).into_owned()
+    }
+
+    /// Substitute kind variables, borrowing `self` wherever no variable
+    /// below the node is hit by `subst`.
+    pub fn subst_cow(&self, subst: &BTreeMap<Kid, NExp>) -> Cow<'_, TypArg> {
+        match self {
+            TypArg::NExp(e) => {
+                let r = e.subst_cow(subst);
+                if matches!(r, Cow::Borrowed(_)) {
+                    Cow::Borrowed(self)
+                } else {
+                    Cow::Owned(TypArg::NExp(r.into_owned()))
+                }
+            }
+            TypArg::Typ(t) => {
+                let r = t.subst_cow(subst);
+                if matches!(r, Cow::Borrowed(_)) {
+                    Cow::Borrowed(self)
+                } else {
+                    Cow::Owned(TypArg::Typ(r.into_owned()))
+                }
+            }
+            TypArg::Bool(c) => {
+                let r = c.subst_cow(subst);
+                if matches!(r, Cow::Borrowed(_)) {
+                    Cow::Borrowed(self)
+                } else {
+                    Cow::Owned(TypArg::Bool(Box::new(r.into_owned())))
+                }
+            }
+        }
+    }
+}
+
+impl NTyp {
+    /// Free kind variables in first-occurrence order. `Exist` binders
+    /// are inserted into `seen` before the body is traversed, so bound
+    /// occurrences are not reported as free (the reported *order* of a
+    /// variable that is both free elsewhere and bound here is the free
+    /// occurrence — binders themselves are never reported).
+    pub fn vars(&self) -> Vec<Kid> {
+        let mut acc = Vec::new();
+        let mut seen = BTreeSet::new();
+        self.collect_vars(&mut acc, &mut seen);
+        acc
+    }
+
+    fn collect_vars(&self, acc: &mut Vec<Kid>, seen: &mut BTreeSet<Kid>) {
+        match self {
+            NTyp::Unknown | NTyp::Id(_) => {}
+            NTyp::Var(k) => {
+                if seen.insert(*k) {
+                    acc.push(*k);
+                }
+            }
+            NTyp::Fn(args, ret) => {
+                for a in args {
+                    a.collect_vars(acc, seen);
+                }
+                ret.collect_vars(acc, seen);
+            }
+            NTyp::Bidir(a, b) => {
+                a.collect_vars(acc, seen);
+                b.collect_vars(acc, seen);
+            }
+            NTyp::Tuple(ts) => {
+                for t in ts {
+                    t.collect_vars(acc, seen);
+                }
+            }
+            NTyp::App(_, args) => {
+                for a in args {
+                    a.collect_vars(acc, seen);
+                }
+            }
+            NTyp::Exist(binders, c, t) => {
+                for b in binders {
+                    seen.insert(b.kid);
+                }
+                c.collect_vars(acc, seen);
+                t.collect_vars(acc, seen);
+            }
+        }
+    }
+
+    /// Substitute kind variables according to `subst` (see
+    /// [`NExp::subst_cow`] for the borrowing contract).
+    ///
+    /// `Exist` binders shadow: kids bound by the existential are removed
+    /// from the substitution inside its scope.
+    pub fn subst(&self, subst: &BTreeMap<Kid, NExp>) -> NTyp {
+        self.subst_cow(subst).into_owned()
+    }
+
+    /// Substitute kind variables, borrowing `self` wherever no variable
+    /// below the node is hit by `subst`.
+    pub fn subst_cow(&self, subst: &BTreeMap<Kid, NExp>) -> Cow<'_, NTyp> {
+        match self {
+            // Leaves: `Typ_var` has no numeric payload to splice a
+            // substitution into (numeric mappings only matter for
+            // `NExp`/`Bool` positions, handled by the callers), so the
+            // node is always kept.
+            NTyp::Unknown | NTyp::Id(_) | NTyp::Var(_) => Cow::Borrowed(self),
+            NTyp::Fn(args, ret) => {
+                let rargs = rewrite_vec(args, |a| a.subst_cow(subst));
+                let rret = ret.subst_cow(subst);
+                if rargs.is_none() && matches!(rret, Cow::Borrowed(_)) {
+                    Cow::Borrowed(self)
+                } else {
+                    Cow::Owned(NTyp::Fn(
+                        rargs.unwrap_or_else(|| args.clone()),
+                        Box::new(rret.into_owned()),
+                    ))
+                }
+            }
+            NTyp::Bidir(a, b) => {
+                let (ra, rb) = (a.subst_cow(subst), b.subst_cow(subst));
+                if matches!(ra, Cow::Borrowed(_)) && matches!(rb, Cow::Borrowed(_)) {
+                    Cow::Borrowed(self)
+                } else {
+                    Cow::Owned(NTyp::Bidir(
+                        Box::new(ra.into_owned()),
+                        Box::new(rb.into_owned()),
+                    ))
+                }
+            }
+            NTyp::Tuple(ts) => match rewrite_vec(ts, |t| t.subst_cow(subst)) {
+                None => Cow::Borrowed(self),
+                Some(ts) => Cow::Owned(NTyp::Tuple(ts)),
+            },
+            NTyp::App(f, args) => match rewrite_vec(args, |a| a.subst_cow(subst)) {
+                None => Cow::Borrowed(self),
+                Some(args) => Cow::Owned(NTyp::App(f.clone(), args)),
+            },
+            NTyp::Exist(binders, c, t) => {
+                // Shadow bound kids inside the scope (see `subst`).
+                let active: Cow<'_, BTreeMap<Kid, NExp>> =
+                    if binders.iter().any(|b| subst.contains_key(&b.kid)) {
+                        Cow::Owned(
+                            subst
+                                .iter()
+                                .filter(|(k, _)| !binders.iter().any(|b| &b.kid == *k))
+                                .map(|(k, v)| (*k, v.clone()))
+                                .collect(),
+                        )
+                    } else {
+                        Cow::Borrowed(subst)
+                    };
+                let (rc, rt) = (c.subst_cow(&active), t.subst_cow(&active));
+                if matches!(rc, Cow::Borrowed(_)) && matches!(rt, Cow::Borrowed(_)) {
+                    Cow::Borrowed(self)
+                } else {
+                    Cow::Owned(NTyp::Exist(
+                        binders.clone(),
+                        Box::new(rc.into_owned()),
+                        Box::new(rt.into_owned()),
+                    ))
+                }
+            }
+        }
+    }
+}
+
 impl NConstraint {
     /// Free kind variables in first-occurrence order.
     pub fn vars(&self) -> Vec<Kid> {
@@ -333,9 +611,11 @@ impl NConstraint {
                     acc.push(*k);
                 }
             }
-            NConstraint::Equal(a, b)
-            | NConstraint::NotEqual(a, b)
-            | NConstraint::Ge(a, b)
+            NConstraint::Equal(a, b) | NConstraint::NotEqual(a, b) => {
+                a.collect_vars(acc, seen);
+                b.collect_vars(acc, seen);
+            }
+            NConstraint::Ge(a, b)
             | NConstraint::Gt(a, b)
             | NConstraint::Le(a, b)
             | NConstraint::Lt(a, b) => {
@@ -378,10 +658,10 @@ impl NConstraint {
                 _ => Cow::Borrowed(self),
             },
             NConstraint::Equal(a, b) => {
-                subst_constraint_binary(subst, self, a, b, NConstraint::Equal)
+                subst_typarg_pair(subst, self, a, b, NConstraint::Equal)
             }
             NConstraint::NotEqual(a, b) => {
-                subst_constraint_binary(subst, self, a, b, NConstraint::NotEqual)
+                subst_typarg_pair(subst, self, a, b, NConstraint::NotEqual)
             }
             NConstraint::Ge(a, b) => subst_constraint_binary(subst, self, a, b, NConstraint::Ge),
             NConstraint::Gt(a, b) => subst_constraint_binary(subst, self, a, b, NConstraint::Gt),
@@ -401,7 +681,7 @@ impl NConstraint {
                 }
             }
             NConstraint::App(f, args) => {
-                let rewritten: Vec<Cow<'_, NExp>> =
+                let rewritten: Vec<Cow<'_, TypArg>> =
                     args.iter().map(|a| a.subst_cow(subst)).collect();
                 if rewritten.iter().any(|c| matches!(c, Cow::Owned(_))) {
                     Cow::Owned(NConstraint::App(
@@ -431,14 +711,17 @@ impl NConstraint {
 
     /// Total valuation under `env`; `None` if any sub-expression is
     /// unrepresentable (see [`NExp::eval`]).
+    ///
+    /// `Equal`/`NotEqual` compare `typ_arg` sorts (see [`typarg_eq`]);
+    /// `App` stays uninterpreted (`None`, like [`NExp::Id`]).
     pub fn eval(&self, env: &BTreeMap<Kid, i128>) -> Option<bool> {
         match self {
             NConstraint::True => Some(true),
             NConstraint::False => Some(false),
             NConstraint::Id(_) => None,
             NConstraint::Var(_) => None,
-            NConstraint::Equal(a, b) => Some(a.eval(env)? == b.eval(env)?),
-            NConstraint::NotEqual(a, b) => Some(a.eval(env)? != b.eval(env)?),
+            NConstraint::Equal(a, b) => typarg_eq(a, b, env),
+            NConstraint::NotEqual(a, b) => typarg_eq(a, b, env).map(|v| !v),
             NConstraint::Ge(a, b) => Some(a.eval(env)? >= b.eval(env)?),
             NConstraint::Gt(a, b) => Some(a.eval(env)? > b.eval(env)?),
             NConstraint::Le(a, b) => Some(a.eval(env)? <= b.eval(env)?),
@@ -451,6 +734,29 @@ impl NConstraint {
             NConstraint::Or(a, b) => Some(a.eval(env)? || b.eval(env)?),
             NConstraint::Not(c) => Some(!c.eval(env)?),
         }
+    }
+}
+
+/// Equality valuation over `typ_arg` sorts under `env`.
+///
+/// - Syntactically equal arguments are equal (`Some(true)`); this is the
+///   valuation twin of the `a == b -> True` simplification rule and holds
+///   under every total environment.
+/// - `(NExp, NExp)` and `(Bool, Bool)` pairs compare by recursive
+///   valuation.
+/// - Mixed sorts are never equal (`Some(false)`): different `typ_arg`
+///   constructors cannot denote the same value.
+/// - Syntactically different types stay conservative (`None`): type
+///   identity has no numeric valuation.
+fn typarg_eq(a: &TypArg, b: &TypArg, env: &BTreeMap<Kid, i128>) -> Option<bool> {
+    if a == b {
+        return Some(true);
+    }
+    match (a, b) {
+        (TypArg::NExp(x), TypArg::NExp(y)) => Some(x.eval(env)? == y.eval(env)?),
+        (TypArg::Bool(x), TypArg::Bool(y)) => Some(x.eval(env)? == y.eval(env)?),
+        (TypArg::Typ(_), TypArg::Typ(_)) => None,
+        _ => Some(false),
     }
 }
 

@@ -8,7 +8,7 @@
 //! the expression plus the assumed [`Facts`]. Unknown shapes answer
 //! `false` (unknown), never a wrong `true`.
 
-use crate::expr::{Kid, NConstraint, NExp};
+use crate::expr::{Kid, NConstraint, NExp, TypArg};
 use std::collections::BTreeMap;
 
 /// Assumed context facts: lower/upper bounds per kind variable plus a
@@ -75,27 +75,34 @@ impl Facts {
             NConstraint::Le(a, b) => self.add_cmp(b, a, false),
             NConstraint::Lt(a, b) => self.add_cmp(b, a, true),
             NConstraint::NotEqual(a, b) => {
-                if let (NExp::Var(k), NExp::Constant(0)) | (NExp::Constant(0), NExp::Var(k)) =
-                    (&**a, &**b)
-                {
-                    self.nonzero.insert(*k, ());
+                // Only `(NExp, NExp)` pairs carry bounds; `Typ`/`Bool`
+                // sorts are ignored (conservative).
+                if let (TypArg::NExp(x), TypArg::NExp(y)) = (&**a, &**b) {
+                    if let (NExp::Var(k), NExp::Constant(0)) | (NExp::Constant(0), NExp::Var(k)) =
+                        (&**x, &**y)
+                    {
+                        self.nonzero.insert(*k, ());
+                    }
                 }
             }
             NConstraint::Equal(a, b) => {
                 // `x == c` pins both bounds (max/min discipline keeps
                 // tighter pre-existing bounds; contradictory facts stay
-                // contradictory, which is vacuously sound).
-                if let (NExp::Var(k), NExp::Constant(c))
-                | (NExp::Constant(c), NExp::Var(k)) = (&**a, &**b)
-                {
-                    self.lower
-                        .entry(*k)
-                        .and_modify(|bound| *bound = (*bound).max(*c))
-                        .or_insert(*c);
-                    self.upper
-                        .entry(*k)
-                        .and_modify(|bound| *bound = (*bound).min(*c))
-                        .or_insert(*c);
+                // contradictory, which is vacuously sound). Only
+                // `(NExp, NExp)` pairs carry bounds.
+                if let (TypArg::NExp(x), TypArg::NExp(y)) = (&**a, &**b) {
+                    if let (NExp::Var(k), NExp::Constant(c))
+                    | (NExp::Constant(c), NExp::Var(k)) = (&**x, &**y)
+                    {
+                        self.lower
+                            .entry(*k)
+                            .and_modify(|bound| *bound = (*bound).max(*c))
+                            .or_insert(*c);
+                        self.upper
+                            .entry(*k)
+                            .and_modify(|bound| *bound = (*bound).min(*c))
+                            .or_insert(*c);
+                    }
                 }
             }
             NConstraint::Set(n, vs) => {

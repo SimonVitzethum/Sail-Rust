@@ -42,12 +42,12 @@ Legende:
 | `NC_true`/`NC_false` | `True`/`False` | `Some` | absorbieren | ignoriert | `from_bool` |
 | `NC_id f` | `Id` | `None` | opaque | ignoriert | frisch (`new_const`, Bool) |
 | `NC_var kid` | `Var` (+`subst`-Faltung `0→False`, sonst `→True`) | `None` | opaque | ignoriert | frisch (`new_const`, Bool) |
-| `NC_equal (t1,t2)` | `Equal(NExp,NExp)` (nur `A_nexp`-Operanden) | Vergleich | `a==b→True`; const-Faltung | `x==c` setzt beide Bounds | exakt (`Ast::eq`) |
-| `NC_not_equal` | `NotEqual` | Vergleich | `a==b→False`; const-Faltung | `x!=0` → `nonzero` | exakt (`eq(...).not()`) |
+| `NC_equal (t1,t2)` | `Equal(TypArg,TypArg)` (`A_nexp`/`A_typ`/`A_bool`, Lane 108) | je Sorte (`NExp`-/`Bool`-Vergleich; gemischt `false`; ungleiche Typen `None`) | `a==b→True`; `NExp`-Konstanten- und `Bool`-Literal-Faltung; gemischte Sorten `→False` | nur (`NExp`,`NExp`): `x==c` setzt beide Bounds | exakt f. (`NExp`,`NExp`)/(`Bool`,`Bool`); gleiche Typen `→true`; gemischt `→false`; sonst frisch |
+| `NC_not_equal` | `NotEqual(TypArg,TypArg)` (Sorten wie `Equal`) | Negation von `Equal` | `a==b→False`; Faltung dual zu `Equal` | nur (`NExp`,`NExp`): `x!=0` → `nonzero` | wie `Equal`, negiert |
 | `NC_ge/gt/le/lt` | `Ge/Gt/Le/Lt` | Vergleich | `a cmp a` konstant; const-Faltung | var-vs-const Bounds (strikt `±1`, saturierend) | exakt (`ge/gt/le/lt`) |
 | `NC_set (n, vs)` | `Set` | `vs.contains` | const-Membership; `[]→False`; sort/dedup | einelementig → beide Bounds | exakt (`Or` von `eq`-Literalen; `[]→False`) |
 | `NC_and`/`NC_or` | `And`/`Or` (binaer) | `&&`/`\|\|` | `True`/`False`-Absorption; `x==x`-Dedup; **`normalize`: flatten + sort (kanonisch)** | `And` rekursiv | exakt (`Bool::and`/`or`; leeres `And→True`, leeres `Or→False`) |
-| `NC_app (f, args)` | **`App(String, Vec<NExp>)` (Lane 80 neu)** — nur `A_nexp`-Args; fremde `typ_arg`-Sorten muss der Aufrufer abstrahieren | `None` | nur Argumente | ignoriert | frisch (`fresh_const`) |
+| `NC_app (f, args)` | **`App(String, Vec<TypArg>)` (Lane 108: alle `typ_arg`-Sorten)** | `None` (uninterpretiert) | Argumente je Sorte (`NExp`/`Bool`/`Typ`); nie das Praedikat | ignoriert | frisch (`fresh_const`) |
 | `NC_aux` | transparent (kein Operator) | — | — | — | — |
 
 ## `provably_*`-Familie (`sail_nexp::pred`, rein syntaktisch, konservativ)
