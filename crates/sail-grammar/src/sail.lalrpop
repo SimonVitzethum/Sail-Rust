@@ -1,0 +1,1433 @@
+// Sail grammar ported from `sail/src/lib/parser.mly` (Menhir) to LALRPOP.
+//
+// Conventions of this port:
+// - Every Menhir rule `A | A B` (common prefix) is factored to `A B?`
+//   with LALRPOP `?`/`*` operators: Menhir tolerates the resulting
+//   shift/reduce conflicts (resolving to shift), LALRPOP rejects them.
+// - Semantic actions only call AST constructors. All OCaml helper logic
+//   (`simp_infix`, `same_pat_ops`, deprecation warnings, name mangling,
+//   `fix_extern`, …) is dropped; see GRAMMAR.md.
+// - Locations are dropped (byte offsets live in the lexer only).
+
+use crate::ast::*;
+use crate::lexer::{LexError, Tok};
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = LexError;
+    enum Tok {
+        "and" => Tok::And,
+        "as" => Tok::As,
+        "assert" => Tok::Assert,
+        "bitzero" => Tok::Bitzero,
+        "bitone" => Tok::Bitone,
+        "by" => Tok::By,
+        "match" => Tok::Match,
+        "config" => Tok::Config,
+        "clause" => Tok::Clause,
+        "dec" => Tok::Dec,
+        "default" => Tok::Default,
+        "effect" => Tok::Effect,
+        "end" => Tok::End,
+        "operator" => Tok::OperatorKw,
+        "enum" => Tok::Enum,
+        "else" => Tok::Else,
+        "exit" => Tok::Exit,
+        "cast" => Tok::Cast,
+        "false" => Tok::False,
+        "forall" => Tok::Forall,
+        "foreach" => Tok::Foreach,
+        "function" => Tok::Function,
+        "mapping" => Tok::Mapping,
+        "overload" => Tok::Overload,
+        "throw" => Tok::Throw,
+        "try" => Tok::Try,
+        "catch" => Tok::Catch,
+        "if" => Tok::If,
+        "in" => Tok::In,
+        "inc" => Tok::Inc,
+        "let" => Tok::Let,
+        "var" => Tok::Var,
+        "ref" => Tok::Ref,
+        "Int" => Tok::Int,
+        "Nat" => Tok::Nat,
+        "Order" => Tok::Order,
+        "Bool" => Tok::Bool,
+        "pure" => Tok::Pure,
+        "impure" => Tok::Impure,
+        "monadic" => Tok::Monadic,
+        "register" => Tok::Register,
+        "return" => Tok::Return,
+        "scattered" => Tok::Scattered,
+        "sizeof" => Tok::Sizeof,
+        "constraint" => Tok::Constraint,
+        "constant" => Tok::Constant,
+        "struct" => Tok::Struct,
+        "then" => Tok::Then,
+        "true" => Tok::True,
+        "Type" => Tok::Type,
+        "type" => Tok::Typedef,
+        "undefined" => Tok::Undefined,
+        "union" => Tok::Union,
+        "newtype" => Tok::Newtype,
+        "with" => Tok::With,
+        "when" => Tok::When,
+        "val" => Tok::Val,
+        "outcome" => Tok::Outcome,
+        "instantiation" => Tok::Instantiation,
+        "impl" => Tok::Impl,
+        "private" => Tok::Private,
+        "repeat" => Tok::Repeat,
+        "until" => Tok::Until,
+        "while" => Tok::While,
+        "do" => Tok::Do,
+        "mutual" => Tok::Mutual,
+        "bitfield" => Tok::Bitfield,
+        "configuration" => Tok::Configuration,
+        "termination_measure" => Tok::TerminationMeasure,
+        "forwards" => Tok::Forwards,
+        "backwards" => Tok::Backwards,
+        "from" => Tok::From,
+        "to" => Tok::To,
+        "downto" => Tok::Downto,
+        "internal_plet" => Tok::InternalPLet,
+        "internal_return" => Tok::InternalReturn,
+        "internal_assume" => Tok::InternalAssume,
+        "|" => Tok::Bar,
+        "," => Tok::Comma,
+        "." => Tok::Dot,
+        "-" => Tok::Minus,
+        ";" => Tok::Semi,
+        "_" => Tok::Under,
+        ".." => Tok::DotDot,
+        "@" => Tok::At,
+        "::" => Tok::ColonColon,
+        "^" => Tok::Caret,
+        "*" => Tok::Star,
+        "{" => Tok::Lcurly,
+        "}" => Tok::Rcurly,
+        "(" => Tok::Lparen,
+        ")" => Tok::Rparen,
+        "[" => Tok::Lsquare,
+        "]" => Tok::Rsquare,
+        "{|" => Tok::LcurlyBar,
+        "|}" => Tok::RcurlyBar,
+        "[|" => Tok::LsquareBar,
+        "|]" => Tok::RsquareBar,
+        "->" => Tok::MinusGt,
+        "<->" => Tok::Bidir,
+        "2^" => Tok::TwoCaret,
+        "=" => Tok::Eq,
+        "=>" => Tok::EqGt,
+        "()" => Tok::Unit,
+        ":" => Tok::Colon,
+        RawId => Tok::Id(<String>),
+        RawTyVar => Tok::TyVar(<String>),
+        RawNum => Tok::Num(<String>),
+        RawBin => Tok::Bin(<String>),
+        RawHex => Tok::Hex(<String>),
+        RawReal => Tok::Real(<String>),
+        RawStr => Tok::Str(<String>),
+        RawOpId => Tok::OpId(<String>),
+        RawDocBlock => Tok::DocBlock(<String>),
+        RawDocLine => Tok::DocLine(<String>),
+        RawPragma => Tok::Pragma(<String>, <String>),
+        RawStructPragma => Tok::StructPragma(<String>),
+        RawAttr => Tok::Attr(<String>),
+        RawFixity => Tok::Fixity(<FixAssoc>, <u8>, <String>),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// identifiers & operators
+// ---------------------------------------------------------------------------
+
+// `id` in parser.mly.
+Ident: String = {
+    <s:RawId> => s,
+    "operator" <o:RawOpId> => o,
+    "operator" "-" => "-".to_string(),
+    "operator" "|" => "|".to_string(),
+    "operator" "^" => "^".to_string(),
+    "operator" "*" => "*".to_string(),
+}
+
+// `op_no_caret` (type operators without `^`).
+OpNoCaret: String = {
+    <o:RawOpId> => o,
+    "-" => "-".to_string(),
+    "|" => "|".to_string(),
+    "*" => "*".to_string(),
+    "in" => "in".to_string(),
+}
+
+// `op` (all type operators).
+Op: String = {
+    <o:OpNoCaret> => o,
+    "^" => "^".to_string(),
+}
+
+// `exp_op` (expression operators).
+ExpOp: String = {
+    <o:RawOpId> => o,
+    "-" => "-".to_string(),
+    "|" => "|".to_string(),
+    "@" => "@".to_string(),
+    "::" => "::".to_string(),
+    "^" => "^".to_string(),
+    "*" => "*".to_string(),
+}
+
+// `pat_op` (pattern operators).
+PatOp: PatOp = {
+    "@" => PatOp::VectorConcat,
+    "::" => PatOp::Cons,
+    "^" => PatOp::StringAppend,
+}
+
+// `kid` (type variable).
+Kid: String = {
+    <s:RawTyVar> => s,
+}
+
+// ---------------------------------------------------------------------------
+// types
+// ---------------------------------------------------------------------------
+
+pub Typ: Typ = {
+    "if" <c:InfixTyp> "then" <t:InfixTyp> "else" <e:Typ>
+        => Typ::If(Box::new(c), Box::new(t), Box::new(e)),
+    <t:InfixTyp> => t,
+}
+
+// `infix_typ`: prefix operators, head, `(operator, prefixes, item)` tail.
+InfixTyp: Typ = {
+    <p:PrefixTypOp*> <x:PostfixTyp> <xs:(<Op> <PrefixTypOp*> <PostfixTyp>)*> => {
+        if p.is_empty() && xs.is_empty() {
+            x
+        } else {
+            Typ::Infix(Box::new(InfixChain { prefixes: p, head: x, tail: xs }))
+        }
+    },
+}
+
+// `typ_no_caret`: same shape without `^` (used after `:` in patterns).
+TypNoCaret: Typ = {
+    <p:PrefixTypOp*> <x:PostfixTyp> <xs:(<OpNoCaret> <PrefixTypOp*> <PostfixTyp>)*> => {
+        if p.is_empty() && xs.is_empty() {
+            x
+        } else {
+            Typ::Infix(Box::new(InfixChain { prefixes: p, head: x, tail: xs }))
+        }
+    },
+}
+
+// `prefix_typ_op` (operator names only; positions dropped).
+PrefixTypOp: String = {
+    "2^" => "pow2".to_string(),
+    "-" => "negate".to_string(),
+    "*" => "__deref".to_string(),
+}
+
+PostfixTyp: Typ = {
+    <t:AtomicTyp> => t,
+}
+
+// `atomic_typ`.
+AtomicTyp: Typ = {
+    <i:Ident> <args:TyArgs?> => match args {
+        Some(a) => Typ::App(i, a),
+        None => Typ::Id(i),
+    },
+    "_" => Typ::Wild,
+    <k:Kid> => Typ::Var(k),
+    <l:Lit> => Typ::Lit(l),
+    "dec" => Typ::Dec,
+    "inc" => Typ::Inc,
+    "register" "(" <t:Typ> ")" => Typ::App("register".to_string(), vec![t]),
+    "(" <t:Typ> <ts:("," <TypList>)?> ")" => match ts {
+        Some(mut rest) => {
+            let mut v = vec![t];
+            v.append(&mut rest);
+            Typ::Tuple(v)
+        }
+        None => t,
+    },
+    "{" <ns:NumList> "}" => Typ::NSet(ns),
+    "{|" <ns:NumList> "|}" => Typ::NSet(ns),
+    "{" <ks:KOptList> "." <t:Typ> "}" =>
+        Typ::Exist(ks, Box::new(Typ::Lit(Lit::True)), Box::new(t)),
+    "{" <ks:KOptList> "," <c:Typ> "." <t:Typ> "}" =>
+        Typ::Exist(ks, Box::new(c), Box::new(t)),
+}
+
+// `tyarg`.
+TyArgs: Vec<Typ> = {
+    "(" <ts:TypList> ")" => ts,
+}
+
+// `typ_list` (trailing comma allowed).
+TypList: Vec<Typ> = {
+    <mut v:(<Typ> ",")*> <last:Typ?> => {
+        if let Some(t) = last { v.push(t); }
+        v
+    },
+}
+
+// `negative_num`.
+NegNum: String = {
+    <n:RawNum> => n,
+    "-" <n:RawNum> => format!("-{n}"),
+}
+
+// `num_list` (trailing comma allowed).
+NumList: Vec<String> = {
+    <mut v:(<NegNum> ",")*> <last:NegNum?> => {
+        if let Some(n) = last { v.push(n); }
+        v
+    },
+}
+
+// `kind`.
+Kind: Kind = {
+    "Int" => Kind::Int,
+    "Nat" => Kind::Nat,
+    "Type" => Kind::Type,
+    "Order" => Kind::Order,
+    "Bool" => Kind::Bool,
+}
+
+// `kid_list`.
+KidList: Vec<String> = {
+    <ks:Kid+> => ks,
+}
+
+// `kopt`.
+KOpt: KOpt = {
+    "(" <c:"constant"?> <ks:KidList> ":" <k:Kind> ")" => KOpt {
+        constant: c.is_some(),
+        kids: ks,
+        kind: Some(k),
+    },
+    <k:Kid> => KOpt { constant: false, kids: vec![k], kind: None },
+}
+
+// `kopt_list`.
+KOptList: Vec<KOpt> = {
+    <ks:KOpt+> => ks,
+}
+
+// `typquant`.
+TypQuant: TypQuant = {
+    <ks:KOptList> <c:("," <Typ>)?> => TypQuant {
+        kopts: ks,
+        constraint: c.map(Box::new),
+    },
+}
+
+ForallPart: TypQuant = {
+    "forall" <q:TypQuant> "." => q,
+}
+
+// `typschm`.
+pub TypSchm: TypSchm = {
+    <q:ForallPart?> <l:Typ> <a:Arrow> <r:Typ> <e:("effect" <EffectSet>)?> => TypSchm {
+        quant: q,
+        lhs: l,
+        arrow: a,
+        rhs: r,
+        effect: e,
+    },
+}
+
+Arrow: Arrow = {
+    "->" => Arrow::Fn,
+    "<->" => Arrow::Bidir,
+}
+
+EffectSet: Vec<String> = {
+    "{" <es:EffectList> "}" => es,
+    "pure" => vec![],
+}
+
+EffectList: Vec<String> = {
+    <e:EffectAnnot> <mut es:("," <EffectAnnot>)*> => {
+        let mut v = vec![e];
+        v.append(&mut es);
+        v
+    },
+}
+
+EffectAnnot: String = {
+    <i:Ident> => i,
+    "configuration" => "configuration".to_string(),
+}
+
+// ---------------------------------------------------------------------------
+// literals & patterns
+// ---------------------------------------------------------------------------
+
+// `lit`.
+Lit: Lit = {
+    "true" => Lit::True,
+    "false" => Lit::False,
+    "()" => Lit::Unit,
+    <n:RawNum> => Lit::Num(n),
+    "bitzero" => Lit::Zero,
+    "bitone" => Lit::One,
+    <b:RawBin> => Lit::Bin(b),
+    <h:RawHex> => Lit::Hex(h),
+    <s:RawStr> => Lit::Str(s),
+    <r:RawReal> => Lit::Real(r),
+}
+
+// `negative_lit`.
+NegLit: Lit = {
+    "-" <n:RawNum> => Lit::Num(format!("-{n}")),
+    <l:Lit> => l,
+}
+
+// `pat`.
+pub Pat: Pat = {
+    <a:Attrs> <p:Pat> => Pat::Attr(a, Box::new(p)),
+    <p:Pat1> <t:(AsKw <Typ>)?> => match t {
+        Some(ty) => Pat::As(Box::new(p), ty),
+        None => p,
+    },
+}
+
+// `as` / `match` type-annotation keywords (identical meaning).
+AsKw: () = {
+    "as" => (),
+    "match" => (),
+}
+
+// `pat1`: head with `(operator, item)` tail (no same-operator check).
+Pat1: Pat = {
+    <p:AtomicPat> <ops:(<PatOp> <AtomicPat>)*> => {
+        if ops.is_empty() { p } else { Pat::Infix(Box::new(p), ops) }
+    },
+}
+
+// `pat_list` (trailing comma allowed).
+PatList: Vec<Pat> = {
+    <mut v:(<Pat> ",")*> <last:Pat?> => {
+        if let Some(p) = last { v.push(p); }
+        v
+    },
+}
+
+// `atomic_pat`: base with chained `: type` annotations.
+AtomicPat: Pat = {
+    <b:AtomicPatBase> <ts:(":" <TypNoCaret>)*> => {
+        let mut p = b;
+        for t in ts {
+            p = Pat::Typ(Box::new(p), t);
+        }
+        p
+    },
+}
+
+AtomicPatBase: Pat = {
+    "_" => Pat::Wild,
+    <l:NegLit> => Pat::Lit(l),
+    <i:Ident> <t:PatIdTail?> => match t {
+        Some(PatIdTail::Call(args)) => Pat::App(i, args),
+        Some(PatIdTail::Subrange(lo, hi)) => Pat::VectorSubrange(i, lo, hi),
+        None => Pat::Id(i),
+    },
+    <k:Kid> => Pat::KidVar(k),
+    "(" <p:Pat> <ts:("," <PatList>)?> ")" => match ts {
+        Some(mut rest) => {
+            let mut v = vec![p];
+            v.append(&mut rest);
+            Pat::Tuple(v)
+        }
+        None => p,
+    },
+    "[" <mut v:(<Pat> ",")*> <last:Pat?> "]" => {
+        if let Some(p) = last { v.push(p); }
+        Pat::Vector(v)
+    },
+    "[|" <mut v:(<Pat> ",")*> <last:Pat?> "|]" => {
+        if let Some(p) = last { v.push(p); }
+        Pat::List(v)
+    },
+    "struct" <i:Ident?> "{" <fs:FPatList> "}" => Pat::Struct(i, fs),
+}
+
+// Tail after a pattern head identifier.
+PatIdTail: PatIdTail = {
+    "()" => PatIdTail::Call(vec![Pat::Lit(Lit::Unit)]),
+    "(" <ps:PatList> ")" => PatIdTail::Call(ps),
+    "[" <lo:RawNum> <hi:(".." <RawNum>)?> "]" => {
+        let hi = hi.unwrap_or_else(|| lo.clone());
+        PatIdTail::Subrange(lo, hi)
+    },
+}
+
+FPatList: Vec<FieldPat> = {
+    <mut v:(<FPat> ",")*> <last:FPat?> => {
+        if let Some(f) = last { v.push(f); }
+        v
+    },
+}
+
+// `fpat`.
+FPat: FieldPat = {
+    <i:Ident> <p:("=" <Pat>)?> => match p {
+        Some(pat) => FieldPat::Field(i.clone(), pat),
+        None => FieldPat::Field(i.clone(), Pat::Id(i)),
+    },
+    "_" => FieldPat::Wild,
+}
+
+// ---------------------------------------------------------------------------
+// expressions
+// ---------------------------------------------------------------------------
+
+// `exp`: factored `if` head + optional `else` (innermost binding, no conflict).
+pub Exp: Exp = {
+    <h:IfHead> <t:("else" <Exp>)?> => Exp::If(
+        h.0,
+        h.1,
+        Box::new(t.unwrap_or(Exp::Lit(Lit::Unit))),
+    ),
+    <e:PlainExp> => e,
+}
+
+IfHead: (Box<Exp>, Box<Exp>) = {
+    "if" <c:Exp> "then" <t:Exp> => (Box::new(c), Box::new(t)),
+}
+
+// All `exp` forms except `if`.
+PlainExp: Exp = {
+    <l:Exp0> <r:("=" <Exp>)?> => match r {
+        Some(e) => Exp::Assign(Box::new(l), Box::new(e)),
+        None => l,
+    },
+    <a:Attrs> <e:Exp> => Exp::Attr(a, Box::new(e)),
+    "let" <p:Pat> "=" <e:Exp> <b:("in" <Exp>)?> => Exp::Let(
+        p,
+        Box::new(e),
+        Box::new(b.unwrap_or(Exp::Lit(Lit::Unit))),
+    ),
+    "var" <a:AtomicExp> "=" <e:Exp> <b:("in" <Exp>)?> => Exp::Var(
+        Box::new(a),
+        Box::new(e),
+        Box::new(b.unwrap_or(Exp::Lit(Lit::Unit))),
+    ),
+    "return" <e:Exp> => Exp::Return(Box::new(e)),
+    "throw" <e:Exp> => Exp::Throw(Box::new(e)),
+    "match" <e:Exp> "{" <cs:CaseList> "}" => Exp::Match(Box::new(e), cs),
+    "try" <e:Exp> "catch" "{" <cs:CaseList> "}" => Exp::Try(Box::new(e), cs),
+    "foreach" "(" <l:LoopExp> ")" "do"? <e:Exp> => Exp::For(Box::new(l), Box::new(e)),
+    "foreach" <l:LoopExp> "{" <b:Block> "}" => Exp::For(
+        Box::new(l),
+        Box::new(Exp::Block(b)),
+    ),
+    "foreach" <l:LoopExp> "do" <e:Exp> => Exp::For(Box::new(l), Box::new(e)),
+    "repeat" <m:RepeatMeas?> <e1:Exp> "until" <e2:Exp> => Exp::Loop(
+        LoopKind::Until,
+        m.unwrap_or(Measure::None),
+        Box::new(e2),
+        Box::new(e1),
+    ),
+    "while" <e1:Exp> <m:RepeatMeas?> "do" <e2:Exp> => Exp::Loop(
+        LoopKind::While,
+        m.unwrap_or(Measure::None),
+        Box::new(e1),
+        Box::new(e2),
+    ),
+    "while" <e1:Exp> <m:RepeatMeas?> "{" <b:Block> "}" => Exp::Loop(
+        LoopKind::While,
+        m.unwrap_or(Measure::None),
+        Box::new(e1),
+        Box::new(Exp::Block(b)),
+    ),
+    "internal_plet" <p:Pat> "=" <e1:Exp> "in" <e2:Exp>
+        => Exp::InternalPlet(p, Box::new(e1), Box::new(e2)),
+    "internal_return" <e:Exp> => Exp::InternalReturn(Box::new(e)),
+    "internal_assume" <t:AtomicTyp> "in" <e:Exp>
+        => Exp::InternalAssume(t, Box::new(e)),
+}
+
+RepeatMeas: Measure = {
+    "termination_measure" "(" <e:Exp> ")" => Measure::Some(Box::new(e)),
+}
+
+// `loop_exp`.
+LoopExp: LoopHead = {
+    <v:Ident> "from" <f:Exp> <o:ToOrd> <t:Exp> <s:("by" <Exp>)?> <ord:("in" <Typ>)?> => LoopHead {
+        var: v,
+        from: Box::new(f),
+        ord: o,
+        to: Box::new(t),
+        step: s.map(Box::new),
+        order: ord,
+    },
+}
+
+ToOrd: LoopOrd = {
+    "to" => LoopOrd::To,
+    "downto" => LoopOrd::Downto,
+}
+
+// `exp0`: prefix operators, head, `(operator, prefixes, item)` tail.
+Exp0: Exp = {
+    <p:PrefixOp*> <x:AtomicExp> <xs:(<ExpOp> <PrefixOp*> <AtomicExp>)*> => {
+        if p.is_empty() && xs.is_empty() {
+            x
+        } else {
+            Exp::Infix(Box::new(InfixChain { prefixes: p, head: x, tail: xs }))
+        }
+    },
+}
+
+// `prefix_op` (operator names only).
+PrefixOp: String = {
+    "2^" => "pow2".to_string(),
+    "-" => "negate".to_string(),
+    "*" => "__deref".to_string(),
+}
+
+// `case`.
+Case: PatExp = {
+    <a:Attrs> <c:AttrCase> => PatExp::Attr(a, Box::new(c)),
+    <p:Pat> <g:("if" <Exp>)?> "=>" <b:Exp> => match g {
+        Some(guard) => PatExp::When(p, Box::new(guard), Box::new(b)),
+        None => PatExp::Exp(p, Box::new(b)),
+    },
+}
+
+AttrCase: PatExp = {
+    "(" <c:Case> ")" => c,
+    <a:Attrs> <c:AttrCase> => PatExp::Attr(a, Box::new(c)),
+}
+
+// `case_list` (trailing comma allowed).
+CaseList: Vec<PatExp> = {
+    <mut v:(<Case> ",")*> <last:Case?> => {
+        if let Some(c) = last { v.push(c); }
+        v
+    },
+}
+
+// `block`.
+Block: Vec<Exp> = {
+    <mut v:(<Exp> ";")*> <last:Exp?> => {
+        if let Some(e) = last { v.push(e); }
+        v
+    },
+}
+
+// `atomic_exp`: head with applied suffixes, folded left to right.
+AtomicExp: Exp = {
+    <b:AtomBase> <ss:AtomSuffix*> => {
+        if ss.is_empty() {
+            b
+        } else {
+            Exp::Suffix(Box::new(b), ss)
+        }
+    },
+}
+
+AtomSuffix: ExpSuffix = {
+    "." <i:Ident> <a:CallArgs?> => match a {
+        Some(args) => ExpSuffix::Call(i, args),
+        None => ExpSuffix::Field(i),
+    },
+    ":" <t:AtomicTyp> => ExpSuffix::TypAnnot(t),
+    "[" <e:Exp> "]" => ExpSuffix::Index(Box::new(e)),
+    "[" <hi:Exp> ".." <lo:Exp> "]" => ExpSuffix::Subrange(Box::new(hi), Box::new(lo)),
+    "[" <a:Exp> "," <b:Exp> "]" => ExpSuffix::Slice(Box::new(a), Box::new(b)),
+}
+
+AtomBase: Exp = {
+    "config" <i:RawId> => Exp::Config(i),
+    "undefined" => Exp::Undef,
+    <l:Lit> => Exp::Lit(l),
+    <i:Ident> <t:IdCallTail?> => match t {
+        Some(args) => Exp::App(i, args),
+        None => Exp::Id(i),
+    },
+    <i:Ident> "->" <g:Ident> <a:IdCallTail> =>
+        Exp::Suffix(Box::new(Exp::Id(i)), vec![ExpSuffix::Call(g, a)]),
+    <k:Kid> => Exp::Sizeof(Typ::Var(k)),
+    "ref" <i:Ident> => Exp::Ref(i),
+    "exit" <a:ExitArgs> => Exp::Exit(Box::new(a)),
+    "sizeof" "(" <t:Typ> ")" => Exp::Sizeof(t),
+    "constraint" "(" <t:Typ> ")" => Exp::Constraint(t),
+    "assert" "(" <e:Exp> <m:("," <Exp>)?> ")" => Exp::Assert(
+        Box::new(e),
+        Box::new(m.unwrap_or(Exp::Lit(Lit::Str(String::new())))),
+    ),
+    "struct" <i:Ident?> "{" <fs:FexpList> "}" => Exp::Struct(i, fs),
+    "(" <e:Exp> <ts:("," <ExpList>)?> ")" => match ts {
+        Some(mut rest) => {
+            let mut v = vec![e];
+            v.append(&mut rest);
+            Exp::Tuple(v)
+        }
+        None => e,
+    },
+    "[" "]" => Exp::Vector(vec![]),
+    "[" <e:Exp> "with" <us:VecUpdList> "]" => Exp::VectorUpdate(Box::new(e), us),
+    "[" <e:Exp> "]" => Exp::Vector(vec![e]),
+    "[" <e:Exp> "," <mut es:(<Exp> ",")*> <last:Exp?> "]" => {
+        if let Some(x) = last { es.push(x); }
+        let mut v = vec![e];
+        v.append(&mut es);
+        Exp::Vector(v)
+    },
+    "[|" <mut v:(<Exp> ",")*> <last:Exp?> "|]" => {
+        if let Some(e) = last { v.push(e); }
+        Exp::List(v)
+    },
+    "{" <b:BlockOrUpd> "}" => b,
+}
+
+// Call arguments after an identifier or `.field`.
+IdCallTail: Vec<Exp> = {
+    "()" => vec![Exp::Lit(Lit::Unit)],
+    "(" <es:ExpList> ")" => es,
+}
+
+CallArgs: Vec<Exp> = {
+    "()" => vec![Exp::Lit(Lit::Unit)],
+    "(" <es:ExpList> ")" => es,
+}
+
+ExitArgs: Exp = {
+    "()" => Exp::Lit(Lit::Unit),
+    "(" <e:Exp> ")" => e,
+}
+
+// `exp_list` (trailing comma allowed).
+ExpList: Vec<Exp> = {
+    <mut v:(<Exp> ",")*> <last:Exp?> => {
+        if let Some(e) = last { v.push(e); }
+        v
+    },
+}
+
+// `{ block | exp with updates }`.
+BlockOrUpd: Exp = {
+    <b:Block> => Exp::Block(b),
+    <e:Exp> "with" <fs:FexpList> => Exp::StructUpdate(Box::new(e), fs),
+}
+
+// `fexp_exp`.
+Fexp: FieldExp = {
+    <a:AtomicExp> <e:("=" <Exp>)?> => match e {
+        Some(rhs) => FieldExp::Field(Box::new(a.clone()), Box::new(rhs)),
+        None => match a {
+            Exp::Id(i) => FieldExp::Punning(i),
+            other => FieldExp::Field(Box::new(other.clone()), Box::new(other)),
+        },
+    },
+}
+
+FexpList: Vec<FieldExp> = {
+    <mut v:(<Fexp> ",")*> <last:Fexp?> => {
+        if let Some(f) = last { v.push(f); }
+        v
+    },
+}
+
+// `vector_update`.
+VecUpd: VectorUpdate = {
+    <a:AtomicExp> <t:VecUpdTail?> => match t {
+        Some(VecUpdTail::Eq(e)) => VectorUpdate::Single(Box::new(a), Box::new(e)),
+        Some(VecUpdTail::Range(lo, e)) =>
+            VectorUpdate::Range(Box::new(a), Box::new(lo), Box::new(e)),
+        None => VectorUpdate::Single(
+            Box::new(a.clone()),
+            Box::new(a),
+        ),
+    },
+}
+
+VecUpdTail: VecUpdTail = {
+    "=" <e:Exp> => VecUpdTail::Eq(e),
+    ".." <hi:AtomicExp> "=" <e:Exp> => VecUpdTail::Range(hi, e),
+}
+
+VecUpdList: Vec<VectorUpdate> = {
+    <mut v:(<VecUpd> ",")*> <last:VecUpd?> => {
+        if let Some(u) = last { v.push(u); }
+        v
+    },
+}
+
+// ---------------------------------------------------------------------------
+// attributes & documentation
+// ---------------------------------------------------------------------------
+
+// `attributes`.
+Attrs: Vec<Attr> = {
+    <a:RawAttr> <d:AttrData?> <t:AttrsTail> => {
+        let mut v = vec![Attr { name: a, data: d }];
+        v.extend(t);
+        v
+    },
+}
+
+AttrsTail: Vec<Attr> = {
+    "," <i:RawId> <d:AttrData?> <t:AttrsTail> => {
+        let mut v = vec![Attr { name: i, data: d }];
+        v.extend(t);
+        v
+    },
+    "]" => vec![],
+}
+
+// `attribute_data`.
+AttrData: AttrData = {
+    "{" <kvs:AttrKVList> "}" => AttrData::Object(kvs),
+    <n:RawNum> => AttrData::Num(n),
+    <s:RawStr> => AttrData::Str(s),
+    <i:RawId> => AttrData::Str(i),
+    "true" => AttrData::Bool(true),
+    "false" => AttrData::Bool(false),
+    "[" <mut v:(<AttrData> ",")*> <last:AttrData?> "]" => {
+        if let Some(d) = last { v.push(d); }
+        AttrData::List(v)
+    },
+}
+
+AttrKVList: Vec<(String, AttrData)> = {
+    <mut v:(<AttrKV> ",")*> <last:AttrKV?> => {
+        if let Some(kv) = last { v.push(kv); }
+        v
+    },
+}
+
+// `attribute_data_key_value`.
+AttrKV: (String, AttrData) = {
+    <k:RawId> "=" <v:AttrData> => (k, v),
+    <k:RawStr> "=" <v:AttrData> => (k, v),
+}
+
+// `doc_comment`.
+DocComment: DocComment = {
+    <s:RawDocBlock> => DocComment::Block(s),
+    <s:RawDocLine> => DocComment::Line(s),
+}
+
+// ---------------------------------------------------------------------------
+// functions
+// ---------------------------------------------------------------------------
+
+FunclAnnot: Annot = {
+    "private" => Annot::Private,
+    <a:Attrs> => Annot::Attr(a),
+    <d:DocComment> => Annot::Doc(d),
+}
+
+// `(pat | (pat if guard))`.
+GuardedPat: GuardedPat = {
+    "(" <p:Pat> "if" <g:Exp> ")" => GuardedPat::Guarded(p, g),
+    <p:Pat> => GuardedPat::Plain(p),
+}
+
+// `funcl_patexp` (untyped clause).
+Patexp: (GuardedPat, Exp) = {
+    <p:GuardedPat> "=" <e:Exp> => (p, e),
+}
+
+// `funcl` (clause after `and`, or standalone without `function`).
+Funcl: Funcl = {
+    <a:FunclAnnot*> <f:Ident> <p:Patexp> => Funcl {
+        annots: a,
+        name: f,
+        pat: p.0,
+        typ: None,
+        body: PatExpBody::Exp(Box::new(p.1)),
+    },
+}
+
+// `funcl_patexp_typ`: (pattern, optional annotation, body).
+PatexpTyp: (GuardedPat, Option<(Option<TypQuant>, Typ)>, PatExpBody) = {
+    <q:ForallPart> <p:GuardedPat> "->" <t:Typ> "=" <e:Exp> => (
+        p,
+        Some((Some(q), t)),
+        PatExpBody::Exp(Box::new(e)),
+    ),
+    <p:GuardedPat> <t:("->" <Typ>)?> "=" <e:Exp> => (
+        p,
+        t.map(|ty| (None, ty)),
+        PatExpBody::Exp(Box::new(e)),
+    ),
+}
+
+// `fun_def`.
+FunDef: FunDef = {
+    "function" <m:RecMeasure?> <a:FunclAnnot*> <f:Ident> <pt:PatexpTyp> <t:("and" <Funcl>)*> => {
+        let (pat, typ, body) = pt;
+        FunDef {
+            rec_measure: m,
+            head: Funcl { annots: a, name: f, pat, typ, body },
+            tail: t,
+        }
+    },
+}
+
+// `rec_measure`.
+RecMeasure: (Pat, Exp) = {
+    "{" <p:Pat> "=>" <e:Exp> "}" => (p, e),
+}
+
+// `fun_def_list` (for `mutual`).
+FunDefList: Vec<FunDef> = {
+    <fs:FunDef+> => fs,
+}
+
+// ---------------------------------------------------------------------------
+// mappings
+// ---------------------------------------------------------------------------
+
+pub MPat: MPat = {
+    <a:AtomicMPat> <s:MPatSuffix?> => match s {
+        Some(MPatSuffix::Chain(ops)) => MPat::Infix(Box::new(a), ops),
+        Some(MPatSuffix::As(i)) => MPat::As(Box::new(a), i),
+        None => a,
+    },
+}
+
+MPatSuffix: MPatSuffix = {
+    <ops:(<PatOp> <AtomicMPat>)+> => MPatSuffix::Chain(ops),
+    "as" <i:Ident> => MPatSuffix::As(i),
+}
+
+// `mpat_list` (trailing comma allowed).
+MPatList: Vec<MPat> = {
+    <mut v:(<MPat> ",")*> <last:MPat?> => {
+        if let Some(m) = last { v.push(m); }
+        v
+    },
+}
+
+AtomicMPat: MPat = {
+    <b:AtomicMPatBase> <ts:(":" <TypNoCaret>)*> => {
+        let mut m = b;
+        for t in ts {
+            m = MPat::Typ(Box::new(m), t);
+        }
+        m
+    },
+}
+
+AtomicMPatBase: MPat = {
+    <l:NegLit> => MPat::Lit(l),
+    <i:Ident> <t:MPatIdTail?> => match t {
+        Some(MPatIdTail::Call(args)) => MPat::App(i, args),
+        Some(MPatIdTail::Subrange(lo, hi)) => MPat::VectorSubrange(i, lo, hi),
+        None => MPat::Id(i),
+    },
+    "(" <m:MPat> <ts:("," <MPatList>)?> ")" => match ts {
+        Some(mut rest) => {
+            let mut v = vec![m];
+            v.append(&mut rest);
+            MPat::Tuple(v)
+        }
+        None => m,
+    },
+    "[" <mut v:(<MPat> ",")*> <last:MPat?> "]" => {
+        if let Some(m) = last { v.push(m); }
+        MPat::Vector(v)
+    },
+    "[|" <mut v:(<MPat> ",")*> <last:MPat?> "|]" => {
+        if let Some(m) = last { v.push(m); }
+        MPat::List(v)
+    },
+    "struct" <i:Ident?> "{" <fs:FMPatList> "}" => MPat::Struct(i, fs),
+}
+
+MPatIdTail: MPatIdTail = {
+    "()" => MPatIdTail::Call(vec![MPat::Lit(Lit::Unit)]),
+    "(" <ms:MPatList> ")" => MPatIdTail::Call(ms),
+    "[" <lo:RawNum> <hi:(".." <RawNum>)?> "]" => {
+        let hi = hi.unwrap_or_else(|| lo.clone());
+        MPatIdTail::Subrange(lo, hi)
+    },
+}
+
+// `fmpat`.
+FMPat: (String, MPat) = {
+    <i:Ident> <m:("=" <MPat>)?> => match m {
+        Some(pat) => (i, pat),
+        None => (i.clone(), MPat::Id(i)),
+    },
+}
+
+FMPatList: Vec<(String, MPat)> = {
+    <mut v:(<FMPat> ",")*> <last:FMPat?> => {
+        if let Some(f) = last { v.push(f); }
+        v
+    },
+}
+
+// `mpexp`.
+MPExp: MPExp = {
+    <m:MPat> <g:("if" <Exp>)?> => MPExp { pat: m, guard: g },
+}
+
+// `mapcl0`.
+MapCl0: MapCl = {
+    <m:MPExp> "<->" <n:MPExp> => MapCl::Bidir(m, n),
+    <m:MPExp> "=>" <e:Exp> => MapCl::ForwardsDeprecated(m, e),
+    "forwards" <c:Case> => MapCl::Forwards(c),
+    "backwards" <c:Case> => MapCl::Backwards(c),
+}
+
+// `mapcl`.
+MapCl: MapCl = {
+    <a:Attrs> <m:MapCl> => MapCl::Attr(a, Box::new(m)),
+    <d:DocComment> <m:MapCl> => MapCl::Doc(d, Box::new(m)),
+    <m:MapCl0> <w:("when" <Exp>)?> => match w {
+        Some(g) => MapCl::When(Box::new(m), g),
+        None => m,
+    },
+}
+
+// `mapcl_list` (trailing comma allowed).
+MapClList: Vec<MapCl> = {
+    <mut v:(<MapCl> ",")*> <last:MapCl?> => {
+        if let Some(m) = last { v.push(m); }
+        v
+    },
+}
+
+// `map_def`.
+MapDef: MapDef = {
+    "mapping" <i:Ident> <t:(":" <TypSchm>)?> "=" "{" <cs:MapClList> "}" => MapDef {
+        name: i,
+        typschm: t,
+        clauses: cs,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// type definitions
+// ---------------------------------------------------------------------------
+
+// `typaram`.
+TyParam: TypQuant = {
+    "(" <ks:ParamKOptList> ")" <t:TyParamTail?> => TypQuant {
+        kopts: ks,
+        constraint: t.map(Box::new),
+    },
+}
+
+TyParamTail: Typ = {
+    "," <t:Typ> => t,
+    "constraint" <t:Typ> => t,
+}
+
+// `param_kopt`.
+ParamKOpt: KOpt = {
+    <k:Kid> <t:(":" <Kind>)?> => KOpt { constant: false, kids: vec![k], kind: t },
+}
+
+ParamKOptList: Vec<KOpt> = {
+    <mut v:(<ParamKOpt> ",")*> <last:ParamKOpt?> => {
+        if let Some(k) = last { v.push(k); }
+        v
+    },
+}
+
+// `unbracketed_typaram`.
+UnbracketedTyParam: TypQuant = {
+    <ks:ParamKOptList> <t:("constraint" <Typ>)?> => TypQuant {
+        kopts: ks,
+        constraint: t.map(Box::new),
+    },
+}
+
+// `type_def` (struct/enum/newtype/union/bitfield; `type` handled in DefAux).
+TypeDef: TypeDef = {
+    "struct" <i:Ident> <p:TyParam?> "=" "{" <fs:StructFields> "}" => TypeDef::Record(
+        i,
+        p.unwrap_or(TypQuant { kopts: vec![], constraint: None }),
+        fs,
+    ),
+    "enum" <i:Ident> <e:EnumBody> => TypeDef::Enum(i, e.0, e.1),
+    "newtype" <i:Ident> <p:TyParam?> "=" <u:TypeUnion> => TypeDef::Variant(
+        i,
+        p.unwrap_or(TypQuant { kopts: vec![], constraint: None }),
+        vec![u],
+        true,
+    ),
+    "union" <i:Ident> <p:TyParam?> "=" "{" <us:TypeUnions> "}" => TypeDef::Variant(
+        i,
+        p.unwrap_or(TypQuant { kopts: vec![], constraint: None }),
+        us,
+        false,
+    ),
+    "bitfield" <i:Ident> ":" <t:Typ> "=" "{" <rs:RDefBody?> "}" => TypeDef::Bitfield(
+        i,
+        t,
+        rs.unwrap_or_default(),
+    ),
+}
+
+// `typedef ...` / `type constraint ...` sharing the `type` prefix.
+TypedefTail: DefAux = {
+    "constraint" <t:Typ> => DefAux::Constraint(t),
+    <i:Ident> <p:TyParam?> "=" <t:Typ> => DefAux::Type(TypeDef::Abbrev(
+        i,
+        p.unwrap_or(TypQuant { kopts: vec![], constraint: None }),
+        None,
+        t,
+    )),
+    <i:Ident> <p:TyParam?> "->" <k:Kind> "=" <t:Typ> => DefAux::Type(TypeDef::Abbrev(
+        i,
+        p.unwrap_or(TypQuant { kopts: vec![], constraint: None }),
+        Some(k),
+        t,
+    )),
+    <i:Ident> ":" <k:Kind> "=" <t:Typ> => DefAux::Type(TypeDef::Abbrev(
+        i,
+        TypQuant { kopts: vec![], constraint: None },
+        Some(k),
+        t,
+    )),
+    <i:Ident> ":" <k:Kind> <io:AbstractInst?> => DefAux::Type(TypeDef::Abstract(i, k, io)),
+}
+
+AbstractInst: Vec<String> = {
+    "=" "config" <ks:ConfigKey> => ks,
+}
+
+ConfigKey: Vec<String> = {
+    <k:RawId> <mut ks:("." <RawId>)*> => {
+        let mut v = vec![k];
+        v.append(&mut ks);
+        v
+    },
+}
+
+// `enum` body after the name.
+EnumBody: (Vec<(String, Typ)>, Vec<(EnumMember, Option<Exp>)>) = {
+    "=" <m:EnumBar> => (
+        vec![],
+        m.into_iter().map(|i| (EnumMember::Item(i), None)).collect(),
+    ),
+    "=" "{" <e:Enum> "}" => (vec![], e),
+    "with" <f:EnumFns> "=" "{" <e:Enum> "}" => (f, e),
+}
+
+// `enum_bar`.
+EnumBar: Vec<String> = {
+    <i:Ident> <mut is:("|" <Ident>)*> => {
+        let mut v = vec![i];
+        v.append(&mut is);
+        v
+    },
+}
+
+// `enum_functions` member.
+EnumFn: (String, Typ) = {
+    <i:Ident> "->" <t:Typ> => (i, t),
+}
+
+EnumFns: Vec<(String, Typ)> = {
+    <mut v:(<EnumFn> ",")*> <last:EnumFn?> => {
+        if let Some(f) = last { v.push(f); }
+        v
+    },
+}
+
+// `enum` member list (trailing comma allowed).
+Enum: Vec<(EnumMember, Option<Exp>)> = {
+    <mut v:(<EnumMember> ",")*> <last:EnumMember?> => {
+        if let Some(m) = last { v.push(m); }
+        v
+    },
+}
+
+// `enum_member`.
+EnumMember: (EnumMember, Option<Exp>) = {
+    <a:Attrs> <m:EnumMember> => (EnumMember::Attr(a, Box::new(m.0)), m.1),
+    <d:DocComment> <m:EnumMember> => (EnumMember::Doc(d, Box::new(m.0)), m.1),
+    <i:Ident> <v:("=>" <Exp>)?> => (EnumMember::Item(i), v),
+}
+
+// `struct_field`.
+StructField: StructField = {
+    <a:Attrs> <f:StructField> => StructField::Attr(a, Box::new(f)),
+    <d:DocComment> <f:StructField> => StructField::Doc(d, Box::new(f)),
+    <n:Ident> ":" <t:Typ> => StructField::Item(n, t),
+}
+
+StructFields: Vec<StructField> = {
+    <mut v:(<StructField> ",")*> <last:StructField?> => {
+        if let Some(f) = last { v.push(f); }
+        v
+    },
+}
+
+// `type_union`.
+TypeUnion: TypeUnion = {
+    <a:Attrs> <u:TypeUnion> => TypeUnion::Attr(a, Box::new(u)),
+    <d:DocComment> <u:TypeUnion> => TypeUnion::Doc(d, Box::new(u)),
+    "private" <u:TypeUnion> => TypeUnion::Private(Box::new(u)),
+    <i:Ident> ":" <t:Typ> <f:("->" <Typ>)?> => match f {
+        Some(ret) => TypeUnion::Id(i, Typ::Fn(Box::new(t), Box::new(ret))),
+        None => TypeUnion::Id(i, t),
+    },
+    <i:Ident> ":" "{" <fs:StructFields> "}" => TypeUnion::AnonRecord(i, fs),
+}
+
+TypeUnions: Vec<TypeUnion> = {
+    <mut v:(<TypeUnion> ",")*> <last:TypeUnion?> => {
+        if let Some(u) = last { v.push(u); }
+        v
+    },
+}
+
+// `index_range`.
+IndexRange: IndexRange = {
+    "(" <i:IndexRange> ")" => i,
+    <a:AtomicIndexRange> <t:("@" <IndexRange>)?> => match t {
+        Some(hi) => IndexRange::Concat(Box::new(a), Box::new(hi)),
+        None => a,
+    },
+}
+
+AtomicIndexRange: IndexRange = {
+    <t:Typ> <r:(".." <Typ>)?> => match r {
+        Some(hi) => IndexRange::Range(t, hi),
+        None => IndexRange::Single(t),
+    },
+}
+
+// `r_id_def`.
+RIdDef: RegField = {
+    <d:DocComment> <r:RIdDef> => RegField::Doc(d, Box::new(r)),
+    <a:Attrs> <r:RIdDef> => RegField::Attr(a, Box::new(r)),
+    <n:Ident> ":" <r:IndexRange> => RegField::Item(n, r),
+}
+
+RDefBody: Vec<RegField> = {
+    <mut v:(<RIdDef> ",")*> <last:RIdDef?> => {
+        if let Some(r) = last { v.push(r); }
+        v
+    },
+}
+
+// ---------------------------------------------------------------------------
+// value / register / outcome / scattered / misc definitions
+// ---------------------------------------------------------------------------
+
+// `val_spec_def`.
+ValSpec: ValSpec = {
+    "val" <s:RawStr> ":" <t:TypSchm> => ValSpec {
+        name: s.clone(),
+        typschm: t,
+        ext: Some(Extern { pure: None, bindings: vec![("_".to_string(), s)] }),
+    },
+    "val" <f:Ident> ":" <t:TypSchm> <e:("=" <Externs>)?> => ValSpec {
+        name: f,
+        typschm: t,
+        ext: e,
+    },
+    "val" <f:Ident> "=" <e:Externs> ":" <t:TypSchm> => ValSpec {
+        name: f,
+        typschm: t,
+        ext: Some(e),
+    },
+    "val" "cast" <f:Ident> ":" <t:TypSchm> => ValSpec {
+        name: f,
+        typschm: t,
+        ext: None,
+    },
+    "val" "cast" <f:Ident> "=" <e:Externs> ":" <t:TypSchm> => ValSpec {
+        name: f,
+        typschm: t,
+        ext: Some(e),
+    },
+}
+
+// `externs`.
+Externs: Extern = {
+    <p:PureOpt?> <b:ExternBody> => Extern { pure: p, bindings: b },
+}
+
+PureOpt: bool = {
+    "monadic" => false,
+    "impure" => false,
+    "pure" => true,
+}
+
+ExternBody: Vec<(String, String)> = {
+    <s:RawStr> => vec![("_".to_string(), s)],
+    "{" <mut v:(<ExternBind> ",")*> <last:ExternBind?> "}" => {
+        if let Some(b) = last { v.push(b); }
+        v
+    },
+}
+
+ExternBind: (String, String) = {
+    <i:Ident> ":" <s:RawStr> => (i, s),
+    "_" ":" <s:RawStr> => ("_".to_string(), s),
+}
+
+// `outcome_spec_def`.
+OutcomeSpec: OutcomeSpec = {
+    "outcome" <i:Ident> ":" <t:TypSchm> <p:("with" <UnbracketedTyParam>)?> => OutcomeSpec {
+        name: i,
+        typschm: t,
+        param: p,
+    },
+}
+
+OutcomeTail: Vec<Def> = {
+    "=" "{" <ds:Defs> "}" => ds,
+}
+
+// `register_def`.
+RegDef: RegDef = {
+    "register" <i:Ident> ":" <t:Typ> <e:("=" <Exp>)?> => RegDef {
+        name: i,
+        typ: t,
+        init: e,
+    },
+    "register" EffectSet EffectSet <i:Ident> ":" <t:Typ> <e:("=" <Exp>)?> => RegDef {
+        name: i,
+        typ: t,
+        init: e,
+    },
+    "register" "configuration" <i:Ident> ":" <t:Typ> "=" <e:Exp> => RegDef {
+        name: i,
+        typ: t,
+        init: Some(e),
+    },
+}
+
+// `default_def`.
+DefaultDef: DefaultDef = {
+    "default" <k:Kind> <o:DefaultOrd> => DefaultDef { kind: k, order: o },
+}
+
+DefaultOrd: Typ = {
+    "inc" => Typ::Inc,
+    "dec" => Typ::Dec,
+}
+
+// `funcl_typ`.
+FunclTyp: Typ = {
+    ForallPart? <t:Typ> => t,
+}
+
+// `scattered_def`.
+ScatteredDef: ScatteredDef = {
+    "scattered" "enum" <i:Ident> => ScatteredDef::Enum(i),
+    "scattered" "union" <i:Ident> <p:TyParam?> => ScatteredDef::Variant(
+        i,
+        p.unwrap_or(TypQuant { kopts: vec![], constraint: None }),
+    ),
+    "scattered" "function" <i:Ident> => ScatteredDef::Function(i),
+    "scattered" "mapping" <i:Ident> <t:(":" <FunclTyp>)?> =>
+        ScatteredDef::Mapping(i, t),
+    "enum" "clause" <a:Ident> "=" <b:Ident> => ScatteredDef::EnumClause(a, b),
+    "function" "clause" <f:Funcl> => ScatteredDef::FunClause(f),
+    "union" "clause" <i:Ident> "=" <u:TypeUnion> => ScatteredDef::UnionClause(i, u),
+    "mapping" "clause" <i:Ident> "=" <m:MapCl> => ScatteredDef::MapClause(i, m),
+    "end" <i:Ident> => ScatteredDef::End(i),
+}
+
+// `subst`.
+Subst: Subst = {
+    <k:Kid> "=" <t:Typ> => Subst::Typ(k, t),
+    <a:Ident> "=" <b:Ident> => Subst::Id(a, b),
+}
+
+SubstList: Vec<Subst> = {
+    <mut v:(<Subst> ",")*> <last:Subst?> => {
+        if let Some(s) = last { v.push(s); }
+        v
+    },
+}
+
+// `overload_def` body.
+OverloadBody: Vec<String> = {
+    "{" <i:Ident> <mut is:("," <Ident>)*> "}" => {
+        let mut v = vec![i];
+        v.append(&mut is);
+        v
+    },
+    <i:Ident> <mut is:("|" <Ident>)*> => {
+        let mut v = vec![i];
+        v.append(&mut is);
+        v
+    },
+}
+
+// `loop_measure`.
+LoopMeasure: (LoopKind, Exp) = {
+    "until" <e:Exp> => (LoopKind::Until, e),
+    "repeat" <e:Exp> => (LoopKind::Until, e),
+    "while" <e:Exp> => (LoopKind::While, e),
+}
+
+// `loop_measures`.
+LoopMeasures: Vec<(LoopKind, Exp)> = {
+    <m:LoopMeasure> <mut ms:("," <LoopMeasure>)*> => {
+        let mut v = vec![m];
+        v.append(&mut ms);
+        v
+    },
+}
+
+// ---------------------------------------------------------------------------
+// top-level definitions
+// ---------------------------------------------------------------------------
+
+// `def_aux`.
+DefAux: DefAux = {
+    <f:FunDef> => DefAux::Fun(f),
+    <m:MapDef> => DefAux::Map(m),
+    "impl" <f:Funcl> => DefAux::Impl(f),
+    <a:RawFixity> => DefAux::Fixity(a.0, a.1, a.2),
+    <v:ValSpec> => DefAux::Val(v),
+    <o:OutcomeSpec> <t:OutcomeTail?> => DefAux::Outcome(o, t.unwrap_or_default()),
+    "instantiation" <i:Ident> <s:("with" <SubstList>)?> =>
+        DefAux::Instantiation(i, s.unwrap_or_default()),
+    <t:TypeDef> => DefAux::Type(t),
+    "type" <t:TypedefTail> => t,
+    "let" <p:Pat> "=" <e:Exp> => DefAux::Let(p, e),
+    <r:RegDef> => DefAux::Register(r),
+    "overload" <i:Ident> "=" <o:OverloadBody> => DefAux::Overload(i, o),
+    <d:DefaultDef> => DefAux::Default(d),
+    "mutual" "{" <fs:FunDefList> "}" => DefAux::MutRec(fs),
+    <p:RawPragma> => DefAux::Pragma(Pragma::Line(p.0, p.1)),
+    <s:RawStructPragma> <kvs:AttrKVList> "}" =>
+        DefAux::Pragma(Pragma::Structured(s, kvs)),
+    "termination_measure" <i:Ident> <p:Pat> "=" <e:Exp> =>
+        DefAux::Measure(i, p, e),
+    "termination_measure" <i:Ident> <ms:LoopMeasures> =>
+        DefAux::LoopMeasures(i, ms),
+    <s:ScatteredDef> => DefAux::Scattered(s),
+}
+
+// `def`.
+pub Def: Def = {
+    "private" <d:Def> => Def::Private(Box::new(d)),
+    <a:Attrs> <d:Def> => Def::Attr(a, Box::new(d)),
+    <c:DocComment> <d:Def> => Def::Doc(c, Box::new(d)),
+    <d:DefAux> => Def::Aux(d),
+}
+
+// `defs_list` (constraint-ordering dropped; see GRAMMAR.md).
+Defs: Vec<Def> = {
+    <ds:Def*> => ds,
+}
+
+// `file`.
+pub File: Vec<Def> = {
+    <ds:Defs> => ds,
+}

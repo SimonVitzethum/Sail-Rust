@@ -1,0 +1,13 @@
+[package]
+name = "sail-grammar"
+version = "0.1.0"
+edition = "2021"
+description = "Sail grammar ported from Menhir (.mly) to LALRPOP — skeletal AST, no semantic logic"
+license = "BSD-2-Clause"
+
+[lib]
+name = "sail_grammar"
+path = "src/lib.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
