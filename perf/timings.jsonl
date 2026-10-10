@@ -1,0 +1,3 @@
+{"phase":"fixture-parse","wall_ms":1,"peak_rss_kb":12304,"note":"host=x86_64 fixture=tiny"}
+{"phase":"fixture-hash","wall_ms":2,"peak_rss_kb":12320,"note":"host=x86_64 fixture=tiny"}
+{"phase":"fixture-sleep010","wall_ms":101,"peak_rss_kb":12452,"note":"host=x86_64 fixture=tiny"}
