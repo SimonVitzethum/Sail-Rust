@@ -7,7 +7,8 @@ description = "Shard-parallele Pipeline-Orchestrierung Parse→Check→Emit (Lan
 license.workspace = true
 
 [dependencies]
-crossbeam-channel = "0.5"
+# A4 (AUDIT.md): >= 0.5.15 schliesst CVE-2025-4574-Bereich aus (Fix seit 0.5.15).
+crossbeam-channel = "0.5.15"
 rayon = "1"
 sail-shard = { path = "../sail-shard" }
 

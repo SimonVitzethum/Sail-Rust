@@ -7,6 +7,9 @@
 #
 # Hinweis: Das Repo checkt derzeit KEIN Cargo.lock ein. `cargo deny check`
 # braucht ein Lockfile (cargo generate-lockfile genuegt, kein Build).
+# Stand Lane 113 (lesend, E3): A2–A5 per Review geschlossen (s. AUDIT.md
+# Nachtrag), A1 (Lockfile) offen — `deny-audit`-Job in ci.yml bleibt bis
+# dahin warnend (`continue-on-error: true`).
 
 [graph]
 # Alle Targets pruefen (auch Tests/Benches), alle Features aufloesen,
@@ -50,15 +53,11 @@ allow = [
 # Klaerung in `clarify` statt still akzeptiert zu werden.
 confidence-threshold = 0.8
 exceptions = []
-# BEKANNT (Stand 2026-10-10, s. AUDIT.md Aktion A2/A3): Diese Policy ist
-# das ZIEL und faellt derzeit auf Workspace-Crates zurueck:
-# - 5 Crates deklarieren BSD-2-Clause (sail-extern, sail-grammar,
-#   sail-mapping, sail-parse, sail-prelude)
-# - 6 Crates haben gar kein license-Feld (sail-archsem, sail-int,
-#   sail-lean, sail-nexp, sail-patterns, sail-regs)
-# Sobald A2/A3 umgesetzt sind (license.workspace = true ueberall),
-# laeuft `cargo deny check licenses` gruen. Bis dahin KEINE
-# BSD-Ausnahme hier eintragen — Abweichung bleibt sichtbar.
+# ERLEDIGT (Lane 70, verifiziert Lane 113 per Review, E3): Alle
+# Workspace-Crates deklarieren `MIT OR Apache-2.0` (direkt oder via
+# `license.workspace = true`); kein BSD-Rest, kein fehlendes Feld mehr.
+# Die Policy unten ist damit erfuellbar, sobald A1 (Lockfile) steht und
+# der erste echte `cargo deny check licenses` laeuft.
 
 [bans]
 multiple-versions = "warn"
