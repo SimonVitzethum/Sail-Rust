@@ -12,10 +12,33 @@
 //!   so checking without a solver always terminates.
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
 use crate::pat::MiniPat;
+
+/// Monotonic gensym counter for capture-avoiding freshening.
+///
+/// Mirrors OCaml `Type_env.fresh_kid` (`type_env.ml`: a global `counter`
+/// producing `'fv<N>#…` kids): every call yields a name no user-written
+/// binder can collide with, because `#` is not a legal Sail identifier
+/// character (OCaml uses it for the same reason in `builtin_typs`
+/// `k#<n>` kids). Predictable `{base}{i}` names are UNSOUND here — a
+/// scheme may already bind `inst0`/`f0`, and two freshenings with the
+/// same base in one scope would capture each other.
+static FRESH_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Yield a globally fresh level-variable name derived from `base`.
+///
+/// The result always contains `#fv<N>` (`N` strictly increasing), so it
+/// is distinct from every source-parsable name and from every name
+/// returned by previous calls, regardless of `base`.
+#[must_use]
+pub fn gensym(base: &str) -> String {
+    let n = FRESH_COUNTER.fetch_add(1, Ordering::SeqCst);
+    format!("{base}#fv{n}")
+}
 
 /// Numeric type-level expression (subset of Sail `nexp`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

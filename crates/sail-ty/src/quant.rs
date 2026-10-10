@@ -93,17 +93,17 @@ impl QuantScope {
         self.scopes.len()
     }
 
-    /// Instantiate all bound vars with fresh names `base{i}` (capture-avoiding
-    /// skeleton used by later monomorphisation in Lane 09).
+    /// Instantiate all bound vars with globally fresh names
+    /// ([`crate::nexp::gensym`], capture-avoiding skeleton used by later
+    /// monomorphisation in Lane 09; OCaml `Type_env.fresh_kid` gensym rather
+    /// than predictable names, which could collide with user binders).
     #[must_use]
     pub fn freshen(&self, base: &str) -> HashMap<String, String> {
         let total: usize = self.scopes.iter().map(HashMap::len).sum();
         let mut out = HashMap::with_capacity(total);
-        let mut i = 0usize;
         for scope in &self.scopes {
             for name in scope.keys() {
-                out.insert(name.clone(), format!("{base}{i}"));
-                i += 1;
+                out.insert(name.clone(), crate::nexp::gensym(base));
             }
         }
         out

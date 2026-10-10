@@ -269,6 +269,44 @@ fn caching_solver_bounded_and_thread_safe() {
 }
 
 #[test]
+fn caching_solver_promotes_hits_lru() {
+    // Recency: a cache hit promotes the entry to most-recently-used, so a
+    // hot constraint survives eviction while the cold one goes. (The old
+    // FIFO order evicted the hot entry first.)
+    let cache = CachingSolver::new(StubSolver::new(), 2);
+    let a = NConstraint::True;
+    let b = NConstraint::False;
+    let c = NConstraint::And(Box::new(NConstraint::True), Box::new(NConstraint::True));
+    assert_eq!(cache.prove(&a), ProveResult::Proved); // miss
+    assert_eq!(cache.prove(&b), ProveResult::Refuted); // miss
+    assert_eq!(cache.prove(&a), ProveResult::Proved); // hit: promotes `a`
+    assert_eq!(cache.prove(&c), ProveResult::Proved); // miss: evicts LRU (`b`)
+    // `a` survived (hot), `b` is gone (cold) — FIFO would answer the
+    // reverse here (`a` miss, `b` hit).
+    assert_eq!(cache.prove(&a), ProveResult::Proved);
+    let st: CacheStats = cache.stats();
+    assert_eq!((st.hits, st.misses), (2, 3));
+}
+
+#[test]
+fn quant_scope_freshen_is_gensym_unique() {
+    // Gensym (OCaml `Type_env.fresh_kid`): freshened names carry `#fv`,
+    // never collide with user binders, and never repeat across calls.
+    let mut scope = QuantScope::new();
+    scope.bind(QuantVar::new("n", Kind::KInt), dummy()).unwrap();
+    scope.bind(QuantVar::new("f0", Kind::KNat), dummy()).unwrap();
+    let m1 = scope.freshen("f");
+    let m2 = scope.freshen("f");
+    assert_eq!(m1.len(), 2);
+    for (orig, fresh) in &m1 {
+        assert_ne!(orig, fresh);
+        assert!(fresh.contains("#fv"), "gensym shape, got {fresh}");
+    }
+    assert_ne!(m1["n"], m1["f0"]);
+    assert_ne!(m1["n"], m2["n"]);
+}
+
+#[test]
 fn fuel_guarantees_termination_without_solver() {
     let s = StubSolver::new();
     let tiny = CheckLimits {

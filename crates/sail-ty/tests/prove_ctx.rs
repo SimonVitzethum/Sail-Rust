@@ -10,7 +10,7 @@ use sail_ty::conv::{constraint_from_ast, constraint_to_ast};
 use sail_ty::kind::{KindEnv, check_constraint_kind};
 use sail_ty::{
     BidirectionalChecker, CheckLimits, Kind, MiniExp, MiniTyp, NConstraint, Nexp, ProveResult,
-    ScatteredClauses, Solver, SolverContext, Span, StubSolver, TypeEnv, TypQuant,
+    ScatteredClauses, ScatteredKind, Solver, SolverContext, Span, StubSolver, TypeEnv, TypQuant,
     assumption_from_register, assumption_from_val, implication, kenv_of_quants, prove_in_context,
 };
 
@@ -218,7 +218,8 @@ fn prove_solver_context() {
         prove_in_context(&stub, &kenv, &ctx, &goal, dummy()),
         ProveResult::Proved
     );
-    // `val`/`register`-Annahmen kommen aus den Env-Schemes (Q-Inst-frisch).
+    // `val`/`register`-Annahmen kommen aus den Env-Schemes (Q-Inst-frisch,
+    // Gensym-Namen statt vorhersagbarer `inst0`-Namen).
     let mut env = TypeEnv::new();
     env.add_val(
         "f",
@@ -228,10 +229,19 @@ fn prove_solver_context() {
             typ: MiniTyp::Int,
         },
     );
-    assert_eq!(
-        assumption_from_val(&env, "f"),
-        Some(NConstraint::Ge(Box::new(var("inst0")), Box::new(const_(8))))
-    );
+    match assumption_from_val(&env, "f") {
+        Some(NConstraint::Ge(lo, hi)) => {
+            assert_eq!(*hi, const_(8));
+            match *lo {
+                Nexp::Var(v) => {
+                    assert_ne!(v, "n");
+                    assert!(v.contains("#fv"), "gensym shape, got {v}");
+                }
+                _ => panic!("obligation must mention the fresh var"),
+            }
+        }
+        _ => panic!("expected Ge obligation"),
+    }
     assert_eq!(assumption_from_val(&env, "missing"), None);
     env.add_register("r", TypQuant::monomorphic(MiniTyp::Int));
     assert_eq!(assumption_from_register(&env, "r"), Some(NConstraint::True));
@@ -257,7 +267,7 @@ fn prove_solver_context() {
         "Stub bleibt sound Unknown"
     );
     // `check_val_def_in_context`: leere Annahmen wie bisher (Mono ok,
-    // Poly abstrakt, refuted ein Fehler) …
+    // Poly unter skolemischem Scheme geprueft, refuted ein Fehler) …
     let c = checker(&stub);
     let env = TypeEnv::new();
     let mono = TypQuant::monomorphic(MiniTyp::Int);
@@ -296,18 +306,24 @@ fn scattered_clauses() {
         constraint: NConstraint::Ge(Box::new(var("n")), Box::new(const_(0))),
         typ: MiniTyp::Bits(Box::new(var("n"))),
     };
-    // Zwei offene Klauseln: beide ok, Namen `<name>#<i>`.
-    let sums = c.check_scattered("step", &[open(), open()], dummy()).unwrap();
+    // Zwei offene Klauseln: beide ok, Namen `<kind> <name>#<i>` (namespaced,
+    // damit `end` gleichnamige Klauseln verschiedener Namespaces nicht
+    // verwechselt).
+    let sums = c.check_scattered(ScatteredKind::Function, "step", &[open(), open()], dummy()).unwrap();
     assert_eq!(sums.len(), 2);
-    assert_eq!(sums[0].name, "step#0");
-    assert_eq!(sums[1].name, "step#1");
+    assert_eq!(sums[0].name, "function step#0");
+    assert_eq!(sums[1].name, "function step#1");
+    // Gleicher Name, anderer Namespace: disjunkte Summary-Namen.
+    let msums = c.check_scattered(ScatteredKind::Mapping, "step", &[open()], dummy()).unwrap();
+    assert_eq!(msums[0].name, "mapping step#0");
+    assert_ne!(sums[0].name, msums[0].name);
     // Leere Klauselliste ist ok (keine Summaries).
-    assert!(c.check_scattered("empty", &[], dummy()).unwrap().is_empty());
+    assert!(c.check_scattered(ScatteredKind::Function, "empty", &[], dummy()).unwrap().is_empty());
     // `False`-Klausel ist ein harter Fehler (widerlegt, auch im Kontext).
-    assert!(c.check_scattered("bad", &[open(), TypQuant::monomorphic(MiniTyp::Int)], dummy()).is_ok());
+    assert!(c.check_scattered(ScatteredKind::Function, "bad", &[open(), TypQuant::monomorphic(MiniTyp::Int)], dummy()).is_ok());
     let mut bad_second = open();
     bad_second.constraint = NConstraint::False;
-    assert!(c.check_scattered("bad", &[open(), bad_second], dummy()).is_err());
+    assert!(c.check_scattered(ScatteredKind::Function, "bad", &[open(), bad_second], dummy()).is_err());
     // `ScatteredClauses`: Konjunktion in Elaborationsreihenfolge.
     let mut sc = ScatteredClauses::new("step");
     assert_eq!(sc.conjoin(), None);

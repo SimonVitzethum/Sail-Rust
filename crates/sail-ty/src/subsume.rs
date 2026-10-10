@@ -112,10 +112,16 @@ impl NexpSubst {
                 func.clone(),
                 args.iter().map(|a| self.apply_nexp(a)).collect(),
             ),
-            // Boolean level variable: fold constant mappings to truth
-            // values (mirrors `NConstraint::subst_cow`); anything else
-            // leaves the variable untouched.
+            // Boolean level variable: renaming flows through `Var`-to-`Var`
+            // mappings (OCaml `typquant_subst_kid`: freshening a `K_bool`
+            // binder must rename its `NC_var` occurrences, otherwise the
+            // freshened scheme mentions a stale, unbound name); constant
+            // mappings fold to truth values (mirrors
+            // `NConstraint::subst_cow`); anything else leaves the variable
+            // untouched (an ill-kinded non-var mapping is rejected by the
+            // kind check, never silently applied).
             NConstraint::Var(v) => match self.map.get(v) {
+                Some(Nexp::Var(w)) => NConstraint::Var(w.clone()),
                 Some(Nexp::Const(0)) => NConstraint::False,
                 Some(Nexp::Const(_)) => NConstraint::True,
                 _ => c.clone(),
@@ -148,17 +154,21 @@ impl NexpSubst {
     }
 }
 
-/// Freshen all bound variables of `scheme` to `{base}{i}` (rule `Q-Freshen`).
+/// Freshen all bound variables of `scheme` (rule `Q-Freshen`).
 ///
 /// Capture-avoiding skeleton for later monomorphisation (Lane 09): since
 /// [`MiniTyp`] carries no level binders, a global rename of the telescope
-/// is sufficient — no shadowing can occur inside constraint/body.
+/// is sufficient — no shadowing can occur inside constraint/body. Names
+/// come from [`crate::nexp::gensym`] (OCaml `Type_env.fresh_kid`): the old
+/// predictable `{base}{i}` names could collide with user binders (a scheme
+/// may already bind `f0`) and two freshenings with the same base captured
+/// each other.
 #[must_use]
 pub fn freshen_scheme(scheme: &TypQuant, base: &str) -> TypQuant {
     let mut subst = NexpSubst::new();
     let mut quants = Vec::with_capacity(scheme.quants.len());
     for (i, (v, k)) in scheme.quants.iter().enumerate() {
-        let fresh = format!("{base}{i}");
+        let fresh = crate::nexp::gensym(&format!("{base}{i}"));
         subst.bind(v.clone(), Nexp::Var(fresh.clone()));
         quants.push((fresh, *k));
     }
@@ -405,5 +415,50 @@ pub fn check_subtype<S: Solver>(
                 Err(TypeError::constraint_not_proved(span, &nc))
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bool_var_substitution_renames_through_freshening() {
+        // `NC_var` renaming (OCaml `typquant_subst_kid`): freshening a
+        // `K_bool`-quantified scheme must rename its `Var` occurrences —
+        // the old fold-only substitution left the stale name behind,
+        // producing obligations over unbound variables.
+        let scheme = TypQuant {
+            quants: vec![("b".to_string(), crate::kind::Kind::KBool)],
+            constraint: NConstraint::Var("b".to_string()),
+            typ: MiniTyp::Bool,
+        };
+        let fresh = freshen_scheme(&scheme, "sk");
+        assert_eq!(fresh.quants.len(), 1);
+        assert_eq!(fresh.quants[0].1, crate::kind::Kind::KBool);
+        assert_ne!(fresh.quants[0].0, "b");
+        assert_eq!(
+            fresh.constraint,
+            NConstraint::Var(fresh.quants[0].0.clone())
+        );
+    }
+
+    #[test]
+    fn gensym_freshening_never_collides_or_repeats() {
+        // Predictable `{base}{i}` names captured user binders (`f0`) and
+        // collided across freshenings; gensym names carry `#fv` (illegal in
+        // Sail source, like OCaml `'fv<N>#` kids) and never repeat.
+        let scheme = TypQuant {
+            quants: vec![("n".to_string(), crate::kind::Kind::KInt)],
+            constraint: NConstraint::True,
+            typ: MiniTyp::Bits(Box::new(Nexp::Var("n".to_string()))),
+        };
+        let a = freshen_scheme(&scheme, "f");
+        let b = freshen_scheme(&scheme, "f");
+        for name in [&a.quants[0].0, &b.quants[0].0] {
+            assert!(name.contains("#fv"), "gensym shape, got {name}");
+            assert_ne!(name, "n");
+        }
+        assert_ne!(a.quants[0].0, b.quants[0].0);
     }
 }
