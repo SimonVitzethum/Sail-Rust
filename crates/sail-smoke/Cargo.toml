@@ -1,0 +1,13 @@
+[package]
+name = "sail-smoke"
+version = "0.1.0"
+edition = "2021"
+description = "Smoke parity fixtures Lean-vs-C (lane 39): 10 decode/execute cases, fixture table plus log-snippet comparison; no C-backend rewrite"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_smoke"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
