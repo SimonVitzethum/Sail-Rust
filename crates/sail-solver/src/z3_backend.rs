@@ -22,14 +22,15 @@
 //!   `div`/`mod` (Sail trunkiert wie Rust, Z3-`div`/`rem` weichen bei
 //!   negativen Operanden ab), nicht-konstante `2^x` (Z3-`power` liefert
 //!   `Real`, kein `Int`), unbekannte `Nexp_app`s, `Nexp_id`,
-//!   `NC_app`-Praedikate, boolesche `NC_id`/`NC_var`.
+//!   `NC_app`-Praedikate ueber `typ_arg`-Sorten (`A_nexp`/`A_typ`/`A_bool`,
+//!   Lane 108), boolesche `NC_id`/`NC_var`.
 //! - `2 ^ c` mit konstantem `c` in `[0, 127)` wird exakt gefaltet
 //!   (gleiche Domaene wie [`sail_nexp::NExp::eval`]).
 
 use z3::ast::{Ast, Bool, Int};
 use z3::{Params, SatResult, Solver as Z3SolverInner};
 
-use sail_nexp::{NConstraint, NExp};
+use sail_nexp::{NConstraint, NExp, TypArg};
 
 use crate::query::{Constraint, SolverQuery};
 use crate::solver::{Solver, SolverVerdict};
@@ -88,8 +89,8 @@ pub fn nconstraint_to_bool(c: &NConstraint) -> Bool {
         // Boolesche Atome als uninterpretierte Konstanten (beweisgesund:
         // freie Variablen koennen `Valid` nicht erschleichen).
         NConstraint::Id(name) | NConstraint::Var(name) => Bool::new_const(name.as_str()),
-        NConstraint::Equal(a, b) => Ast::eq(&nexp_to_int(a), nexp_to_int(b)),
-        NConstraint::NotEqual(a, b) => Ast::eq(&nexp_to_int(a), nexp_to_int(b)).not(),
+        NConstraint::Equal(a, b) => typarg_eq_bool(a, b),
+        NConstraint::NotEqual(a, b) => typarg_eq_bool(a, b).not(),
         NConstraint::Ge(a, b) => nexp_to_int(a).ge(nexp_to_int(b)),
         NConstraint::Gt(a, b) => nexp_to_int(a).gt(nexp_to_int(b)),
         NConstraint::Le(a, b) => nexp_to_int(a).le(nexp_to_int(b)),
@@ -115,6 +116,25 @@ pub fn nconstraint_to_bool(c: &NConstraint) -> Bool {
         NConstraint::And(a, b) => Bool::and(&[nconstraint_to_bool(a), nconstraint_to_bool(b)]),
         NConstraint::Or(a, b) => Bool::or(&[nconstraint_to_bool(a), nconstraint_to_bool(b)]),
         NConstraint::Not(x) => nconstraint_to_bool(x).not(),
+    }
+}
+
+/// Bildet eine `NC_equal`-Gleichung ueber `typ_arg`-Sorten auf Z3 ab
+/// (Lane 108): `(NExp, NExp)` exakt wie bisher, `(Bool, Bool)` exakt
+/// (`iff`), gleiche Typen exakt `true`, gemischte Sorten exakt `false`
+/// (verschiedene `typ_arg`-Konstruktoren sind nie gleich); verschiedene
+/// Typen konservativ frisch (beweisgesund, siehe Modul-Doku).
+fn typarg_eq_bool(a: &TypArg, b: &TypArg) -> Bool {
+    match (a, b) {
+        (TypArg::NExp(x), TypArg::NExp(y)) => Ast::eq(&nexp_to_int(x), &nexp_to_int(y)),
+        (TypArg::Bool(x), TypArg::Bool(y)) => {
+            Ast::eq(&nconstraint_to_bool(x), &nconstraint_to_bool(y))
+        }
+        (TypArg::Typ(x), TypArg::Typ(y)) if x == y => Bool::from_bool(true),
+        (TypArg::Typ(_, _), TypArg::Typ(_, _)) => {
+            Bool::fresh_const("sail_nconstraint_typarg_eq")
+        }
+        _ => Bool::from_bool(false),
     }
 }
 

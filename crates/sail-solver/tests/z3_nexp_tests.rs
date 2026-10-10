@@ -4,7 +4,7 @@
 //! beweisen `Valid`/`Invalid`, konservative fallen auf `Unknown` zurueck.
 //! Laeuft nur mit `--features z3` (C-Dep).
 
-use sail_nexp::{NConstraint, NExp};
+use sail_nexp::{NConstraint, NExp, TypArg};
 use sail_solver::{Constraint, Solver, SolverQuery, SolverVerdict, Z3Solver};
 
 fn v(n: &str) -> NExp {
@@ -14,7 +14,7 @@ fn c(i: i128) -> NExp {
     NExp::Constant(i)
 }
 fn eq(a: NExp, b: NExp) -> NConstraint {
-    NConstraint::Equal(Box::new(a), Box::new(b))
+    NConstraint::Equal(Box::new(TypArg::NExp(a)), Box::new(TypArg::NExp(b)))
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn z3_is_conservative_where_inexact() {
     let uf = eq(NExp::App("uf".to_string(), vec![v("n")]), c(0));
     assert_eq!(s.prove_nconstraint(&uf), SolverVerdict::Unknown);
     assert_eq!(
-        s.prove_nconstraint(&NConstraint::App("ok".to_string(), vec![v("n")])),
+        s.prove_nconstraint(&NConstraint::App("ok".to_string(), vec![TypArg::NExp(v("n"))])),
         SolverVerdict::Unknown
     );
     assert_eq!(

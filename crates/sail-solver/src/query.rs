@@ -9,7 +9,7 @@
 
 use std::fmt;
 
-use sail_nexp::{NConstraint as NC, NExp as NE};
+use sail_nexp::{NConstraint as NC, NExp as NE, NTyp as NT, TypArg as NA};
 
 /// Einzelne Constraint-Formel (strukturiert, hashbar).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -50,10 +50,10 @@ impl Constraint {
             NC::Id(name) => Constraint::atom(format!("(bid {name})")),
             NC::Var(kid) => Constraint::atom(format!("(bvar {})", kid.0)),
             NC::Equal(a, b) => {
-                Constraint::atom(format!("(= {} {})", nexp_key(a), nexp_key(b)))
+                Constraint::atom(format!("(= {} {})", typarg_key(a), typarg_key(b)))
             }
             NC::NotEqual(a, b) => {
-                Constraint::atom(format!("(!= {} {})", nexp_key(a), nexp_key(b)))
+                Constraint::atom(format!("(!= {} {})", typarg_key(a), typarg_key(b)))
             }
             NC::Ge(a, b) => {
                 Constraint::atom(format!("(>= {} {})", nexp_key(a), nexp_key(b)))
@@ -75,7 +75,7 @@ impl Constraint {
                 Constraint::atom(format!("(in {} {})", nexp_key(n), elems.join(" ")))
             }
             NC::App(f, args) => {
-                let argv: Vec<String> = args.iter().map(nexp_key).collect();
+                let argv: Vec<String> = args.iter().map(typarg_key).collect();
                 Constraint::atom(format!("(pred {f} {})", argv.join(" ")))
             }
             NC::And(a, b) => Constraint::And(vec![
@@ -122,6 +122,56 @@ impl Constraint {
 impl fmt::Display for Constraint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.cache_key())
+    }
+}
+
+/// Kanonischer S-Expr-Schluessel eines [`TypArg`](sail_nexp::TypArg)
+/// (Lane 108 `typ_arg`-Sorten): `NExp`-Args ueber [`nexp_key`] (der
+/// vorab normalisiert), `Bool`-Args strukturell, `Typ`-Args ueber
+/// [`ntyp_key`]. Alle drei Wege sind idempotent
+/// normalisierend, sodass gleiche Formeln gleiche Keys haben.
+fn typarg_key(a: &NA) -> String {
+    match a {
+        NA::NExp(e) => nexp_key(e),
+        NA::Bool(c) => Constraint::from_nconstraint(c).cache_key(),
+        NA::Typ(t) => ntyp_key(t),
+    }
+}
+
+/// Kanonischer S-Expr-Schluessel eines [`NTyp`](sail_nexp::NTyp):
+/// strukturell, mit [`typarg_key`] fuer Argumente und
+/// [`Constraint::from_nconstraint`] fuer `Exist`-Bedingungen (beide
+/// idempotent normalisierend).
+fn ntyp_key(t: &NT) -> String {
+    match t {
+        NT::Unknown => "(typ-unknown)".to_owned(),
+        NT::Id(name) => format!("(typ-id {name})"),
+        NT::Var(kid) => format!("(typ-var {})", kid.0),
+        NT::Fn(args, ret) => {
+            let argv: Vec<String> = args.iter().map(ntyp_key).collect();
+            format!("(typ-fn ({}) {})", argv.join(" "), ntyp_key(ret))
+        }
+        NT::Bidir(a, b) => format!("(typ-bidir {} {})", ntyp_key(a), ntyp_key(b)),
+        NT::Tuple(ts) => {
+            let elems: Vec<String> = ts.iter().map(ntyp_key).collect();
+            format!("(typ-tuple {})", elems.join(" "))
+        }
+        NT::App(f, args) => {
+            let argv: Vec<String> = args.iter().map(typarg_key).collect();
+            format!("(typ-app {f} {})", argv.join(" "))
+        }
+        NT::Exist(binders, c, ty) => {
+            let bkeys: Vec<String> = binders
+                .iter()
+                .map(|b| format!("({:?} {})", b.kind, b.kid.0))
+                .collect();
+            format!(
+                "(typ-exist ({}) {} {})",
+                bkeys.join(" "),
+                Constraint::from_nconstraint(c).cache_key(),
+                ntyp_key(ty)
+            )
+        }
     }
 }
 
