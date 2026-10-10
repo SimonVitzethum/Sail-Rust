@@ -1,0 +1,10 @@
+[package]
+name = "sail-prelude"
+version = "0.1.0"
+edition = "2021"
+description = "Embedded Sail prelude (sail/lib/*.sail) for the pure-Rust Sail compiler"
+license = "BSD-2-Clause"
+
+[lib]
+name = "sail_prelude"
+path = "src/lib.rs"
