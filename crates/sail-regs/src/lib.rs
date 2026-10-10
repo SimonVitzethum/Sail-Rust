@@ -290,10 +290,21 @@ impl RegisterInfo {
     }
 
     /// `inhabit_enum_v2` equivalent (current concurrency interface).
+    ///
+    /// One instance per distinct Lean type, keeping the first constructor
+    /// (`pretty_print_lean.ml`: `add_reg_typ` folds registers into a
+    /// `typ_map` keyed by type, so registers sharing a type — e.g. `PC`
+    /// and `SP`, both `(BitVec 64)` — yield a single instance; same rule
+    /// as `sail-lake::render_register_inhabited`).
     #[must_use]
     pub fn inhabited_instances(&self) -> String {
         let mut s = String::new();
+        let mut seen: Vec<&str> = Vec::new();
         for r in &self.registers {
+            if seen.contains(&r.lean_typ.as_str()) {
+                continue;
+            }
+            seen.push(r.lean_typ.as_str());
             let _ = writeln!(
                 s,
                 "instance : Inhabited (RegisterRef {}) where\n  default := .Reg {}",
@@ -305,6 +316,12 @@ impl RegisterInfo {
     }
 
     /// `doc_reg_info` equivalent: enum + type abbrev (+ trailing blank).
+    ///
+    /// Exactly `register_enums` + `type_enum`
+    /// (`pretty_print_lean.ml:1499-1501`); the `Inhabited` instances are
+    /// **not** part of `doc_reg_info` — the reference backend emits them
+    /// from `doc_instantiations` (`inhabit_enum_v1/v2`). Use
+    /// [`Self::doc_instantiations`] for that fragment.
     /// Empty register files print the `PEmpty` fallback instead.
     #[must_use]
     pub fn doc_reg_info(&self) -> String {
@@ -312,12 +329,19 @@ impl RegisterInfo {
             return "abbrev Register := PEmpty\nabbrev RegisterType : Register -> Type := PEmpty.elim\n\n"
                 .to_owned();
         }
-        format!(
-            "{}\n{}\n{}\n",
-            self.register_enum(),
-            self.register_type_abbrev(),
-            self.inhabited_instances()
-        )
+        format!("{}\n{}\n", self.register_enum(), self.register_type_abbrev(),)
+    }
+
+    /// `doc_instantiations` fragment owned by the register model: the
+    /// deduped `Inhabited (RegisterRef …)` instances (`inhabit_enum_v2`).
+    ///
+    /// The `Arch` instance and the `SailM`/`SailME` monad abbrevs of
+    /// `doc_instantiations_v1/v2` live in `sail-lake` (golden contract);
+    /// this is only the per-type inhabited block. Empty for register-free
+    /// models.
+    #[must_use]
+    pub fn doc_instantiations(&self) -> String {
+        self.inhabited_instances()
     }
 
     /// Lean type of a register value reference: `(RegisterRef T)`
@@ -327,20 +351,51 @@ impl RegisterInfo {
         format!("(RegisterRef {inner_lean_typ})")
     }
 
-    /// `E_id` register case: `readReg <Ctor>` (pretty_print_lean.ml:859).
-    /// Returns `None` for non-registers so callers can fall back to
-    /// plain variable printing.
+    /// `E_id` register case in monadic position: `readReg <Ctor>`
+    /// (`pretty_print_lean.ml:859`). Returns `None` for non-registers so
+    /// callers can fall back to plain variable printing. For pure
+    /// (`as_monadic == false`) positions use [`Self::read_reg_in`], which
+    /// applies the `←` arrow the reference backend wraps around the read.
     #[must_use]
     pub fn read_reg(&self, name: &str) -> Option<String> {
-        self.lookup(name).map(|r| format!("readReg {}", r.ctor()))
+        self.read_reg_in(name, true)
     }
 
-    /// `E_assign` register case: `writeReg <Ctor> <val>`
-    /// (pretty_print_lean.ml:1046). Returns `None` for non-registers.
+    /// `E_id` register case with arrow discipline (`pretty_print_lean.ml:859`
+    /// via `wrap_with_left_arrow (not as_monadic)`): monadic positions
+    /// print `readReg <Ctor>`, pure positions `(← readReg <Ctor>)`.
+    #[must_use]
+    pub fn read_reg_in(&self, name: &str, as_monadic: bool) -> Option<String> {
+        self.lookup(name).map(|r| {
+            if as_monadic {
+                format!("readReg {}", r.ctor())
+            } else {
+                format!("(← readReg {})", r.ctor())
+            }
+        })
+    }
+
+    /// `E_assign` register case in monadic position: `writeReg <Ctor> <val>`
+    /// (`pretty_print_lean.ml:1046`). Returns `None` for non-registers.
+    /// For pure positions use [`Self::write_reg_in`].
     #[must_use]
     pub fn write_reg(&self, name: &str, val_lean: &str) -> Option<String> {
-        self.lookup(name)
-            .map(|r| format!("writeReg {} {val_lean}", r.ctor()))
+        self.write_reg_in(name, val_lean, true)
+    }
+
+    /// `E_assign` register case with arrow discipline
+    /// (`pretty_print_lean.ml:1044-1046` via
+    /// `wrap_with_left_arrow (not as_monadic)`): monadic positions print
+    /// `writeReg <Ctor> <val>`, pure positions `(← writeReg <Ctor> <val>)`.
+    #[must_use]
+    pub fn write_reg_in(&self, name: &str, val_lean: &str, as_monadic: bool) -> Option<String> {
+        self.lookup(name).map(|r| {
+            if as_monadic {
+                format!("writeReg {} {val_lean}", r.ctor())
+            } else {
+                format!("(← writeReg {} {val_lean})", r.ctor())
+            }
+        })
     }
 
     /// `E_assign` through a dynamic ref: `writeRegRef <ref> <val>`
@@ -509,7 +564,10 @@ register PSTATE : bits(32) = 0b00000000000000000000000000000000\n";
     }
 
     #[test]
-    fn doc_reg_info_snippet_stable() {
+    fn doc_reg_info_holds_enum_and_abbrev_only() {
+        // `doc_reg_info` is exactly `register_enums` + `type_enum`
+        // (pretty_print_lean.ml:1499-1501): no `Inhabited` instances here,
+        // those come from `doc_instantiations`.
         let out = small_info().doc_reg_info();
         assert!(out.contains("inductive Register : Type where"), "{out}");
         assert!(out.contains("  | PC\n"), "{out}");
@@ -520,10 +578,29 @@ register PSTATE : bits(32) = 0b00000000000000000000000000000000\n";
         assert!(out.contains("  | .PC => (BitVec 64)"), "{out}");
         assert!(out.contains("  | .PSTATE => (BitVec 32)"), "{out}");
         assert!(
+            !out.contains("Inhabited"),
+            "inhabited instances belong to doc_instantiations, not doc_reg_info:\n{out}"
+        );
+    }
+
+    #[test]
+    fn doc_instantiations_dedups_inhabited_per_type() {
+        // PC and SP share `(BitVec 64)`: a single instance, first
+        // constructor wins (matches sail-lake golden `register-v2.txt`).
+        let out = small_info().doc_instantiations();
+        assert!(
             out.contains("instance : Inhabited (RegisterRef (BitVec 64)) where"),
             "{out}"
         );
         assert!(out.contains("default := .Reg PC"), "{out}");
+        assert!(!out.contains(".Reg SP"), "{out}");
+        assert_eq!(out.matches("Inhabited (RegisterRef (BitVec 64))").count(), 1);
+        assert!(
+            out.contains("instance : Inhabited (RegisterRef (BitVec 32)) where"),
+            "{out}"
+        );
+        assert!(out.contains("default := .Reg PSTATE"), "{out}");
+        assert_eq!(RegisterInfo::empty().doc_instantiations(), "");
     }
 
     #[test]
@@ -544,6 +621,26 @@ register PSTATE : bits(32) = 0b00000000000000000000000000000000\n";
         );
         assert_eq!(info.read_reg("R0"), None);
         assert_eq!(info.write_reg("R0", "v"), None);
+        // Arrow discipline (wrap_with_left_arrow (not as_monadic)):
+        // monadic positions stay bare, pure positions gain `(← …)`.
+        assert_eq!(
+            info.read_reg_in("PC", true).as_deref(),
+            Some("readReg PC")
+        );
+        assert_eq!(
+            info.read_reg_in("PC", false).as_deref(),
+            Some("(← readReg PC)")
+        );
+        assert_eq!(
+            info.write_reg_in("SP", "v", true).as_deref(),
+            Some("writeReg SP v")
+        );
+        assert_eq!(
+            info.write_reg_in("SP", "v", false).as_deref(),
+            Some("(← writeReg SP v)")
+        );
+        assert_eq!(info.read_reg_in("R0", false), None);
+        assert_eq!(info.write_reg_in("R0", "v", false), None);
         assert_eq!(
             RegisterInfo::write_reg_ref("r", "v"),
             "writeRegRef r v"

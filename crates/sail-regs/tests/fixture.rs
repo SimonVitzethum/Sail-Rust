@@ -26,10 +26,28 @@ fn fixture_lean_snippet_stable() {
         "  | .PC => (BitVec 64)",
         "  | .SP => (BitVec 64)",
         "  | .PSTATE => (BitVec 32)",
-        "instance : Inhabited (RegisterRef (BitVec 32)) where",
     ] {
         assert!(out.contains(line), "missing {line:?} in:\n{out}");
     }
+    assert!(
+        !out.contains("Inhabited"),
+        "inhabited instances belong to doc_instantiations:\n{out}"
+    );
+    let inst = info.doc_instantiations();
+    for line in [
+        "instance : Inhabited (RegisterRef (BitVec 64)) where",
+        "default := .Reg PC",
+        "instance : Inhabited (RegisterRef (BitVec 32)) where",
+        "default := .Reg PSTATE",
+    ] {
+        assert!(inst.contains(line), "missing {line:?} in:\n{inst}");
+    }
+    // Dedup: PC and SP share `(BitVec 64)` — exactly one instance.
+    assert_eq!(
+        inst.matches("Inhabited (RegisterRef (BitVec 64))").count(),
+        1,
+        "duplicate inhabited instance:\n{inst}"
+    );
     let flat = info.regstate(false);
     assert!(flat.contains("  PSTATE : (BitVec 32)"), "{flat}");
     let grouped = info.regstate(true);
