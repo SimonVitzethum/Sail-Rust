@@ -1,0 +1,5 @@
+# Build-Artefakte (Lane-31-Regel: target/ und Cargo.lock nie committen).
+/target/
+crates/*/target/
+Cargo.lock
+**/*.rs.bk

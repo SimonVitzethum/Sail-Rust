@@ -1,3 +1,3 @@
 [workspace]
-members = []
+members = ["crates/sail-sysregs-shard"]
 resolver = "2"
