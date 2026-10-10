@@ -264,45 +264,66 @@ fn unique_dir(base: &Path, stem: &str) -> PathBuf {
     base.join(format!("{stem}-{nanos}-{}", std::process::id()))
 }
 
-/// Collect oracle Lean output: all `*.lean` under `<case_out>/out`, sorted,
-/// concatenated with file-name banners. Returns an error description when
-/// nothing was produced.
-pub fn collect_oracle_lean(case_out_dir: &Path) -> Result<String, String> {
+/// Collect oracle Lean output in exactly the upstream self-check shape
+/// (`test/suites/lean.py`): `Out/Defs.lean`, then a blank line,
+/// `XXXXXXXXX`, another blank line, then `Out.lean`:
+///
+/// ```text
+/// cat <out>/out/Out/Defs.lean > output
+/// echo >> output; echo "XXXXXXXXX" >> output; echo >> output
+/// cat <out>/out/Out.lean >> output
+/// diff output <basename>.expected.lean
+/// ```
+///
+/// Lake scaffolding (`lakefile.toml`, …) is ignored, same as upstream.
+/// Returns an error description when the two files are not both present.
+pub fn collect_oracle_output(case_out_dir: &Path) -> Result<String, String> {
     let lean_root = case_out_dir.join("out");
-    let mut files: Vec<PathBuf> = Vec::new();
-    let mut stack = vec![lean_root.clone()];
-    while let Some(dir) = stack.pop() {
-        let entries =
-            std::fs::read_dir(&dir).map_err(|e| format!("cannot list {}: {e}", dir.display()))?;
-        for entry in entries.flatten() {
-            let p = entry.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if p.extension().is_some_and(|e| e == "lean") {
-                files.push(p);
-            }
+    let defs_path = lean_root.join("Out").join("Defs.lean");
+    let top_path = lean_root.join("Out.lean");
+    let mut missing = Vec::new();
+    if !defs_path.is_file() {
+        missing.push(defs_path.display().to_string());
+    }
+    if !top_path.is_file() {
+        missing.push(top_path.display().to_string());
+    }
+    if !missing.is_empty() {
+        return Err(format!("oracle output missing: {}", missing.join(", ")));
+    }
+    let read = |p: &Path| {
+        std::fs::read_to_string(p).map_err(|e| format!("cannot read {}: {e}", p.display()))
+    };
+    let defs = read(&defs_path)?;
+    let top = read(&top_path)?;
+    Ok(format!("{defs}\nXXXXXXXXX\n\n{top}"))
+}
+
+/// Stage one case's inputs into `scratch` and return the **bare** input file
+/// name to pass to the oracle.
+///
+/// The oracle embeds the input path as given on the command line into the
+/// generated Lean (`assert false "Pattern match failure at <path>:…"`), and
+/// loads sibling `<stem>.json` configs from the working directory — both
+/// exactly like upstream `test/suites/lean.py`, which runs with
+/// `cwd=testdir` and a bare filename. So we copy `<stem>.sail` (plus
+/// `<stem>.json` when present) into `scratch` and invoke the oracle with
+/// just the file name.
+pub fn stage_input(sail_file: &Path, scratch: &Path) -> io::Result<String> {
+    let file_name = sail_file
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?;
+    std::fs::copy(sail_file, scratch.join(&file_name))?;
+    let stem = file_name.strip_suffix(".sail").unwrap_or(&file_name);
+    let json_name = format!("{stem}.json");
+    if let Some(parent) = sail_file.parent() {
+        let sibling = parent.join(&json_name);
+        if sibling.is_file() {
+            std::fs::copy(&sibling, scratch.join(&json_name))?;
         }
     }
-    if files.is_empty() {
-        return Err(format!(
-            "oracle produced no .lean files under {}",
-            lean_root.display()
-        ));
-    }
-    files.sort();
-    let mut out = String::new();
-    for f in &files {
-        let rel = f.strip_prefix(&lean_root).unwrap_or(f);
-        out.push_str(&format!("--- file: {} ---\n", rel.display()));
-        match std::fs::read_to_string(f) {
-            Ok(c) => out.push_str(&c),
-            Err(e) => out.push_str(&format!("<unreadable: {e}>\n")),
-        }
-        if !out.ends_with('\n') {
-            out.push('\n');
-        }
-    }
-    Ok(out)
+    Ok(file_name)
 }
 
 /// Run the oracle for one `.sail` file and diff against the checked-in
@@ -355,7 +376,17 @@ pub fn run_oracle_case(cfg: &OracleConfig, sail_file: &Path) -> (Option<String>,
             format!("cannot create scratch {}: {e}", case_out.display()),
         );
     }
-    let (prog, args) = build_oracle_command(cfg, sail_file, &case_out);
+    // Bare filename + cwd=scratch: keeps generated paths (`….sail:line`)
+    // identical to upstream and finds sibling `<stem>.json` configs.
+    let staged = match stage_input(sail_file, &scratch) {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&scratch);
+            return fail(CaseStatus::HarnessError, format!("cannot stage input: {e}"));
+        }
+    };
+    // Relative output dir: nothing absolute leaks into oracle output.
+    let (prog, args) = build_oracle_command(cfg, Path::new(&staged), Path::new("case-out"));
     let output = match Command::new(&prog)
         .args(&args)
         .current_dir(&scratch)
@@ -384,7 +415,7 @@ pub fn run_oracle_case(cfg: &OracleConfig, sail_file: &Path) -> (Option<String>,
         );
     }
     // status == Pass so far => collect + normalize + self-check vs expected.
-    let raw = match collect_oracle_lean(&case_out) {
+    let raw = match collect_oracle_output(&case_out) {
         Ok(r) => r,
         Err(e) => {
             detail = format!(
@@ -403,10 +434,7 @@ pub fn run_oracle_case(cfg: &OracleConfig, sail_file: &Path) -> (Option<String>,
             );
         }
     };
-    let redactions = [
-        scratch.to_string_lossy().into_owned(),
-        case_out.to_string_lossy().into_owned(),
-    ];
+    let redactions = [scratch.to_string_lossy().into_owned()];
     let red_refs: Vec<&str> = redactions.iter().map(|s| s.as_str()).collect();
     let normalized = crate::normalize::normalize_with(&raw, &red_refs);
     let _ = std::fs::remove_dir_all(&scratch);
@@ -546,6 +574,80 @@ mod tests {
         std::fs::write(base.join("note.txt"), "x").unwrap();
         let got = discover_tests(&base).unwrap();
         assert_eq!(got, vec![base.join("a.sail"), base.join("b.sail")]);
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn collect_joins_defs_and_top_upstream_style() {
+        let base = std::env::temp_dir().join(format!(
+            "sail-oracle-collect-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let out_dir = base.join("case-out");
+        std::fs::create_dir_all(out_dir.join("out").join("Out")).unwrap();
+        std::fs::write(out_dir.join("out").join("Out").join("Defs.lean"), "defs\n").unwrap();
+        std::fs::write(out_dir.join("out").join("Out.lean"), "top\n").unwrap();
+        // Lake scaffolding must be ignored, not break collection.
+        std::fs::write(out_dir.join("out").join("lakefile.toml"), "x").unwrap();
+        let got = collect_oracle_output(&out_dir).unwrap();
+        assert_eq!(got, "defs\n\nXXXXXXXXX\n\ntop\n");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn collect_reports_missing_files() {
+        let base = std::env::temp_dir().join(format!(
+            "sail-oracle-missing-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(base.join("case-out")).unwrap();
+        let err = collect_oracle_output(&base.join("case-out")).unwrap_err();
+        assert!(err.contains("Defs.lean"), "err: {err}");
+        assert!(err.contains("Out.lean"), "err: {err}");
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn stage_copies_sail_and_sibling_json() {
+        let base = std::env::temp_dir().join(format!(
+            "sail-oracle-stage-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let src = base.join("src");
+        let scratch = base.join("scratch");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(src.join("g.sail"), "sail").unwrap();
+        std::fs::write(src.join("g.json"), "{}").unwrap();
+        let bare = stage_input(&src.join("g.sail"), &scratch).unwrap();
+        assert_eq!(bare, "g.sail");
+        assert_eq!(
+            std::fs::read_to_string(scratch.join("g.sail")).unwrap(),
+            "sail"
+        );
+        assert_eq!(
+            std::fs::read_to_string(scratch.join("g.json")).unwrap(),
+            "{}"
+        );
+        // Without a sibling json, staging still succeeds.
+        std::fs::write(src.join("plain.sail"), "p").unwrap();
+        assert_eq!(
+            stage_input(&src.join("plain.sail"), &scratch).unwrap(),
+            "plain.sail"
+        );
+        assert!(!scratch.join("plain.json").exists());
         std::fs::remove_dir_all(&base).unwrap();
     }
 
