@@ -332,6 +332,101 @@ fn nexp_bool_and_range_abbrevs() {
 }
 
 // ---------------------------------------------------------------------------
+// provably_nneg subset: atom/range consult the typedef quantifiers,
+// not just constants (pretty_print_lean.ml:298,314,324)
+// ---------------------------------------------------------------------------
+
+fn qge(k: Symbol, bound: &str) -> QuantItem {
+    QuantItem::Constraint(Node::dummy(ConstraintKind::Ge(
+        nexp_var(k),
+        nexp_const(bound),
+    )))
+}
+
+fn qeq(k: Symbol, bound: &str) -> QuantItem {
+    QuantItem::Constraint(Node::dummy(ConstraintKind::Equal(
+        Box::new(targ_nexp(nexp_var(k))),
+        Box::new(targ_nexp(nexp_const(bound))),
+    )))
+}
+
+fn atom_of(ix: &mut SimpleInterner, k: Symbol) -> Typ {
+    typ_app(ix, "atom", vec![targ_nexp(nexp_var(k))])
+}
+
+#[test]
+fn atom_of_constrained_kid_prints_nat() {
+    let mut ix = SimpleInterner::new();
+    let kn = kid(&mut ix, "'n");
+    let td = Node::dummy(TypeDefKind::Abbrev {
+        name: name(&mut ix, "w"),
+        quant: vec![qid(Kind::Int, kn), qge(kn, "0")],
+        arg: targ_typ(atom_of(&mut ix, kn)),
+    });
+    let (got, _) = render(&td, &ix);
+    assert_eq!(got, "abbrev w k_n := Nat\n");
+}
+
+#[test]
+fn atom_of_unconstrained_kid_prints_int() {
+    let mut ix = SimpleInterner::new();
+    let kn = kid(&mut ix, "'n");
+    let td = Node::dummy(TypeDefKind::Abbrev {
+        name: name(&mut ix, "w"),
+        quant: vec![qid(Kind::Int, kn)],
+        arg: targ_typ(atom_of(&mut ix, kn)),
+    });
+    let (got, _) = render(&td, &ix);
+    assert_eq!(got, "abbrev w k_n := Int\n");
+}
+
+#[test]
+fn atom_of_equal_constrained_kid_prints_nat() {
+    let mut ix = SimpleInterner::new();
+    let kn = kid(&mut ix, "'n");
+    let td = Node::dummy(TypeDefKind::Abbrev {
+        name: name(&mut ix, "w"),
+        quant: vec![qid(Kind::Int, kn), qeq(kn, "8")],
+        arg: targ_typ(atom_of(&mut ix, kn)),
+    });
+    let (got, _) = render(&td, &ix);
+    assert_eq!(got, "abbrev w k_n := Nat\n");
+}
+
+#[test]
+fn range_with_bounded_var_lo_prints_nat() {
+    let mut ix = SimpleInterner::new();
+    let klo = kid(&mut ix, "'lo");
+    let body = typ_app(
+        &mut ix,
+        "range",
+        vec![targ_nexp(nexp_var(klo)), targ_nexp(nexp_const("63"))],
+    );
+    let td = Node::dummy(TypeDefKind::Abbrev {
+        name: name(&mut ix, "r"),
+        quant: vec![qid(Kind::Int, klo), qge(klo, "0")],
+        arg: targ_typ(body),
+    });
+    let (got, _) = render(&td, &ix);
+    assert_eq!(got, "abbrev r (k_lo : Nat) := Nat\n");
+}
+
+#[test]
+fn record_field_atom_sees_typedef_quant() {
+    let mut ix = SimpleInterner::new();
+    let kn = kid(&mut ix, "'n");
+    let field_ty = atom_of(&mut ix, kn);
+    let td = Node::dummy(TypeDefKind::Record {
+        name: name(&mut ix, "S"),
+        quant: vec![qid(Kind::Int, kn), qge(kn, "0")],
+        fields: vec![(name(&mut ix, "v"), field_ty)],
+        wf: false,
+    });
+    let (got, _) = render(&td, &ix);
+    assert!(got.contains("  v : Nat\n"), "{got}");
+}
+
+// ---------------------------------------------------------------------------
 // bitfield.sail: hard error with span (desugared before printing upstream)
 // ---------------------------------------------------------------------------
 

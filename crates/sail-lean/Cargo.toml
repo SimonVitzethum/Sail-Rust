@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 sail-ast = { path = "../sail-ast" }
+sail-except = { path = "../sail-except" }
 
 [lints]
 workspace = true
