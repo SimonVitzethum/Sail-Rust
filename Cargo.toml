@@ -42,6 +42,7 @@ members = [
     "crates/sail-ooc",
     "crates/sail-par-pipe",
     "crates/sail-arm-corpus",
+    "crates/sail-frontend-diff",
 ]
 resolver = "2"
 
