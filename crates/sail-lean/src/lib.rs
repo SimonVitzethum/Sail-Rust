@@ -11,17 +11,32 @@
 //!   Each thread renders one definition into its own small `String` buffer
 //!   and the caller streams the buffers out in order.
 //!
-//! ## Monad mapping (documented stub rules)
+//! ## Monad mapping (ports `doc_funcl_init`, `prepend_monad`, `doc_monad_abbrev`)
 //!
 //! The OCaml backend (`sail_lean_backend/pretty_print_lean.ml`, read as
-//! reference) maps Sail effects to Lean monads. This crate implements the
-//! same mapping as explicit, documented rules for function signatures:
+//! reference) computes three independent predicates per function and maps
+//! Sail effects to Lean monads from them:
+//! - `is_monadic` (`not (Effects.function_is_pure …)`, ~line 1160) prefixes
+//!   the return type with `SailM`;
+//! - `early_return` (`has_early_return exp`, ~line 1161) selects the
+//!   `ExceptM` layer (`SailME.throw` vs `throw`, `sailTryCatchE` vs
+//!   `sailTryCatch`);
+//! - `has_loop` (`has_loop exp`, ~line 1162) selects the `Id.run` frame.
 //!
-//! | Sail effect | Lean skeleton |
-//! |---|---|
-//! | pure (`Pure`) | `def f (args) : Ret := <body>` — plain value, no monad |
-//! | stateful / register / exception-free io (`Stateful`) | `def f (args) : SailM Ret := do <body>` — `SailM` is the Sail state monad with `readReg`/`writeReg` |
-//! | early return (`EarlyReturn`) | `def f (args) : SailME Ret := do <body>` — `SailME` = `ExceptT … SailM`, `early_return x` becomes `SailME.throw x` |
+//! | is_monadic | early_return | has_loop | Lean signature |
+//! |---|---|---|
+//! | false | false | false | `def f (args) : Ret := <body>` — plain value |
+//! | true | false | _ | `def f (args) : SailM Ret := do <body>` |
+//! | true | true | _ | `def f (args) : SailM Ret := SailME.run do <body>` |
+//! | false | false | true | `def f (args) : Ret := Id.run do <body>` |
+//! | false | true | _ | `def f (args) : Ret := ExceptM.run do <body>` |
+//!
+//! The frame matrix itself is the single master in
+//! [`sail_except::function_frame`]; [`LeanPrinter::function_frame_suffix`]
+//! re-exports its tokens here so signatures and effect analysis cannot
+//! drift apart. `let`-ascriptions follow `prepend_monad` (~line 725):
+//! `(SailM, SailME, ExceptM, Id)` — see
+//! [`LeanPrinter::print_ascribed_monad`].
 //!
 //! Loop idioms (stub rule, body printing is out of scope for lane 10):
 //! - `while#` → Lean `while … do`, `until#` → `repeat … until`,
@@ -142,6 +157,13 @@ pub enum Lit {
 }
 
 /// Sail effect class driving the monad mapping.
+///
+/// Coarse legacy label: the Lean-accurate form is the independent
+/// `(is_monadic, early_return, has_loop)` triple on [`FunSig`] (OCaml
+/// `doc_funcl_init` computes the three predicates independently, so e.g.
+/// pure-with-early-return (`ExceptM.run`) has no single-enum spelling).
+/// [`Effect::triple`] maps each variant to its `(is_monadic,
+/// early_return)` pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Effect {
     /// Pure value: no monad.
@@ -149,17 +171,37 @@ pub enum Effect {
     Pure,
     /// Stateful (registers / `SailM … do`).
     Stateful,
-    /// Early return (`SailME` / `ExceptT` over `SailM`).
+    /// Stateful with early return (`SailM … := SailME.run do`).
     EarlyReturn,
 }
 
-/// Simple function signature: `def name (args) : Ret :=`.
+impl Effect {
+    /// `(is_monadic, early_return)` pair for this coarse label.
+    #[must_use]
+    pub fn triple(self) -> (bool, bool) {
+        match self {
+            Self::Pure => (false, false),
+            Self::Stateful => (true, false),
+            Self::EarlyReturn => (true, true),
+        }
+    }
+}
+
+/// Function signature: `def name (args) : [SailM] Ret := [frame]`.
+/// `is_monadic` / `early_return` / `has_loop` are the three independent
+/// OCaml predicates (`doc_funcl_init`, ~lines 1160-1162); the emitted
+/// return-type prefix and body frame follow the table in the crate docs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunSig {
     pub name: String,
     pub args: Vec<(String, Typ)>,
     pub ret: Typ,
-    pub effect: Effect,
+    /// `not (Effects.function_is_pure …)`: return type gains `SailM`.
+    pub is_monadic: bool,
+    /// `has_early_return exp`: body frame gains the `ExceptM` layer.
+    pub early_return: bool,
+    /// `has_loop exp`: pure bodies gain the `Id.run` frame.
+    pub has_loop: bool,
     pub span: Span,
 }
 
@@ -435,21 +477,80 @@ impl LeanPrinter {
         Ok(())
     }
 
-    /// Render the Lean monad for an effect (`Pure` → no monad).
+    /// Render the Lean return-type monad for an effect label
+    /// (`Pure` → no monad). Thin legacy wrapper over
+    /// [`Self::ret_monad_of`]; prefer the `(is_monadic, early_return)`
+    /// pair directly (a single enum cannot spell pure-with-early-return).
     pub fn monad_of(&self, effect: Effect) -> Option<&'static str> {
-        match effect {
-            Effect::Pure => None,
-            Effect::Stateful => Some("SailM"),
-            Effect::EarlyReturn => Some("SailME"),
+        Self::ret_monad_of(effect.triple().0)
+    }
+
+    /// Return-type monad (`doc_funcl_init`, ~line 1164): stateful functions
+    /// return `SailM Ret`, pure ones the plain `Ret` — independently of
+    /// `early_return` (a pure early return runs in `ExceptM`, selected by
+    /// the frame, not the return type).
+    pub fn ret_monad_of(is_monadic: bool) -> Option<&'static str> {
+        if is_monadic { Some("SailM") } else { None }
+    }
+
+    /// Body-frame tokens appended after `def f … : T :=` (`dec_val_end`,
+    /// ~lines 1167-1174): `SailME.run do` / `do` / `Id.run do` /
+    /// `ExceptM.run do` / ``. Single master is
+    /// [`sail_except::function_frame`]; this re-exports its suffix so the
+    /// printer and the effect analysis share one matrix.
+    pub fn function_frame_suffix(is_monadic: bool, early_return: bool, has_loop: bool) -> &'static str {
+        sail_except::function_frame(is_monadic, early_return, has_loop).suffix()
+    }
+
+    /// `early_return x` combinator (`doc_exp`, ~lines 935-937):
+    /// `SailME.throw` inside `SailM`, bare `throw` otherwise.
+    pub fn throw_name(in_sail_monad: bool) -> &'static str {
+        if in_sail_monad { "SailME.throw" } else { "throw" }
+    }
+
+    /// Monad ascription for a `let`-bound typed binding (`prepend_monad`,
+    /// ~lines 725-730): `(in_sail_monad, in_except_monad)` selects
+    /// `SailME <ret> <ascribed>` / `SailM <ascribed>` /
+    /// `ExceptM <ret> <ascribed>` / `Id <ascribed>`. `except_ret` is `Some`
+    /// exactly when the enclosing function has an early return, holding
+    /// its original return type.
+    pub fn print_ascribed_monad<W: fmt::Write>(
+        &self,
+        out: &mut W,
+        in_sail_monad: bool,
+        except_ret: Option<&Typ>,
+        ascribed: &Typ,
+    ) -> Result<(), Error> {
+        match (in_sail_monad, except_ret) {
+            (true, Some(ret)) => {
+                out.write_str("SailME ")?;
+                self.print_typ(out, ret)?;
+                out.write_char(' ')?;
+                self.print_typ(out, ascribed)?;
+            }
+            (true, None) => {
+                out.write_str("SailM ")?;
+                self.print_typ(out, ascribed)?;
+            }
+            (false, Some(ret)) => {
+                out.write_str("ExceptM ")?;
+                self.print_typ(out, ret)?;
+                out.write_char(' ')?;
+                self.print_typ(out, ascribed)?;
+            }
+            (false, None) => {
+                out.write_str("Id ")?;
+                self.print_typ(out, ascribed)?;
+            }
         }
+        Ok(())
     }
 
     /// Print a function signature header:
-    /// `[noncomputable ][partial ]def name (arg : Ty)… : Ret :=`.
-    /// The trailing body placeholder is emitted by [`Self::print_fun_sig`]'s
-    /// caller (or use `print_fun_stub` for a complete `sorry`-free stub —
-    /// actually a hard error is raised when no body printer is available;
-    /// stubs carry `panic` text only in tests via `print_fun_stub`).
+    /// `[noncomputable ][partial ]def name (arg : Ty)… : [SailM] Ret :=`.
+    /// The body frame and body text are emitted by [`Self::print_fun_stub`]
+    /// (or use `render_fun_stub` for a complete `sorry`-free stub —
+    /// actually a hard error is raised when no body printer is available).
     pub fn print_sig_header<W: fmt::Write>(
         &self,
         out: &mut W,
@@ -474,7 +575,7 @@ impl LeanPrinter {
             out.write_char(')')?;
         }
         out.write_str(" : ")?;
-        if let Some(monad) = self.monad_of(sig.effect) {
+        if let Some(monad) = Self::ret_monad_of(sig.is_monadic) {
             write!(out, "{monad} ")?;
         }
         self.print_typ(out, &sig.ret)?;
@@ -482,8 +583,9 @@ impl LeanPrinter {
         Ok(())
     }
 
-    /// Print a complete stub definition with a `do`-block opener for
-    /// monadic effects and a hard-error body marker when `body` is `None`.
+    /// Print a complete stub definition with the OCaml body frame for
+    /// the `(is_monadic, early_return, has_loop)` triple and a hard-error
+    /// body marker when `body` is `None`.
     ///
     /// `body: None` models "body not translatable in this lane": instead of
     /// emitting a silent `sorry`, the printer returns
@@ -495,39 +597,30 @@ impl LeanPrinter {
         body: Option<&str>,
     ) -> Result<(), Error> {
         self.print_sig_header(out, sig)?;
-        match self.monad_of(sig.effect) {
+        let frame = Self::function_frame_suffix(sig.is_monadic, sig.early_return, sig.has_loop);
+        let text = match body {
+            Some(b) => b,
             None => {
-                // Pure: `def f (…) : Ret := <body>`.
-                out.write_char(' ')?;
-                match body {
-                    Some(b) => out.write_str(b)?,
-                    None => {
-                        return Err(Error::Unsupported {
-                            msg: format!(
-                                "function `{}` body is not translatable (no silent sorry)",
-                                sig.name
-                            ),
-                            span: sig.span,
-                        });
-                    }
-                }
+                return Err(Error::Unsupported {
+                    msg: format!(
+                        "function `{}` body is not translatable (no silent sorry)",
+                        sig.name
+                    ),
+                    span: sig.span,
+                });
             }
-            Some(_) => {
-                // Monadic: `… := do\n  <body>`.
-                out.write_str(" do\n  ")?;
-                match body {
-                    Some(b) => out.write_str(b)?,
-                    None => {
-                        return Err(Error::Unsupported {
-                            msg: format!(
-                                "function `{}` body is not translatable (no silent sorry)",
-                                sig.name
-                            ),
-                            span: sig.span,
-                        });
-                    }
-                }
-            }
+        };
+        if frame.is_empty() {
+            // Pure: `def f (…) : Ret := <body>`.
+            out.write_char(' ')?;
+            out.write_str(text)?;
+        } else {
+            // `… := <frame>\n  <body>` (`SailME.run do` / `do` /
+            // `Id.run do` / `ExceptM.run do`).
+            out.write_char(' ')?;
+            out.write_str(frame)?;
+            out.write_str("\n  ")?;
+            out.write_str(text)?;
         }
         out.write_char('\n')?;
         Ok(())
@@ -591,21 +684,40 @@ impl LeanPrinter {
         Ok(())
     }
 
-    /// Emit the `SailM`/`SailME` prelude stub referenced by monadic
-    /// signatures (documents the expected runtime, mirroring the OCaml
-    /// backend's `SailM`/`ExceptM` usage).
+    /// Emit the `SailM`/`SailME` prelude (`doc_monad_abbrev`,
+    /// ~lines 1503-1522, current concurrency interface V2).
+    ///
+    /// The old `IO`/`ExceptT String IO` stubs disagreed with the reference
+    /// backend and with the `sail-lake` golden contract: Sail functions
+    /// live in `PreSailM`/`PreSailME`. The `Arch` instance and
+    /// instantiation parameters live in `sail-lake`, not here. Use
+    /// [`Self::print_prelude_v1`] for models on concurrency interface V1.
     pub fn print_prelude<W: fmt::Write>(&self, out: &mut W) -> Result<(), Error> {
+        self.print_prelude_v2(out)
+    }
+
+    /// V2 prelude (`PreSailM exception` / `PreSailME exception`).
+    pub fn print_prelude_v2<W: fmt::Write>(&self, out: &mut W) -> Result<(), Error> {
         out.write_str(
-            "-- Sail monad stubs (see lane-10 monad mapping).\n\
+            "-- Sail monad prelude (concurrency interface V2; see doc_monad_abbrev).\n\
              -- Pure Sail functions are plain Lean values.\n\
              -- Stateful Sail functions live in `SailM` (do-notation, `readReg`/`writeReg`).\n\
-             -- Early-return Sail functions live in `SailME` (`ExceptT` over `SailM`;\n\
-             -- `early_return x` maps to `SailME.throw x`).\n\
-             -- Loops: `while#` → `while … do`, `until#` → `repeat … until`,\n\
-             -- `foreach#` → `for x in [from:to:step]i do`.\n\
-             -- `match_bv` is used for `BitVec` case-splits, otherwise `match`.\n\
-             abbrev SailM (α : Type) : Type := IO α\n\
-             abbrev SailME (α : Type) : Type := ExceptT String IO α\n",
+             -- Early-return Sail functions run in the `ExceptM` layer\n\
+             -- (`early_return x` maps to `SailME.throw x` in `SailM`, `throw x` otherwise).\n\
+             abbrev exception := Unit\n\
+             abbrev SailM := PreSailM exception\n\
+             abbrev SailME := PreSailME exception\n",
+        )?;
+        Ok(())
+    }
+
+    /// V1 prelude (`PreSailM RegisterType trivialChoiceSource exception`).
+    pub fn print_prelude_v1<W: fmt::Write>(&self, out: &mut W) -> Result<(), Error> {
+        out.write_str(
+            "-- Sail monad prelude (concurrency interface V1; see doc_monad_abbrev).\n\
+             abbrev exception := Unit\n\
+             abbrev SailM := PreSailM RegisterType trivialChoiceSource exception\n\
+             abbrev SailME := PreSailME RegisterType trivialChoiceSource exception\n",
         )?;
         Ok(())
     }

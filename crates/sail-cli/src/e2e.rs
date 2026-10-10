@@ -20,7 +20,7 @@
 //! Gelesene Main-Crate-APIs (nichts Fremdes kopiert/fixiert):
 //! - `sail_parse::parse_file(&str, &str)` → `ParsedFile { path, defs }`
 //! - `sail_regs::{parse_register_lines, extract_registers, lean_of_sail_typ}`
-//! - `sail_lean::{LeanPrinter, FunSig, Typ, Effect}`
+//! - `sail_lean::{LeanPrinter, FunSig, Typ}`
 //! - `sail_lake::{LakeProject, RegisterEntry}` (`(String, String)`)
 //! - `sail_prelude::get("prelude.sail")` → `PreludeFile { contents, .. }`
 
@@ -208,11 +208,9 @@ fn stub_sig(name: &str) -> sail_lean::FunSig {
         name: name.to_string(),
         args: Vec::new(),
         ret: sail_lean::Typ::Unit,
-        effect: if stateful {
-            sail_lean::Effect::Stateful
-        } else {
-            sail_lean::Effect::Pure
-        },
+        is_monadic: stateful,
+        early_return: false,
+        has_loop: false,
         span: sail_lean::Span::new(sail_lean::FileId(0), 0, 0),
     }
 }

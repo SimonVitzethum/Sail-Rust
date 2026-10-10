@@ -7,6 +7,18 @@ fn printer() -> LeanPrinter {
     LeanPrinter::with_default()
 }
 
+fn funsig(name: &str, ret: Typ, is_monadic: bool, early_return: bool, has_loop: bool) -> FunSig {
+    FunSig {
+        name: name.into(),
+        args: vec![],
+        ret,
+        is_monadic,
+        early_return,
+        has_loop,
+        span: Span::new(FileId(0), 1, 1),
+    }
+}
+
 #[test]
 fn prints_core_types() {
     let p = printer();
@@ -122,55 +134,123 @@ fn prints_literals_like_ocaml_backend() {
 #[test]
 fn prints_fun_signatures_with_monad_mapping() {
     let p = printer();
-    let span = Span::new(FileId(0), 1, 1);
-    // Pure: no monad.
-    let pure = FunSig {
-        name: "add".into(),
-        args: vec![
-            ("x".into(), Typ::Nat),
-            ("y".into(), Typ::Nat),
-        ],
-        ret: Typ::Nat,
-        effect: Effect::Pure,
-        span,
-    };
+    // Pure: no monad, no frame.
+    let mut pure = funsig("add", Typ::Nat, false, false, false);
+    pure.args = vec![
+        ("x".into(), Typ::Nat),
+        ("y".into(), Typ::Nat),
+    ];
     let got = p.render_fun_stub(&pure, Some("x + y")).unwrap();
     assert_eq!(got, "def add (x : Nat) (y : Nat) : Nat := x + y\n");
 
-    // Stateful: SailM do.
-    let st = FunSig {
-        name: "read_r".into(),
-        args: vec![],
-        ret: Typ::Nat,
-        effect: Effect::Stateful,
-        span,
-    };
+    // Stateful, no early return: SailM do.
+    let st = funsig("read_r", Typ::Nat, true, false, false);
     let got = p.render_fun_stub(&st, Some("readReg r")).unwrap();
     assert_eq!(got, "def read_r : SailM Nat := do\n  readReg r\n");
 
-    // Early return: SailME do.
-    let er = FunSig {
-        name: "f".into(),
-        args: vec![("x".into(), Typ::Int)],
-        ret: Typ::Int,
-        effect: Effect::EarlyReturn,
-        span,
-    };
+    // Stateful with early return: SailM return, SailME.run frame
+    // (doc_funcl_init: the return prefix follows is_monadic alone).
+    let mut er = funsig("f", Typ::Int, true, true, false);
+    er.args = vec![("x".into(), Typ::Int)];
     let got = p.render_fun_stub(&er, Some("SailME.throw x")).unwrap();
-    assert_eq!(got, "def f (x : Int) : SailME Int := do\n  SailME.throw x\n");
+    assert_eq!(
+        got,
+        "def f (x : Int) : SailM Int := SailME.run do\n  SailME.throw x\n"
+    );
+
+    // Pure with early return: plain return, ExceptM.run frame.
+    let pe = funsig("g", Typ::Bool, false, true, false);
+    let got = p.render_fun_stub(&pe, Some("throw x")).unwrap();
+    assert_eq!(got, "def g : Bool := ExceptM.run do\n  throw x\n");
+
+    // Pure with loop: plain return, Id.run frame.
+    let pl = funsig("h", Typ::Nat, false, false, true);
+    let got = p.render_fun_stub(&pl, Some("loop_vars")).unwrap();
+    assert_eq!(got, "def h : Nat := Id.run do\n  loop_vars\n");
+}
+
+#[test]
+fn effect_triple_matches_legacy_labels() {
+    assert_eq!(Effect::Pure.triple(), (false, false));
+    assert_eq!(Effect::Stateful.triple(), (true, false));
+    assert_eq!(Effect::EarlyReturn.triple(), (true, true));
+    let p = printer();
+    assert_eq!(p.monad_of(Effect::Pure), None);
+    assert_eq!(p.monad_of(Effect::Stateful), Some("SailM"));
+    assert_eq!(p.monad_of(Effect::EarlyReturn), Some("SailM"));
+    assert_eq!(LeanPrinter::ret_monad_of(true), Some("SailM"));
+    assert_eq!(LeanPrinter::ret_monad_of(false), None);
+}
+
+#[test]
+fn frame_suffixes_match_ocaml_dec_val_end() {
+    // (is_monadic, early_return, has_loop) — pretty_print_lean.ml:1167-1174.
+    assert_eq!(LeanPrinter::function_frame_suffix(true, true, false), "SailME.run do");
+    assert_eq!(LeanPrinter::function_frame_suffix(true, true, true), "SailME.run do");
+    assert_eq!(LeanPrinter::function_frame_suffix(true, false, false), "do");
+    assert_eq!(LeanPrinter::function_frame_suffix(true, false, true), "do");
+    assert_eq!(LeanPrinter::function_frame_suffix(false, false, true), "Id.run do");
+    assert_eq!(LeanPrinter::function_frame_suffix(false, true, false), "ExceptM.run do");
+    assert_eq!(LeanPrinter::function_frame_suffix(false, true, true), "ExceptM.run do");
+    assert_eq!(LeanPrinter::function_frame_suffix(false, false, false), "");
+}
+
+#[test]
+fn throw_name_follows_sail_monad() {
+    assert_eq!(LeanPrinter::throw_name(true), "SailME.throw");
+    assert_eq!(LeanPrinter::throw_name(false), "throw");
+}
+
+#[test]
+fn ascribed_monads_match_prepend_monad() {
+    let p = printer();
+    let mut buf = String::new();
+    // (true, Some E, E) → `SailME E E`.
+    p.print_ascribed_monad(&mut buf, true, Some(&Typ::Bool), &Typ::Bool)
+        .unwrap();
+    assert_eq!(buf, "SailME Bool Bool");
+    // (false, Some, …) → `ExceptM Bool Nat`.
+    buf.clear();
+    p.print_ascribed_monad(&mut buf, false, Some(&Typ::Bool), &Typ::Nat)
+        .unwrap();
+    assert_eq!(buf, "ExceptM Bool Nat");
+    buf.clear();
+    p.print_ascribed_monad(&mut buf, true, None, &Typ::Unit)
+        .unwrap();
+    assert_eq!(buf, "SailM Unit");
+    buf.clear();
+    p.print_ascribed_monad(&mut buf, false, None, &Typ::Nat)
+        .unwrap();
+    assert_eq!(buf, "Id Nat");
+}
+
+#[test]
+fn prelude_uses_presail_monads() {
+    let p = printer();
+    let mut buf = String::new();
+    p.print_prelude(&mut buf).unwrap();
+    assert!(buf.contains("abbrev exception := Unit"), "{buf}");
+    assert!(buf.contains("abbrev SailM := PreSailM exception"), "{buf}");
+    assert!(buf.contains("abbrev SailME := PreSailME exception"), "{buf}");
+    assert!(!buf.contains("IO"), "{buf}");
+    buf.clear();
+    p.print_prelude_v1(&mut buf).unwrap();
+    assert!(
+        buf.contains("abbrev SailM := PreSailM RegisterType trivialChoiceSource exception"),
+        "{buf}"
+    );
+    assert!(
+        buf.contains("abbrev SailME := PreSailME RegisterType trivialChoiceSource exception"),
+        "{buf}"
+    );
 }
 
 #[test]
 fn untranslatable_is_hard_error_with_span() {
     let p = printer();
-    let sig = FunSig {
-        name: "bad".into(),
-        args: vec![],
-        ret: Typ::Nat,
-        effect: Effect::Pure,
-        span: Span::new(FileId(0), 7, 3),
-    };
-    let err = p.render_fun_stub(&sig, None).unwrap_err();
+    let mut bad = funsig("bad", Typ::Nat, false, false, false);
+    bad.span = Span::new(FileId(0), 7, 3);
+    let err = p.render_fun_stub(&bad, None).unwrap_err();
     assert_eq!(
         err,
         Error::Unsupported {
@@ -195,14 +275,11 @@ fn untranslatable_is_hard_error_with_span() {
 #[test]
 fn parallel_defs_keep_order_and_stream() {
     let p = printer();
-    let span = Span::new(FileId(0), 1, 1);
     let sigs: Vec<FunSig> = (0..8)
-        .map(|i| FunSig {
-            name: format!("f{i}"),
-            args: vec![("x".into(), Typ::Nat)],
-            ret: Typ::Nat,
-            effect: Effect::Pure,
-            span,
+        .map(|i| {
+            let mut s = funsig(&format!("f{i}"), Typ::Nat, false, false, false);
+            s.args = vec![("x".into(), Typ::Nat)];
+            s
         })
         .collect();
     let bodies: Vec<Option<String>> = (0..8).map(|i| Some(format!("x + {i}"))).collect();
@@ -231,13 +308,7 @@ fn options_drive_prefixes() {
         partial: BTreeSet::from(["nc".to_string()]),
     };
     let p = LeanPrinter::new(opts);
-    let sig = FunSig {
-        name: "nc".into(),
-        args: vec![],
-        ret: Typ::Nat,
-        effect: Effect::Pure,
-        span: Span::new(FileId(0), 1, 1),
-    };
-    let got = p.render_fun_stub(&sig, Some("0")).unwrap();
+    let s = funsig("nc", Typ::Nat, false, false, false);
+    let got = p.render_fun_stub(&s, Some("0")).unwrap();
     assert_eq!(got, "noncomputable partial def nc : Nat := 0\n");
 }
