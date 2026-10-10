@@ -63,6 +63,50 @@ lifted onto the Sail rules in this lane:
    `tests/corpus.rs` guards this on the Rig. `pub MPat` was demoted to a
    private rule alongside (only used inside `MPExp`; the wiring below
    never listed an `MPatParser`).
+6. **`RDefBody` strict (Lane 87, E4 `Block` shape, re-applied on this
+    branch)**: the old `(<RIdDef> ",")* <RIdDef>?` list was nullable AND
+    used as `RDefBody?` in the `bitfield` arm, so `{}` had two trees
+    (Rig: local ambiguity at `sail.lalrpop:1288:5-1291:5`). The list is
+    now strict — non-empty, right-recursive, explicit trailing-, arm,
+    exactly the validated `Block` shape from the E4 toy — while the use
+    site keeps `RDefBody?`, so `{}` still parses (via `None`) and every
+    non-empty body parses to the same single tree as before. Accepted
+    language unchanged (no corpus impact;
+    `tests/grammar_coverage.rs` pins `{}` / trailing-, shapes on
+    the Rig).
+7. **Nullable-list family strict (Lane 98, same shape)**: `Enum`,
+    `ExpList`, `CaseList`, `StructFields` had the same nullable
+    `(<X> ",")* <X>?` shape, which LALRPOP expands to `(...)+`/`(...)*`
+    intermediates whose shifts/reduces compete on every `X`-leading
+    token (Rig `659:5-662:5` `CaseList`, `779:5-782:5` `ExpList`,
+    `1215:5-1218:5` `Enum`, `309:5-312:5` local ambiguity via
+    `StructFields` `{}`). All four are now strict (non-empty,
+    right-recursive, explicit trailing-, arm). Use sites that accepted
+    empty bodies in the port keep `?` (`match`/`try` `CaseList?`,
+    `Enum?`, `StructFields?` in `struct` records and anon
+    `TypeUnion` records), so `{}` still parses via `None`;
+    `ExpList` needed no use-site change (every site already guards it
+    with a leading element plus `,` or a separate `"()"` arm).
+    Accepted language unchanged.
+8. **Optional tails as explicit arms (Lane 98)**: `IndexRange`
+    (`@`, Rig `1267:5-1270:5`) and `AtomicIndexRange` (`..`, Rig
+    `1274:5-1277:5`) are two arms each instead of `(...)?` tails;
+    `LoopExp` `by`/`in` (Rig `610:5-617:5`) is four arms covering all
+    combinations; `TypSchm` with/without `effect` (Rig `358:5-364:5`)
+    is two arms. The old inline `?` tails left empty productions whose
+    reduces competed with the keyword shifts. Accepted language
+    unchanged.
+9. **Bare `let`/`var` out of `BlockItem` (Lane 98)**: `BlockItem`
+    carried bare `let`/`var` without `in` while `PlainExp` carries the
+    `in` forms, so after `let p = E` a reduce competed with the `in`
+    shift (Rig `682:5-691:5`). The bare forms are now explicit `Block`
+    arms carrying their `;` terminator (bare / trailing-`;` /
+    `;`-continued, for `let` and `var`); after `let p = E` the
+    lookahead decides by shift only (`in` continues the `PlainExp`
+    form, `;` continues the block) and only `}` reduces.
+    `BlockItem` is just `Exp` now. The missing body still defaults to
+    `()`; `{ let p = E }`, `{ let p = E; }`, `{ let p = E; ... }`
+    parse exactly as before — accepted language unchanged.
 
 ## D1/D2 — unchanged, evaluated per corpus
 

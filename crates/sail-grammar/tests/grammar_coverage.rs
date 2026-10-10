@@ -13,7 +13,7 @@
 
 use sail_grammar::ast::*;
 use sail_grammar::lexer::{Tok, tokenize};
-use sail_grammar::{parse_def, parse_exp, parse_file, parse_pat, parse_typ};
+use sail_grammar::{parse_def, parse_exp, parse_file, parse_pat, parse_typ, parse_typschm};
 
 fn kinds(toks: &[(usize, Tok, usize)]) -> Vec<Tok> {
     toks.iter().map(|(_, t, _)| t.clone()).collect()
@@ -582,4 +582,277 @@ fn parse_foreach_by_in() {
     // E4: `by Exp` / `in Typ` tails; the step cannot end in a bare `let`.
     assert!(parse_exp("foreach (i from 0 to 10) do i").is_ok());
     assert!(parse_exp("foreach (i from 0 to 10 by 2 in int) do i").is_ok());
+}
+
+#[test]
+fn parse_bitfield_body_strict() {
+    // Lane 87 (sail.lalrpop:1288, re-applied on this branch): `RDefBody`
+    // is strict (non-empty, right-recursive, E4-`Block` shape) but still
+    // used as `RDefBody?`, so `{}` parses — via exactly one tree — while
+    // item lists keep trailing commas. Same accepted language as before,
+    // no corpus impact.
+    let typ = Typ::App("bits".to_string(), vec![Typ::Lit(Lit::Num("8".to_string()))]);
+    let bitfield = |fields: Vec<RegField>| {
+        Def::Aux(DefAux::Type(TypeDef::Bitfield("B".to_string(), typ.clone(), fields)))
+    };
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = {}").unwrap(),
+        bitfield(vec![])
+    );
+    let single = IndexRange::Single(Typ::Lit(Lit::Num("4".to_string())));
+    let one = RegField::Item("f".to_string(), single.clone());
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : 4 }").unwrap(),
+        bitfield(vec![one.clone()])
+    );
+    // Trailing comma parses to the same single-item body.
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : 4, }").unwrap(),
+        bitfield(vec![one.clone()])
+    );
+    // Several fields, `..`-ranges, `@`-concats, doc/attribute prefixes.
+    assert!(parse_def("bitfield B : bits(8) = { f : 7..0, g : 4 }").is_ok());
+    assert!(parse_def("bitfield B : bits(8) = { f : a @ b }").is_ok());
+    assert!(parse_def("bitfield B : bits(8) = { $[myattr] f : 4 }").is_ok());
+    assert!(parse_def("bitfield B : bits(8) = { /// field f\n f : 4 }").is_ok());
+}
+
+#[test]
+fn parse_case_list_strict() {
+    // Lane 98: `CaseList` is strict but used as `CaseList?`, so `{}` still
+    // parses (via `None`) while trailing commas keep working. Same
+    // accepted language as before.
+    let mx = |cs: Vec<PatExp>| {
+        Exp::Match(
+            Box::new(Exp::Id("x".to_string())),
+            cs,
+        )
+    };
+    assert_eq!(parse_exp("match x {}").unwrap(), mx(vec![]));
+    let arm =
+        PatExp::Exp(Pat::Id("y".to_string()), Box::new(Exp::Id("y".to_string())));
+    assert_eq!(parse_exp("match x { y => y }").unwrap(), mx(vec![arm.clone()]));
+    // Trailing comma parses to the same single-arm match.
+    assert_eq!(
+        parse_exp("match x { y => y, }").unwrap(),
+        mx(vec![arm.clone()])
+    );
+    assert!(parse_exp("match x { y => y, _ => z }").is_ok());
+    assert!(parse_exp("match x { y if y => y }").is_ok());
+    assert!(parse_exp("try x catch {}").is_ok());
+    assert!(parse_exp("try x catch { y => y, }").is_ok());
+}
+
+#[test]
+fn parse_exp_list_strict() {
+    // Lane 98: `ExpList` is strict; every use site already guards it with
+    // a leading element plus `,` (tuples) or a separate `"()"` arm
+    // (calls), so no use-site change was needed. Same accepted language.
+    let ab = vec![
+        Exp::Id("a".to_string()),
+        Exp::Id("b".to_string()),
+    ];
+    assert_eq!(
+        parse_exp("f(a, b)").unwrap(),
+        Exp::App("f".to_string(), ab.clone())
+    );
+    // Trailing comma parses to the same call.
+    assert_eq!(
+        parse_exp("f(a, b,)").unwrap(),
+        Exp::App("f".to_string(), ab.clone())
+    );
+    assert_eq!(parse_exp("(a, b,)").unwrap(), Exp::Tuple(ab.clone()));
+    // Nullary calls still go through the `"()"` arm, not `ExpList`.
+    assert_eq!(
+        parse_exp("f()").unwrap(),
+        Exp::App("f".to_string(), vec![Exp::Lit(Lit::Unit)])
+    );
+}
+
+#[test]
+fn parse_enum_struct_fields_strict() {
+    // Lane 98: `Enum` / `StructFields` are strict but used as `Enum?` /
+    // `StructFields?`, so `{}` still parses (via `None`) while trailing
+    // commas keep working. Same accepted language as before.
+    let no_quant = TypQuant { kopts: vec![], constraint: None };
+    assert_eq!(
+        parse_def("enum E = {}").unwrap(),
+        Def::Aux(DefAux::Type(TypeDef::Enum("E".to_string(), vec![], vec![])))
+    );
+    assert!(parse_def("enum E = { A, B, }").is_ok());
+    assert!(parse_def("enum E = { A => 1, B => 2 }").is_ok());
+    assert!(parse_def("enum E with f -> int = { A, }").is_ok());
+    assert_eq!(
+        parse_def("struct S = {}").unwrap(),
+        Def::Aux(DefAux::Type(TypeDef::Record(
+            "S".to_string(),
+            no_quant.clone(),
+            vec![]
+        )))
+    );
+    assert!(parse_def("struct S = { x : int, }").is_ok());
+    assert!(parse_def("struct S = { x : int, y : bool }").is_ok());
+    assert!(parse_def("union U = { C : {} }").is_ok());
+    assert!(parse_def("union U = { C : { x : int, }, D : int }").is_ok());
+}
+
+#[test]
+fn parse_index_range_tails() {
+    // Lane 98: `@` / `..` are explicit arms (no `?` tail). Same accepted
+    // language; `@` stays right-recursive.
+    let single = |n: &str| IndexRange::Single(Typ::Lit(Lit::Num(n.to_string())));
+    let concat = |a: IndexRange, b: IndexRange| {
+        IndexRange::Concat(Box::new(a), Box::new(b))
+    };
+    let field = |r: IndexRange| {
+        let typ =
+            Typ::App("bits".to_string(), vec![Typ::Lit(Lit::Num("8".to_string()))]);
+        Def::Aux(DefAux::Type(TypeDef::Bitfield(
+            "B".to_string(),
+            typ,
+            vec![RegField::Item("f".to_string(), r)],
+        )))
+    };
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : 4 }").unwrap(),
+        field(single("4"))
+    );
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : 7..0 }").unwrap(),
+        field(IndexRange::Range(
+            Typ::Lit(Lit::Num("7".to_string())),
+            Typ::Lit(Lit::Num("0".to_string())),
+        ))
+    );
+    let ab = concat(
+        IndexRange::Single(Typ::Id("a".to_string())),
+        IndexRange::Single(Typ::Id("b".to_string())),
+    );
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : a @ b }").unwrap(),
+        field(ab.clone())
+    );
+    // Right-nested: `a @ b @ c` is `a @ (b @ c)`.
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : a @ b @ c }").unwrap(),
+        field(concat(
+            IndexRange::Single(Typ::Id("a".to_string())),
+            concat(
+                IndexRange::Single(Typ::Id("b".to_string())),
+                IndexRange::Single(Typ::Id("c".to_string())),
+            ),
+        ))
+    );
+}
+
+#[test]
+fn parse_loop_exp_tails() {
+    // Lane 98: `by` / `in` are four explicit arms. Same four combinations.
+    let head = |step: Option<Exp>, order: Option<Typ>| {
+        Exp::For(
+            Box::new(LoopHead {
+                var: "i".to_string(),
+                from: Box::new(Exp::Lit(Lit::Num("0".to_string()))),
+                ord: LoopOrd::To,
+                to: Box::new(Exp::Lit(Lit::Num("10".to_string()))),
+                step: step.map(Box::new),
+                order,
+            }),
+            Box::new(Exp::Id("i".to_string())),
+        )
+    };
+    assert_eq!(
+        parse_exp("foreach (i from 0 to 10) do i").unwrap(),
+        head(None, None)
+    );
+    assert_eq!(
+        parse_exp("foreach (i from 0 to 10 by 2) do i").unwrap(),
+        head(Some(Exp::Lit(Lit::Num("2".to_string()))), None)
+    );
+    assert_eq!(
+        parse_exp("foreach (i from 0 to 10 in int) do i").unwrap(),
+        head(None, Some(Typ::Id("int".to_string())))
+    );
+    assert_eq!(
+        parse_exp("foreach (i from 0 to 10 by 2 in int) do i").unwrap(),
+        head(
+            Some(Exp::Lit(Lit::Num("2".to_string()))),
+            Some(Typ::Id("int".to_string()))
+        )
+    );
+    assert!(parse_exp("foreach (i from 10 downto 0 by 2) do i").is_ok());
+}
+
+#[test]
+fn parse_typschm_effect_tails() {
+    // Lane 98: with/without `effect` are two explicit arms. Same accepted
+    // language.
+    let schm = |effect: Option<Vec<String>>| TypSchm {
+        quant: None,
+        lhs: Typ::Id("int".to_string()),
+        arrow: Arrow::Fn,
+        rhs: Typ::Id("int".to_string()),
+        effect,
+    };
+    assert_eq!(parse_typschm("int -> int").unwrap(), schm(None));
+    assert_eq!(
+        parse_typschm("int -> int effect { foo }").unwrap(),
+        schm(Some(vec!["foo".to_string()]))
+    );
+    assert_eq!(
+        parse_typschm("int -> int effect pure").unwrap(),
+        schm(Some(vec![]))
+    );
+    assert!(parse_typschm("int <-> int effect { foo, configuration }").is_ok());
+}
+
+#[test]
+fn parse_block_bare_let_var() {
+    // Lane 98: bare `let`/`var` are explicit `Block` arms (carrying `;`),
+    // `BlockItem` is just `Exp` — no reduce-vs-shift on `in` anymore.
+    // Same accepted language; the missing body still defaults to `()`.
+    let unit = || Exp::Lit(Lit::Unit);
+    let let_x = || {
+        Exp::Let(
+            Pat::Id("x".to_string()),
+            Box::new(Exp::Lit(Lit::Num("1".to_string()))),
+            Box::new(unit()),
+        )
+    };
+    // Bare item directly before `}`, with trailing `;`, and continued.
+    assert_eq!(parse_exp("{ let x = 1 }").unwrap(), Exp::Block(vec![let_x()]));
+    assert_eq!(
+        parse_exp("{ let x = 1; }").unwrap(),
+        Exp::Block(vec![let_x()])
+    );
+    assert_eq!(
+        parse_exp("{ let x = 1; x }").unwrap(),
+        Exp::Block(vec![let_x(), Exp::Id("x".to_string())])
+    );
+    assert_eq!(
+        parse_exp("{ let x = 1; let y = 2; x }").unwrap(),
+        Exp::Block(vec![
+            let_x(),
+            Exp::Let(
+                Pat::Id("y".to_string()),
+                Box::new(Exp::Lit(Lit::Num("2".to_string()))),
+                Box::new(unit()),
+            ),
+            Exp::Id("x".to_string()),
+        ])
+    );
+    assert_eq!(
+        parse_exp("{ var x = 1; x }").unwrap(),
+        Exp::Block(vec![
+            Exp::Var(
+                Box::new(Exp::Id("x".to_string())),
+                Box::new(Exp::Lit(Lit::Num("1".to_string()))),
+                Box::new(unit()),
+            ),
+            Exp::Id("x".to_string()),
+        ])
+    );
+    // Expression-level `let` still requires `in` (E4, unchanged).
+    assert!(parse_exp("let x = 1 in x").is_ok());
+    assert!(parse_exp("let x = 1").is_err());
 }
