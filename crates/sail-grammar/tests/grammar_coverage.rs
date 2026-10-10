@@ -544,3 +544,42 @@ fn parse_file_def_typ_pat() {
     assert!(parse_typ("int").is_ok());
     assert!(parse_pat("Some(x)").is_ok());
 }
+
+#[test]
+fn parse_struct_update_vs_block() {
+    // `{ Exp with ... }` shifts `with` (StructUpdate); `;`/`}` reduce the
+    // strict-block items instead (nullable-Block + `with` fix).
+    assert_eq!(
+        parse_exp("{ r with x = 1 }").unwrap(),
+        Exp::StructUpdate(
+            Box::new(Exp::Id("r".to_string())),
+            vec![FieldExp::Field(
+                Box::new(Exp::Id("x".to_string())),
+                Box::new(Exp::Lit(Lit::Num("1".to_string()))),
+            )],
+        )
+    );
+    assert_eq!(
+        parse_exp("{ x; y }").unwrap(),
+        Exp::Block(vec![Exp::Id("x".to_string()), Exp::Id("y".to_string())])
+    );
+}
+
+#[test]
+fn parse_bitfield_ranges() {
+    // Bare `..`-ranges are the only range spelling (Lane 76: the
+    // `"(" IndexRange ")"` arm was removed — it duplicated `Typ` parens,
+    // see GRAMMAR.md).
+    assert!(parse_def("bitfield B : bits(8) = { f : 7..0 }").is_ok());
+    assert!(parse_def("bitfield B : bits(8) = { f : 4 }").is_ok());
+    // Parenthesised ranges are rejected; `Typ` parens still work.
+    assert!(parse_def("bitfield B : bits(8) = { f : (7..0) }").is_err());
+    assert!(parse_typ("(int, bool)").is_ok());
+}
+
+#[test]
+fn parse_foreach_by_in() {
+    // E4: `by Exp` / `in Typ` tails; the step cannot end in a bare `let`.
+    assert!(parse_exp("foreach (i from 0 to 10) do i").is_ok());
+    assert!(parse_exp("foreach (i from 0 to 10 by 2 in int) do i").is_ok());
+}

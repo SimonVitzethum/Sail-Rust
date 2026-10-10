@@ -3,7 +3,8 @@
 // Conventions of this port:
 // - Menhir tolerates shift/reduce conflicts (resolving to shift), LALRPOP
 //   rejects them. The direct port failed with 4 conflicts (see GRAMMAR.md);
-//   the fixes below are validated designs from scratch experiments with
+//   static audit in Lane 76 found a 5th (`IndexRange` parens, below). The
+//   fixes are validated designs from scratch experiments with
 //   LALRPOP 0.22 (see `/tmp/opencode/laltest`, exit 0):
 //   - E3c (dangling `else`): open `Exp` vs closed `ClosedExp` WITHOUT an
 //     `Exp ::= ClosedExp` unit production. `then`/`else` branches and every
@@ -15,6 +16,12 @@
 //     (non-empty, right-recursive) `Block`s. This also settles
 //     `LoopExp ... "by" Exp "in" Typ`, since a step can no longer end in a
 //     bare `let`/`var` waiting for `in`.
+//   - `IndexRange` parens removed: `"(" IndexRange ")"` duplicated
+//     `AtomicTyp`'s `"(" Typ ")"` for every parenthesised type (`(t)` had
+//     two trees; `(a, b)` was shift-vs-reduce on `,`) while being the only
+//     way to write `(a..b)` / `(a@b)`. Bare `a..b` / `a@b` still parse;
+//     parenthesised ranges are rejected (see GRAMMAR.md; 0 occurrences in
+//     `sail-lib`, checked by `tests/corpus.rs` on the Rig).
 //   - D1/D2 (`Typ` index-range vs tuple, paren vs tuple): UNCHANGED, pending
 //     corpus evaluation via `tests/corpus.rs` (see GRAMMAR.md).
 // - Every Menhir `A | A B` common-prefix rule is factored to `A B?` with
@@ -951,7 +958,7 @@ FunDefList: Vec<FunDef> = {
 // mappings
 // ---------------------------------------------------------------------------
 
-pub MPat: MPat = {
+MPat: MPat = {
     <a:AtomicMPat> <s:MPatSuffix?> => match s {
         Some(MPatSuffix::Chain(ops)) => MPat::Infix(Box::new(a), ops),
         Some(MPatSuffix::As(i)) => MPat::As(Box::new(a), i),
@@ -1251,9 +1258,12 @@ TypeUnions: Vec<TypeUnion> = {
     },
 }
 
-// `index_range`.
+// `index_range`: the parenthesised arm `"(" IndexRange ")"` was removed
+// (Lane 76) — it duplicated `AtomicTyp`'s `"(" Typ ")"` for every
+// parenthesised type, so `(t)` was ambiguous and `(a, b)` conflicted.
+// Bare `..`-ranges and `@`-concats cover the corpus (no bitfields in
+// `sail-lib`); `(a..b)` / `(a@b)` are rejected, see GRAMMAR.md.
 IndexRange: IndexRange = {
-    "(" <i:IndexRange> ")" => i,
     <a:AtomicIndexRange> <t:("@" <IndexRange>)?> => match t {
         Some(hi) => IndexRange::Concat(Box::new(a), Box::new(hi)),
         None => a,
