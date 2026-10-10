@@ -131,7 +131,8 @@ impl<'a> Lexer<'a> {
     }
 
     /// Skip spaces, tabs, `\r`, line comments (`//...`) and block comments
-    /// (`/* ... */`, non-nesting like the OCaml lexer). Returns true if a
+    /// (`/* ... */`, nesting like the OCaml lexer — model files contain
+    /// commented-out code with inner `/* ... */`). Returns true if a
     /// newline was crossed (callers needing exact line structure handle
     /// `\n` themselves — newlines are significant tokens here).
     fn skip_trivia(&mut self) -> Result<(), LexError> {
@@ -145,18 +146,32 @@ impl<'a> Lexer<'a> {
                 }
                 Some(b'/') if self.peek2() == Some((b'/', b'*')) => {
                     let from = self.cursor();
-                    self.bump(2);
+                    let mut depth: u32 = 0;
                     loop {
-                        match self.peek2() {
-                            Some((b'*', b'/')) => {
+                        // Peek two bytes without ever slicing past EOF.
+                        let pair = if self.pos + 1 < self.bytes.len() {
+                            Some((self.bytes[self.pos], self.bytes[self.pos + 1]))
+                        } else {
+                            None
+                        };
+                        match pair {
+                            Some((b'/', b'*')) => {
+                                depth += 1;
                                 self.bump(2);
-                                break;
+                            }
+                            Some((b'*', b'/')) => {
+                                depth -= 1;
+                                self.bump(2);
+                                if depth == 0 {
+                                    break;
+                                }
                             }
                             Some(_) => self.bump(1),
                             None => {
                                 // Unterminated block comment.
-                                if self.peek() == Some(b'*') {
+                                if self.peek().is_some() {
                                     self.bump(1);
+                                    continue;
                                 }
                                 let to = self.cursor();
                                 return Err(lex_error(from, to, "unterminated block comment".to_owned()));
