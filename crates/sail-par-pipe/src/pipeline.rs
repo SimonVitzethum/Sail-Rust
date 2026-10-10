@@ -1,4 +1,4 @@
-//! Dreistufige Shard-Pipeline Parse → Check → Emit (Skizze).
+//! Dreistufige Shard-Pipeline Parse → Check → Emit (Implementierung, Lane 84).
 //!
 //! Design-Regeln (von Lane 11/43 übernommen):
 //! * Stufen-Weiterreichung über **bounded** `crossbeam-channel`-Kanäle mit
@@ -141,7 +141,7 @@ pub struct ShardOutput<E> {
     pub output: Result<E, StageError>,
 }
 
-/// Dreistufige Pipeline über Shards (Skizze).
+/// Dreistufige Pipeline über Shards (Implementierung, Lane 84).
 ///
 /// * `shards`: Eingaben in **kanonischer Ordnung** (z. B. Lane-11
 ///   `shard_files`-Reihenfolge); die Rückgabe steht in derselben Ordnung.
@@ -463,5 +463,122 @@ mod tests {
             PipeConfig::default(),
         );
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn default_backpressure_is_8() {
+        assert_eq!(PipeConfig::default().max_inflight, 8);
+        assert_eq!(PipeConfig::default_bounded().max_inflight, 8);
+    }
+
+    #[test]
+    fn default_workers_follow_cores() {
+        let expect = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let cfg = PipeConfig::default_bounded();
+        assert_eq!(cfg.parse_workers, expect);
+        assert_eq!(cfg.check_workers, expect);
+        assert_eq!(cfg.emit_workers, expect);
+    }
+
+    #[test]
+    fn pipelined_order_stable_under_jitter() {
+        // Spaete Shards absichtlich schneller: Merge-Ordnung muss trotzdem
+        // der Eingangsreihenfolge entsprechen.
+        let cfg = PipeConfig::new(8, 4, 4, 4);
+        let out = run_pipeline(
+            shards(16),
+            |s: Shard| {
+                let n = s.contents.len() % 8;
+                std::thread::sleep(std::time::Duration::from_millis((8 - n) as u64));
+                Ok::<_, String>(s.contents)
+            },
+            |c: String| Ok::<_, String>(c),
+            |c: String| Ok::<_, String>(c),
+            cfg,
+        );
+        assert_eq!(out.len(), 16);
+        for (i, o) in out.iter().enumerate() {
+            assert_eq!(o.order, i);
+            assert_eq!(o.shard, format!("s{i}"));
+            assert!(o.output.is_ok(), "shard {i} lost");
+        }
+    }
+
+    #[test]
+    fn pipelined_serial_backpressure_stays_ordered() {
+        // Engste Backpressure (max_inflight = 1, je ein Worker): kein
+        // Deadlock, Ordnung erhalten.
+        let cfg = PipeConfig::new(1, 1, 1, 1);
+        let out = run_pipeline(
+            shards(10),
+            |s: Shard| Ok::<_, String>(s.contents),
+            |c: String| Ok::<_, String>(c),
+            |c: String| Ok::<_, String>(c),
+            cfg,
+        );
+        assert_eq!(out.len(), 10);
+        for (i, o) in out.iter().enumerate() {
+            assert_eq!(o.order, i);
+            assert!(o.output.is_ok(), "shard {i} lost");
+        }
+    }
+
+    #[test]
+    fn pipelined_check_emit_errors_isolated() {
+        let cfg = PipeConfig::new(4, 2, 2, 2);
+        let out = run_pipeline(
+            shards(4),
+            |s: Shard| Ok::<_, String>(s.contents),
+            |c: String| {
+                if c.contains("f1") {
+                    Err("check-fehler".to_string())
+                } else {
+                    Ok(c)
+                }
+            },
+            |c: String| {
+                if c.contains("f3") {
+                    Err("emit-fehler".to_string())
+                } else {
+                    Ok(c)
+                }
+            },
+            cfg,
+        );
+        assert_eq!(out.len(), 4);
+        let e1 = out[1].output.as_ref().err().expect("s1 fails in check");
+        assert_eq!(e1.stage, Stage::Check);
+        assert_eq!(e1.shard, "s1");
+        let e3 = out[3].output.as_ref().err().expect("s3 fails in emit");
+        assert_eq!(e3.stage, Stage::Emit);
+        assert_eq!(e3.shard, "s3");
+        assert!(out[0].output.is_ok());
+        assert!(out[2].output.is_ok());
+    }
+
+    #[test]
+    fn chain_variant_error_isolated() {
+        let cfg = PipeConfig::new(4, 2, 2, 2);
+        let out: Vec<ShardOutput<String>> = run_shard_parallel(
+            shards(3),
+            |s: Shard| {
+                if s.id.name.as_str() == "s0" {
+                    Err("parse-fehler".to_string())
+                } else {
+                    Ok(s.contents)
+                }
+            },
+            |c: String| Ok::<_, String>(c),
+            |c: String| Ok::<_, String>(c),
+            cfg,
+        );
+        assert_eq!(out.len(), 3);
+        let err = out[0].output.as_ref().err().expect("s0 fails");
+        assert_eq!(err.stage, Stage::Parse);
+        assert_eq!(err.shard, "s0");
+        assert!(out[1].output.is_ok());
+        assert!(out[2].output.is_ok());
     }
 }

@@ -1,7 +1,7 @@
-# sail-par-pipe (Lane 69)
+# sail-par-pipe (Lane 84)
 
 Shard-parallele Pipeline-Orchestrierung **Parse → Check → Emit** als
-Code-Skizze + Doku. `#![forbid(unsafe_code)]`, nur std + `crossbeam-channel`
+Implementierung (Lane-69-Skizze umgesetzt). `#![forbid(unsafe_code)]`, nur std + `crossbeam-channel`
 + `rayon` (+ `sail-shard` aus Lane 11).
 
 ## Was diese Crate ist
@@ -65,6 +65,10 @@ Zwei Ausführungsvarianten (`src/pipeline.rs`):
 - Echte Treiber-Verdrahtung (`sail-parse` → `sail-ty` → `sail-lean`) als
   Closures; `IncrementalCache::plan` davor (nur `Dirty`-Shards einspeisen),
   `mark_built` danach.
-- Test-Rig: Ordnungs-Test mit streuenden Sleep-Zeiten, Backpressure-Test
-  (`max_inflight = 1` seriell), Fehlerisolations-Test, Paritäts-Test
-  gestuft vs. ein-poolig.
+- Test-Rig (später ausführen): Ordnungs-Test mit streuenden Sleep-Zeiten
+  (`pipelined_order_stable_under_jitter`), Backpressure-Test
+  (`max_inflight = 1` seriell: `pipelined_serial_backpressure_stays_ordered`),
+  Fehlerisolations-Tests (`pipelined_error_isolated_to_shard`,
+  `pipelined_check_emit_errors_isolated`, `chain_variant_error_isolated`),
+  Paritäts-Test gestuft vs. ein-poolig (`chain_variant_matches_pipelined_manifest`).
+  Alle liegen als `#[cfg(test)]`-Code bei und werden unter E3 nicht ausgeführt.
