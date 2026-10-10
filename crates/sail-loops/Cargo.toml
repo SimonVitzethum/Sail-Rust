@@ -1,0 +1,10 @@
+[package]
+name = "sail-loops"
+version = "0.1.0"
+edition = "2021"
+description = "Loop combinators for the pure-Rust Sail compiler (lane 27): while/until/repeat/for idioms"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_loops"
+path = "src/lib.rs"
