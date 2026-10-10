@@ -1,0 +1,8 @@
+# Build-Artefakte
+/target/
+
+# Lane 38: Binary-Crate ohne eingecheckte Lock-Datei (nie committen).
+Cargo.lock
+
+# OCaml-Sail legt bei Memo-Läufen einen Cache ins CWD (Default --memo-z3-path).
+sail_smt_cache
