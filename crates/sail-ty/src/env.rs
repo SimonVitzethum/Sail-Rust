@@ -1,5 +1,11 @@
 #![forbid(unsafe_code)]
 //! Type environment: value specs + registers.
+//!
+//! Scattered-freeze (Lane 111): this env intentionally tracks NO scattered
+//! open/`impl`/`end` state. Open/close linkage lives in `sail-resolve`
+//! (`scattered_functions/_mappings/_variants/_enums` + `insert_scattered` /
+//! `lookup_scattered`); the checker only ever sees *closed* schemes via
+//! [`TypeEnv::add_val`] after resolution. See `ENV_COVERAGE.md` (root).
 
 use crate::nexp::{MiniTyp, TypQuant};
 use serde::{Deserialize, Serialize};
@@ -81,6 +87,80 @@ impl TypeEnv {
     #[must_use]
     pub fn lookup_register(&self, name: &str) -> Option<&TypQuant> {
         self.shared.registers.get(name)
+    }
+
+    /// Number of stored `val` specs.
+    #[must_use]
+    pub fn val_count(&self) -> usize {
+        self.shared.vals.len()
+    }
+
+    /// Number of stored register schemes.
+    #[must_use]
+    pub fn register_count(&self) -> usize {
+        self.shared.registers.len()
+    }
+
+    /// Number of local bindings.
+    #[must_use]
+    pub fn local_count(&self) -> usize {
+        self.locals.len()
+    }
+
+    /// Whether any `val` spec is stored.
+    #[must_use]
+    pub fn contains_val(&self, name: &str) -> bool {
+        self.shared.vals.contains_key(name)
+    }
+
+    /// Whether any register scheme is stored.
+    #[must_use]
+    pub fn contains_register(&self, name: &str) -> bool {
+        self.shared.registers.contains_key(name)
+    }
+
+    /// Iterate `(name, scheme)` over `val` specs (hash order; sort for
+    /// deterministic output — see [`crate::ast_env::kenv_to_kopts`]).
+    pub fn iter_vals(&self) -> impl Iterator<Item = (&str, &TypQuant)> + '_ {
+        self.shared.vals.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// Iterate `(name, scheme)` over register schemes (hash order).
+    pub fn iter_registers(&self) -> impl Iterator<Item = (&str, &TypQuant)> + '_ {
+        self.shared.registers.iter().map(|(k, v)| (k.as_str(), v))
+    }
+
+    /// Sorted `val` names (deterministic snapshot / oracle order).
+    #[must_use]
+    pub fn val_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.shared.vals.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Sorted register names (deterministic snapshot / oracle order).
+    #[must_use]
+    pub fn register_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.shared.registers.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Remove a `val` spec (re-declaration / shadowing final state).
+    /// Returns the old scheme when present. Copy-on-write: a cloned env
+    /// never sees the removal (same guarantee as [`TypeEnv::add_val`]).
+    pub fn remove_val(&mut self, name: &str) -> Option<TypQuant> {
+        Arc::make_mut(&mut self.shared).vals.remove(name)
+    }
+
+    /// Remove a register scheme. Copy-on-write like [`TypeEnv::remove_val`].
+    pub fn remove_register(&mut self, name: &str) -> Option<TypQuant> {
+        Arc::make_mut(&mut self.shared).registers.remove(name)
+    }
+
+    /// Drop all local bindings, keep program tables (`let`-scope pop).
+    pub fn clear_locals(&mut self) {
+        self.locals.clear();
     }
 
     #[must_use]
@@ -169,5 +249,55 @@ mod tests {
         let text = serde_json::to_string(&env).expect("env serializes");
         let back: TypeEnv = serde_json::from_str(&text).expect("env deserializes");
         assert_eq!(env, back);
+    }
+
+    #[test]
+    fn val_register_namespaces_stay_separate() {
+        let mut env = TypeEnv::new();
+        env.add_val("r", mono_int());
+        env.add_register("r", mono_int());
+        assert!(env.contains_val("r"));
+        assert!(env.contains_register("r"));
+        assert_eq!(env.val_count(), 1);
+        assert_eq!(env.register_count(), 1);
+        assert_eq!(env.val_names(), vec!["r".to_string()]);
+        assert_eq!(env.register_names(), vec!["r".to_string()]);
+        // Same name, independent schemes: removing one keeps the other.
+        assert!(env.remove_val("r").is_some());
+        assert!(!env.contains_val("r"));
+        assert!(env.contains_register("r"));
+    }
+
+    #[test]
+    fn overwrite_is_last_wins_and_removal_is_cow() {
+        let mut env = TypeEnv::new();
+        env.add_val("f", mono_int());
+        env.add_val("f", mono_int());
+        assert_eq!(env.val_count(), 1);
+        assert!(env.remove_register("missing").is_none());
+        let mut fork = env.clone();
+        fork.add_local("x", MiniTyp::Bool);
+        assert_eq!(fork.local_count(), 1);
+        fork.clear_locals();
+        assert_eq!(fork.local_count(), 0);
+        assert!(fork.lookup_local("x").is_none());
+        // Program tables survive the locals pop; removal detaches (CoW).
+        assert!(fork.remove_val("f").is_some());
+        assert!(env.contains_val("f"));
+    }
+
+    #[test]
+    fn iter_covers_all_entries() {
+        let mut env = TypeEnv::new();
+        env.add_val("b", mono_int());
+        env.add_val("a", mono_int());
+        env.add_register("z", mono_int());
+        let mut vals: Vec<String> =
+            env.iter_vals().map(|(n, _)| n.to_owned()).collect();
+        vals.sort();
+        assert_eq!(vals, vec!["a".to_string(), "b".to_string()]);
+        let regs: Vec<String> =
+            env.iter_registers().map(|(n, _)| n.to_owned()).collect();
+        assert_eq!(regs, vec!["z".to_string()]);
     }
 }

@@ -79,6 +79,24 @@ impl KindEnv {
     pub fn lookup(&self, var: &str) -> Option<Kind> {
         self.vars.get(var).copied()
     }
+
+    /// Number of bound level variables.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.vars.len()
+    }
+
+    /// Whether no level variable is bound.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.vars.is_empty()
+    }
+
+    /// Remove a binding; returns the old kind when present.
+    /// Needed for shadowing-sensitive final state (telescope pop).
+    pub fn remove(&mut self, var: &str) -> Option<Kind> {
+        self.vars.remove(var)
+    }
 }
 
 /// Check that `nexp` has kind `K_int` (or `K_nat`).
@@ -242,5 +260,30 @@ pub fn check_typ_kind(typ: &MiniTyp, env: &KindEnv, span: Span) -> TypeResult<Ki
             }
             Ok(Kind::KType)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn len_is_empty_remove_final_state() {
+        let mut env = KindEnv::new();
+        assert!(env.is_empty());
+        assert_eq!(env.len(), 0);
+        env.bind("n", Kind::KInt);
+        env.bind("m", Kind::KNat);
+        assert!(!env.is_empty());
+        assert_eq!(env.len(), 2);
+        // Rebind overwrites in place (telescope push = last wins).
+        env.bind("n", Kind::KBool);
+        assert_eq!(env.len(), 2);
+        assert_eq!(env.lookup("n"), Some(Kind::KBool));
+        // Pop restores openness; unknown removal is `None`.
+        assert_eq!(env.remove("n"), Some(Kind::KBool));
+        assert_eq!(env.remove("n"), None);
+        assert_eq!(env.len(), 1);
+        assert_eq!(env.iter().count(), 1);
     }
 }
