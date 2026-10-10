@@ -351,6 +351,7 @@ fn tokenize(slice: &str) -> Vec<Tok<'_>> {
             toks.push(Tok { text: &slice[start..i], start, end: i, is_word: true });
         } else {
             toks.push(Tok { text: &slice[i..i + 1], start: i, end: i + 1, is_word: false });
+            i += 1;
         }
     }
     toks
@@ -411,7 +412,6 @@ fn is_val_def(def: &Def) -> bool {
 
 struct Ctx<'a> {
     file: &'a str,
-    src: &'a str,
     lines: &'a LineTable,
     report: FileReport,
 }
@@ -463,7 +463,6 @@ pub fn analyze_parsed(path: &str, src: &str, parsed: &ParsedFile) -> FileReport 
     let line_count = lines.line_count();
     let mut ctx = Ctx {
         file: path,
-        src,
         lines: &lines,
         report: FileReport {
             path: path.to_owned(),
@@ -808,9 +807,15 @@ fn analyze_def(ctx: &mut Ctx<'_>, def: &Def, name: &str, base: usize, slice: &st
                     let prev_is_throw = i > 0
                         && toks[i - 1].is_word
                         && toks[i - 1].text == "throw";
+                    // `throw(`: callee is followed by "(", so check one further back.
+                    let is_throw_arg = i > 1
+                        && toks[i - 2].is_word
+                        && toks[i - 2].text == "throw"
+                        && !toks[i - 1].is_word
+                        && toks[i - 1].text == "(";
                     let followed_by_call = matches!(toks.get(i + 1),
                         Some(nt) if !nt.is_word && nt.text == "(");
-                    if followed_by_call && !prev_is_throw {
+                    if followed_by_call && !prev_is_throw && !is_throw_arg {
                         let (start, end) = (t.start, t.end);
                         ctx.push_hit(PatternKind::ExternHelper, base, t, name);
                         ctx.push_fail(
@@ -891,6 +896,14 @@ mod tests {
         let words: Vec<_> =
             toks.iter().filter(|t| t.is_word).map(|t| t.text).collect();
         assert_eq!(words, vec!["foreach", "foreach"]);
+    }
+
+    #[test]
+    fn tokenizer_emits_punct_and_terminates() {
+        // Regression: punctuation branch must advance the cursor (was infinite loop).
+        let toks = tokenize("f(x:y, z)");
+        let texts: Vec<_> = toks.iter().map(|t| t.text).collect();
+        assert_eq!(texts, vec!["f", "(", "x", ":", "y", ",", "z", ")"]);
     }
 
     #[test]
