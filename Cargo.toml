@@ -41,6 +41,7 @@ members = [
     "crates/sail-release-meta",
     "crates/sail-ooc",
     "crates/sail-par-pipe",
+    "crates/sail-arm-corpus",
 ]
 resolver = "2"
 
