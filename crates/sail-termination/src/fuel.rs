@@ -28,6 +28,21 @@
 use std::fmt;
 
 /// Which fuel-bounded loop combinator to emit.
+///
+/// Lane-127-Wahrheit: Die vollstaendige LoopKind-Wahrheit ist
+/// `sail_loops::LoopKind` (`sail-loops`: `While/WhileFuel/Until/
+/// UntilFuel/Foreach/ForSurface` plus `sail_name()`, `needs_fuel()`,
+/// `has_loop_vars()`, `FuelKind`, `Order`, `is_loop_name`). Dieser Typ
+/// hier ist die Fuel-Teilsicht der Terminierungs-Lane (plain `While`/
+/// `Until` nur der Vollstaendigkeit halber; der Renderer
+/// [`FuelLoop`] bleibt terminierungs-eigen). Abbildung:
+/// `WhileFuel <-> FuelKind::WhileFuel` (`"whileFuelM"`),
+/// `UntilFuel <-> FuelKind::UntilFuel` (`"untilFuelM"`),
+/// `needs_fuel() == combinator().is_some()` beidseitig; Paritaet pinnt
+/// `tests/loopkind_parity.rs` (Code, E3: ungeprueft). Parse-Ebene
+/// (`sail-grammar`, nur `While/Until`) und Checker-Minimal
+/// (`sail-ty::MiniLoop/MiniOrder`) bleiben eigene Sichten mit
+/// Owner-Migration (Rest-Owner-Tabelle Lane 127).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoopKind {
     /// Plain `while` (no fuel) — not a fuel variant, listed for completeness.

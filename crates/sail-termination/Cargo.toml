@@ -9,5 +9,8 @@ license = "MIT OR Apache-2.0"
 name = "sail_termination"
 path = "src/lib.rs"
 
+[dev-dependencies]
+sail-loops = { path = "../sail-loops" }
+
 [lints]
 workspace = true
