@@ -11,3 +11,10 @@
 - **Gilt auch für Gabbros arm/Arm/Mem-Track:** kein paralleles Modell — entweder Master (dann mit Beweis
   nach Lean) oder Spiegel (dann Difftest gegen Lean-Master).
 - **Änderungsfluss:** immer zuerst Lean (+Beweis), dann Spiegel + Difftest nachziehen. Nie umgekehrt.
+
+## E2 — Nirgends `sorry` im Lean-Modell
+
+- Weder generierter Code noch Templates noch Support-Lib dürfen `sorry` enthalten.
+  Lieber harter Fehler als stilles `sorry` (`ArmExtras.lean`: `decreasing_trivial` ohne `sorry`-Fallback).
+- CI-Gate (Lane 15): `grep -rn "sorry" --include="*.lean"` über generiertem Projekt muss leer sein.
+- Lane 26 schuldet echte Terminierungsmaße statt `sorry`-Fallback; Lane 12 darf nie `sorry` emittieren.
