@@ -12,6 +12,7 @@
 mod args;
 mod e2e;
 mod memo;
+mod ooc;
 mod profile;
 
 use std::io::Write;

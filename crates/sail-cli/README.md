@@ -27,3 +27,17 @@ SAIL_RS_DRY_RUN=1 ./target/debug/sail-rs -dprofile -verbose 1 -memo_z3 \
 ```
 
 `Cargo.lock` wird nie committet (siehe `.gitignore`).
+
+## OoC-Verdrahtung (Lane 62, E4)
+
+`src/ooc.rs` + `src/e2e.rs` (`stream_rewrite`, `run_with_ooc`): Rewrite-Pässe
+laufen shardweise hinter einer Barriere (höchstens ein heißer Shard),
+fertige Shards werden warm gespillt, Solver-Anfragen kalt memoisiert
+(`OocDriver::memo_prove`), Cross-Shard-Wissen nur als Summaries (≤ 64 KiB).
+
+Herkunft (gelesen, nicht gedoppelt — in diesem Branch-Stand nicht
+vorhanden): `sail-ooc` (Lane 60, `crates/sail-ooc` im Haupt-Repo) mit
+`PhaseBarrier`/`WarmLayer`/`MemoSpills`/`SummaryTable`/`ContentId`. Die Hooks
+(`OocHooks`) nehmen nur opake Content-Hash-Strings; sobald `sail-ooc` landet,
+bekommt es ein `impl OocHooks` — der Treiber ändert sich nicht. E3: Tests als
+Code (`#[cfg(test)]`), kein Build/Test aus Lane-Agents.
