@@ -4,6 +4,8 @@
 //! kein globaler Zustand, keine Gesamt-Clone. Nach ANF gilt:
 //! Call-/BinOp-Argumente sind atomar, `Block` kommt nicht mehr vor.
 
+use std::borrow::Cow;
+
 use crate::ir::{Expr, FunDef, Pat};
 use std::fmt;
 
@@ -72,64 +74,209 @@ impl Ctx<'_> {
 /// Skizze auf Test-IR: flattene `let p1 = (let p2 = v in r) in b`
 /// zu `let p2 = v in (let p1 = r in b)`.
 pub fn internal_lets(body: &Expr) -> Expr {
+    internal_lets_cow(body).into_owned()
+}
+
+/// `internal_lets`, borrowed where untouched (Lane-90-RAM-Diät, Muster
+/// wie `subst_cow` in `sail-nexp`): Äste ohne `let`-Schachtel werden geborgt statt neu geboxt; ein `Borrowed`
+/// allokiert nichts. Owned-Ergebnisse sind wert-identisch zu
+/// [`internal_lets`].
+///
+/// Die Rotations-Sequenz (`let`-Wert ist selbst ein `let`) behält die
+/// alte Top-down-Reihenfolge (Mitte aus rohen Klonen bauen, dann genau
+/// einmal rekursieren), damit Ausgaben Byte-identisch bleiben; der
+/// rekursive Durchlauf selbst borgt via Cow. `v2` wird wie bisher roh
+/// übernommen (keine Rekursion in den rotierten Wert).
+pub fn internal_lets_cow(body: &Expr) -> Cow<'_, Expr> {
     match body {
         Expr::Let(p1, v, b) => match v.as_ref() {
             Expr::Let(p2, v2, r) => {
                 let inner = Expr::Let(p1.clone(), r.clone(), b.clone());
-                Expr::Let(p2.clone(), v2.clone(), Box::new(internal_lets(&inner)))
+                Cow::Owned(Expr::Let(
+                    p2.clone(),
+                    v2.clone(),
+                    Box::new(internal_lets_cow(&inner).into_owned()),
+                ))
             }
-            _ => Expr::Let(p1.clone(), Box::new(internal_lets(v)), Box::new(internal_lets(b))),
+            _ => {
+                let vr = internal_lets_cow(v);
+                let br = internal_lets_cow(b);
+                if matches!(vr, Cow::Borrowed(_)) && matches!(br, Cow::Borrowed(_)) {
+                    Cow::Borrowed(body)
+                } else {
+                    Cow::Owned(Expr::Let(
+                        p1.clone(),
+                        Box::new(vr.into_owned()),
+                        Box::new(br.into_owned()),
+                    ))
+                }
+            }
         },
-        Expr::Block(stmts, tail) => Expr::Block(
-            stmts.iter().map(internal_lets).collect(),
-            Box::new(internal_lets(tail)),
-        ),
+        Expr::Block(stmts, tail) => {
+            let simp: Vec<Cow<'_, Expr>> = stmts.iter().map(internal_lets_cow).collect();
+            let tr = internal_lets_cow(tail);
+            if simp.iter().all(|s| matches!(s, Cow::Borrowed(_)))
+                && matches!(tr, Cow::Borrowed(_))
+            {
+                Cow::Borrowed(body)
+            } else {
+                Cow::Owned(Expr::Block(
+                    simp.into_iter().map(Cow::into_owned).collect(),
+                    Box::new(tr.into_owned()),
+                ))
+            }
+        }
         Expr::BinOp(op, l, r) => {
-            Expr::BinOp(op.clone(), Box::new(internal_lets(l)), Box::new(internal_lets(r)))
+            let lr = internal_lets_cow(l);
+            let rr = internal_lets_cow(r);
+            if matches!(lr, Cow::Borrowed(_)) && matches!(rr, Cow::Borrowed(_)) {
+                Cow::Borrowed(body)
+            } else {
+                Cow::Owned(Expr::BinOp(
+                    *op,
+                    Box::new(lr.into_owned()),
+                    Box::new(rr.into_owned()),
+                ))
+            }
         }
         Expr::Call(n, args) => {
-            Expr::Call(n.clone(), args.iter().map(internal_lets).collect())
+            let simp: Vec<Cow<'_, Expr>> = args.iter().map(internal_lets_cow).collect();
+            if simp.iter().all(|a| matches!(a, Cow::Borrowed(_))) {
+                Cow::Borrowed(body)
+            } else {
+                Cow::Owned(Expr::Call(
+                    n.clone(),
+                    simp.into_iter().map(Cow::into_owned).collect(),
+                ))
+            }
         }
-        Expr::If(c, t, e) => Expr::If(
-            Box::new(internal_lets(c)),
-            Box::new(internal_lets(t)),
-            Box::new(internal_lets(e)),
-        ),
-        Expr::Match(s, arms) => Expr::Match(
-            Box::new(internal_lets(s)),
-            arms.iter().map(|(p, e)| (p.clone(), internal_lets(e))).collect(),
-        ),
-        atom => atom.clone(),
+        Expr::If(c, t, e) => {
+            let (cr, tr, er) = (internal_lets_cow(c), internal_lets_cow(t), internal_lets_cow(e));
+            if matches!(cr, Cow::Borrowed(_))
+                && matches!(tr, Cow::Borrowed(_))
+                && matches!(er, Cow::Borrowed(_))
+            {
+                Cow::Borrowed(body)
+            } else {
+                Cow::Owned(Expr::If(
+                    Box::new(cr.into_owned()),
+                    Box::new(tr.into_owned()),
+                    Box::new(er.into_owned()),
+                ))
+            }
+        }
+        Expr::Match(s, arms) => {
+            let sr = internal_lets_cow(s);
+            let simp: Vec<(&Pat, Cow<'_, Expr>)> =
+                arms.iter().map(|(p, e)| (p, internal_lets_cow(e))).collect();
+            if matches!(sr, Cow::Borrowed(_))
+                && simp.iter().all(|(_, e)| matches!(e, Cow::Borrowed(_)))
+            {
+                Cow::Borrowed(body)
+            } else {
+                Cow::Owned(Expr::Match(
+                    Box::new(sr.into_owned()),
+                    simp.into_iter()
+                        .map(|(p, e)| (p.clone(), e.into_owned()))
+                        .collect(),
+                ))
+            }
+        }
+        Expr::Var(_) | Expr::Lit(_) => Cow::Borrowed(body),
     }
 }
 
 /// `remove_blocks`: eliminiert `Block(stmts, tail)` zu geschachtelten
 /// `let _ = stmt in ...`-Ketten (Seiteneffekt-Reihenfolge bleibt erhalten).
 pub fn remove_blocks(body: &Expr) -> Expr {
+    remove_blocks_cow(body).into_owned()
+}
+
+/// `remove_blocks`, borrowed wo unberührt (siehe [`internal_lets_cow`]).
+/// `Block`-Knoten werden immer eliminiert (also `Owned`); alle anderen
+/// Äste borgen bei unveränderten Kindern. Owned-Ergebnisse sind
+/// wert-identisch zu [`remove_blocks`].
+pub fn remove_blocks_cow(body: &Expr) -> Cow<'_, Expr> {
     match body {
         Expr::Block(stmts, tail) => {
-            let tail = remove_blocks(tail);
-            stmts.iter().rev().map(remove_blocks).fold(tail, |acc, s| {
-                Expr::Let(Pat::Wildcard, Box::new(s), Box::new(acc))
-            })
+            let tr = remove_blocks_cow(tail);
+            let mut acc = tr.into_owned();
+            for s in stmts.iter().rev() {
+                let sr = remove_blocks_cow(s);
+                acc = Expr::Let(Pat::Wildcard, Box::new(sr.into_owned()), Box::new(acc));
+            }
+            Cow::Owned(acc)
         }
         Expr::Let(p, v, b) => {
-            Expr::Let(p.clone(), Box::new(remove_blocks(v)), Box::new(remove_blocks(b)))
+            let vr = remove_blocks_cow(v);
+            let br = remove_blocks_cow(b);
+            if matches!(vr, Cow::Borrowed(_)) && matches!(br, Cow::Borrowed(_)) {
+                Cow::Borrowed(body)
+            } else {
+                Cow::Owned(Expr::Let(
+                    p.clone(),
+                    Box::new(vr.into_owned()),
+                    Box::new(br.into_owned()),
+                ))
+            }
         }
         Expr::BinOp(op, l, r) => {
-            Expr::BinOp(op.clone(), Box::new(remove_blocks(l)), Box::new(remove_blocks(r)))
+            let lr = remove_blocks_cow(l);
+            let rr = remove_blocks_cow(r);
+            if matches!(lr, Cow::Borrowed(_)) && matches!(rr, Cow::Borrowed(_)) {
+                Cow::Borrowed(body)
+            } else {
+                Cow::Owned(Expr::BinOp(
+                    *op,
+                    Box::new(lr.into_owned()),
+                    Box::new(rr.into_owned()),
+                ))
+            }
         }
-        Expr::Call(n, args) => Expr::Call(n.clone(), args.iter().map(remove_blocks).collect()),
-        Expr::If(c, t, e) => Expr::If(
-            Box::new(remove_blocks(c)),
-            Box::new(remove_blocks(t)),
-            Box::new(remove_blocks(e)),
-        ),
-        Expr::Match(s, arms) => Expr::Match(
-            Box::new(remove_blocks(s)),
-            arms.iter().map(|(p, e)| (p.clone(), remove_blocks(e))).collect(),
-        ),
-        atom => atom.clone(),
+        Expr::Call(n, args) => {
+            let simp: Vec<Cow<'_, Expr>> = args.iter().map(remove_blocks_cow).collect();
+            if simp.iter().all(|a| matches!(a, Cow::Borrowed(_))) {
+                Cow::Borrowed(body)
+            } else {
+                Cow::Owned(Expr::Call(
+                    n.clone(),
+                    simp.into_iter().map(Cow::into_owned).collect(),
+                ))
+            }
+        }
+        Expr::If(c, t, e) => {
+            let (cr, tr, er) = (remove_blocks_cow(c), remove_blocks_cow(t), remove_blocks_cow(e));
+            if matches!(cr, Cow::Borrowed(_))
+                && matches!(tr, Cow::Borrowed(_))
+                && matches!(er, Cow::Borrowed(_))
+            {
+                Cow::Borrowed(body)
+            } else {
+                Cow::Owned(Expr::If(
+                    Box::new(cr.into_owned()),
+                    Box::new(tr.into_owned()),
+                    Box::new(er.into_owned()),
+                ))
+            }
+        }
+        Expr::Match(s, arms) => {
+            let sr = remove_blocks_cow(s);
+            let simp: Vec<(&Pat, Cow<'_, Expr>)> =
+                arms.iter().map(|(p, e)| (p, remove_blocks_cow(e))).collect();
+            if matches!(sr, Cow::Borrowed(_))
+                && simp.iter().all(|(_, e)| matches!(e, Cow::Borrowed(_)))
+            {
+                Cow::Borrowed(body)
+            } else {
+                Cow::Owned(Expr::Match(
+                    Box::new(sr.into_owned()),
+                    simp.into_iter()
+                        .map(|(p, e)| (p.clone(), e.into_owned()))
+                        .collect(),
+                ))
+            }
+        }
+        Expr::Var(_) | Expr::Lit(_) => Cow::Borrowed(body),
     }
 }
 
@@ -270,7 +417,11 @@ fn anf_expr(expr: Expr, ctx: &mut Ctx<'_>) -> Result<Expr, AnfError> {
 /// wird dabei verbraucht (frühes Drop, kein Clone des Gesamt-AST).
 pub fn anf_lower(func: FunDef, config: &AnfConfig) -> Result<FunDef, AnfError> {
     check_exhaustive(&func)?;
-    let staged = remove_blocks(&internal_lets(&func.body));
+    // Borrowed staging: `internal_lets`/`remove_blocks` share the input
+    // via Cow, so an already-flat body crosses staging with one owned
+    // `staged` instead of two transient full-tree rebuilds.
+    let lets = internal_lets_cow(&func.body);
+    let staged = remove_blocks_cow(lets.as_ref()).into_owned();
     let mut ctx = Ctx { func: &func.name, counter: 0, config };
     // `func.body` wird hier bewegt, `func` danach zerlegt — Originaldef
     // lebt ab hier nicht mehr (Speicher freigegeben vor Rückgabe).
@@ -302,6 +453,85 @@ mod tests {
         let flat = internal_lets(&body);
         // Erwartet: let b = 1 in (let a = b in a)
         assert!(matches!(flat, Expr::Let(Pat::Var(b), _, _) if b == "b"));
+    }
+
+    #[test]
+    fn internal_lets_cow_borrows_untouched_trees() {
+        use std::borrow::Cow;
+        let atom = Expr::Var("x".to_string());
+        assert!(matches!(internal_lets_cow(&atom), Cow::Borrowed(_)));
+        // Keine `let`-Schachtel irgendwo: komplett geborgt.
+        let nested = Expr::BinOp(
+            BinOp::Add,
+            Box::new(Expr::Call(
+                "f".to_string(),
+                vec![Expr::Var("x".to_string()), Expr::Lit(Lit::Int(1))],
+            )),
+            Box::new(Expr::If(
+                Box::new(Expr::Var("c".to_string())),
+                Box::new(Expr::Var("y".to_string())),
+                Box::new(Expr::Var("z".to_string())),
+            )),
+        );
+        assert!(matches!(internal_lets_cow(&nested), Cow::Borrowed(_)));
+        assert!(matches!(remove_blocks_cow(&nested), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn internal_lets_cow_rotation_is_byte_identical() {
+        use std::borrow::Cow;
+        // `let a = (let b = 1 in b) in a` → `let b = 1 in (let a = b in a)`.
+        let body = Expr::Let(
+            Pat::Var("a".to_string()),
+            Box::new(Expr::Let(
+                Pat::Var("b".to_string()),
+                Box::new(Expr::Lit(Lit::Int(1))),
+                Box::new(Expr::Var("b".to_string())),
+            )),
+            Box::new(Expr::Var("a".to_string())),
+        );
+        let expected = Expr::Let(
+            Pat::Var("b".to_string()),
+            Box::new(Expr::Lit(Lit::Int(1))),
+            Box::new(Expr::Let(
+                Pat::Var("a".to_string()),
+                Box::new(Expr::Var("b".to_string())),
+                Box::new(Expr::Var("a".to_string())),
+            )),
+        );
+        let out = internal_lets_cow(&body).into_owned();
+        assert_eq!(out, expected);
+        // Rotation baut um: kein Borrow.
+        assert!(matches!(internal_lets_cow(&body), Cow::Owned(_)));
+    }
+
+    #[test]
+    fn remove_blocks_cow_eliminates_in_order() {
+        use std::borrow::Cow;
+        let body = Expr::Block(
+            vec![Expr::Lit(Lit::Int(1)), Expr::Lit(Lit::Int(2))],
+            Box::new(Expr::Var("x".to_string())),
+        );
+        let expected = Expr::Let(
+            Pat::Wildcard,
+            Box::new(Expr::Lit(Lit::Int(1))),
+            Box::new(Expr::Let(
+                Pat::Wildcard,
+                Box::new(Expr::Lit(Lit::Int(2))),
+                Box::new(Expr::Var("x".to_string())),
+            )),
+        );
+        let out = remove_blocks_cow(&body).into_owned();
+        assert_eq!(out, expected);
+        assert!(matches!(remove_blocks_cow(&body), Cow::Owned(_)));
+        // Reiner `let`-Baum ohne Block: geborgt.
+        let plain = Expr::Let(
+            Pat::Var("a".to_string()),
+            Box::new(Expr::Lit(Lit::Int(1))),
+            Box::new(Expr::Var("a".to_string())),
+        );
+        assert!(matches!(remove_blocks_cow(&plain), Cow::Borrowed(_)));
+        assert!(matches!(internal_lets_cow(&plain), Cow::Borrowed(_)));
     }
 
     #[test]

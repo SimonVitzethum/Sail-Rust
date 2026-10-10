@@ -52,7 +52,9 @@ pub enum Lit {
 impl Lit {
     /// Parse the body of a `0b...` literal (no prefix, `_` separators allowed).
     pub fn parse_bin(digits: &str, span: Span) -> Result<Self, BitvecError> {
-        let mut bits = Vec::new();
+        // Exakte obere Schranke ein Byte pro Bit (RAM-Diät Lane 90: kein
+        // Nachwachsen; `_`-Trenner machen die echte Zahl nur kleiner).
+        let mut bits = Vec::with_capacity(digits.len());
         for ch in digits.chars().filter(|c| *c != '_') {
             match ch {
                 '0' => bits.push(Bit::B0),
@@ -75,7 +77,8 @@ impl Lit {
 
     /// Parse the body of a `0x...` literal (no prefix, `_` separators allowed).
     pub fn parse_hex(digits: &str, span: Span) -> Result<Self, BitvecError> {
-        let mut out = String::new();
+        // Ein Byte pro Hex-Ziffer als obere Schranke (s. `parse_bin`).
+        let mut out = String::with_capacity(digits.len());
         for ch in digits.chars().filter(|c| *c != '_') {
             if ch.is_ascii_hexdigit() {
                 out.push(ch.to_ascii_uppercase());

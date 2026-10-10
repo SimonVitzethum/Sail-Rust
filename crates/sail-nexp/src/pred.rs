@@ -89,11 +89,11 @@ impl Facts {
                 | (NExp::Constant(c), NExp::Var(k)) = (&**a, &**b)
                 {
                     self.lower
-                        .entry(k.clone())
+                        .entry(*k)
                         .and_modify(|bound| *bound = (*bound).max(*c))
                         .or_insert(*c);
                     self.upper
-                        .entry(k.clone())
+                        .entry(*k)
                         .and_modify(|bound| *bound = (*bound).min(*c))
                         .or_insert(*c);
                 }

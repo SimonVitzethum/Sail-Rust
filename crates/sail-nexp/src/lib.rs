@@ -39,4 +39,7 @@ pub use pred::{
     provably_nonpos_in, provably_nonzero, provably_nonzero_in, provably_pos, provably_pos_in,
     provably_zero, provably_zero_in, Facts,
 };
-pub use simplify::{normalize, normalize_constraint, simplify, simplify_constraint};
+pub use simplify::{
+    normalize, normalize_constraint, simplify, simplify_constraint, simplify_constraint_cow,
+    simplify_cow,
+};

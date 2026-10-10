@@ -11,6 +11,9 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashSet;
+use std::fmt::Write as _;
+
 /// Default Lean toolchain pinned exactly like the OCaml backend
 /// (`lean_version = "lean4:v4.29.0"`, written as `leanprover/<version>`).
 pub const DEFAULT_LEAN_TOOLCHAIN_VERSION: &str = "lean4:v4.29.0";
@@ -243,24 +246,24 @@ pub fn render_function_file_prelude(
     extra_imports: &[String],
 ) -> String {
     let camel = options.module_name();
-    let mut s = String::new();
+    let mut s = String::with_capacity(256 + import_refs.len() * 32 + extra_imports.len() * 32);
     if import_refs.is_empty() {
         s.push_str("import Sail\n");
-        s.push_str(&format!("import {camel}.Defs\n"));
+        let _ = writeln!(s, "import {camel}.Defs");
         for extra in extra_imports {
-            s.push_str(&format!("import {camel}.{extra}\n"));
+            let _ = writeln!(s, "import {camel}.{extra}");
         }
     } else {
         for n in import_refs {
-            s.push_str(&format!("import {camel}.{n}\n"));
+            let _ = writeln!(s, "import {camel}.{n}");
         }
     }
     if options.with_arm_extras {
-        s.push_str(&format!("import {}\n", ARM_EXTRAS_MODULE));
+        let _ = writeln!(s, "import {ARM_EXTRAS_MODULE}");
     }
     s.push('\n');
     s.push_str(&render_file_prelude(options.interface, &camel, options.noncomputable));
-    s.push_str(&format!("open {}\n\n", options.interface.module_name()));
+    let _ = writeln!(s, "open {}\n", options.interface.module_name());
     s.push_str("namespace Functions\n\n");
     s
 }
@@ -270,16 +273,22 @@ pub fn render_function_file_prelude(
 /// `lib_path` are set.
 pub fn render_support_lib_require(options: &LakeOptions) -> Result<String, String> {
     options.validate()?;
-    let mut s = String::from("\n\n[[require]]\nname = \"Sail\"\n");
+    let mut s = String::with_capacity(128);
+    s.push_str("\n\n[[require]]\nname = \"Sail\"\n");
     match (&options.lib_git, &options.lib_path) {
         (Some(_), Some(_)) => {
             return Err("--lean-lib-git and --lean-lib-path cannot be set simultaneously".to_string());
         }
         (None, Some(path)) => {
-            s.push_str(&format!("path = \"{path}\"\n"));
+            let _ = writeln!(s, "path = \"{path}\"");
         }
         (_, _) => {
-            s.push_str(&format!("git = \"{}\"\nrev = \"{}\"\n", options.effective_lib_git(), options.effective_lib_rev()));
+            let _ = writeln!(
+                s,
+                "git = \"{}\"\nrev = \"{}\"",
+                options.effective_lib_git(),
+                options.effective_lib_rev()
+            );
         }
     }
     Ok(s)
@@ -302,12 +311,12 @@ pub fn render_lakefile(options: &LakeOptions) -> Result<String, String> {
     s.push_str(&render_support_lib_require(options)?);
     if options.real_numbers {
         s.push_str("\n\n[[require]]\nname = \"mathlib\"\n");
-        s.push_str(&format!("git = \"{MATHLIB_GIT}\"\n"));
-        s.push_str(&format!("rev = \"{}\"\n", options.mathlib_rev));
+        let _ = writeln!(s, "git = \"{MATHLIB_GIT}\"");
+        let _ = writeln!(s, "rev = \"{}\"", options.mathlib_rev);
     }
     if options.executable {
         s.push_str("\n\n[[lean_exe]]\nname = \"run\"\n");
-        s.push_str(&format!("root = \"{camel}\"\n"));
+        let _ = writeln!(s, "root = \"{camel}\"");
     }
     Ok(s)
 }
@@ -326,11 +335,16 @@ pub fn render_lake_manifest(options: &LakeOptions) -> String {
 pub type RegisterEntry = (String, String);
 
 /// `inductive Register` block, mirroring `register_enums`.
+///
+/// RAM-Diät (Lane 90): Zeilen per `write!` in einen vorreservierten
+/// `String` statt `push_str(&format!(…))` pro Zeile (eine Allokation
+/// statt zwei); Ausgabe identisch.
 #[must_use]
 pub fn render_register_inductive(registers: &[RegisterEntry]) -> String {
-    let mut s = String::from("inductive Register : Type where\n");
+    let mut s = String::with_capacity(128 + registers.len() * 24);
+    s.push_str("inductive Register : Type where\n");
     for (ctor, _) in registers {
-        s.push_str(&format!("  | {ctor}\n"));
+        let _ = writeln!(s, "  | {ctor}");
     }
     s.push_str("  deriving DecidableEq, Hashable, Repr\nopen Register\n");
     s
@@ -339,9 +353,10 @@ pub fn render_register_inductive(registers: &[RegisterEntry]) -> String {
 /// `abbrev RegisterType` block, mirroring `type_enum`.
 #[must_use]
 pub fn render_register_type(registers: &[RegisterEntry]) -> String {
-    let mut s = String::from("abbrev RegisterType : Register → Type\n");
+    let mut s = String::with_capacity(128 + registers.len() * 32);
+    s.push_str("abbrev RegisterType : Register → Type\n");
     for (ctor, ty) in registers {
-        s.push_str(&format!("  | .{ctor} => {ty}\n"));
+        let _ = writeln!(s, "  | .{ctor} => {ty}");
     }
     s
 }
@@ -357,27 +372,32 @@ pub fn render_empty_registers() -> String {
 #[must_use]
 pub fn render_register_inhabited(interface: InterfaceVersion, registers: &[RegisterEntry]) -> String {
     // Deduplicate by Lean type, keeping the first constructor per type.
-    let mut seen: Vec<(&str, &str)> = Vec::new();
+    // `HashSet` statt O(n²)-Scan (`seen.iter().any(…)`); der `seen`-Vektor
+    // hält die Erstauftretens-Reihenfolge, Ausgabe identisch.
+    let mut seen_types: HashSet<&str> = HashSet::with_capacity(registers.len());
+    let mut seen: Vec<(&str, &str)> = Vec::with_capacity(registers.len());
     for (ctor, ty) in registers {
-        if !seen.iter().any(|(_, t)| *t == ty.as_str()) {
+        if seen_types.insert(ty.as_str()) {
             seen.push((ctor.as_str(), ty.as_str()));
         }
     }
-    let mut s = String::new();
+    let mut s = String::with_capacity(seen.len() * 96);
     for (i, (ctor, ty)) in seen.iter().enumerate() {
         if i > 0 {
             s.push('\n');
         }
         match interface {
             InterfaceVersion::V1 => {
-                s.push_str(&format!(
+                let _ = write!(
+                    s,
                     "instance : Inhabited (RegisterRef RegisterType {ty}) where\n  default := .Reg {ctor}"
-                ));
+                );
             }
             InterfaceVersion::V2 => {
-                s.push_str(&format!(
+                let _ = write!(
+                    s,
                     "instance : Inhabited (RegisterRef {ty}) where\n  default := .Reg {ctor}"
-                ));
+                );
             }
         }
     }
@@ -429,7 +449,10 @@ impl ArchFieldsV1 {
     /// Render the `instance : Arch` block; empty when no fields are set.
     #[must_use]
     pub fn render(&self) -> String {
-        let fields: Vec<String> = [
+        // Direkt in den Ziel-`String` schreiben (RAM-Diät Lane 90): kein
+        // `Vec<String>` + `join` mehr; Ausgabe identisch.
+        let mut s = String::with_capacity(256);
+        for (k, v) in [
             ("pa", &self.pa_type),
             ("abort", &self.abort_type),
             ("translation", &self.translation_summary_type),
@@ -441,14 +464,15 @@ impl ArchFieldsV1 {
             ("barrier", &self.barrier_type),
             ("arch_ak", &self.arch_ak_type),
             ("sys_reg_id", &self.sys_reg_id_type),
-        ]
-        .iter()
-        .filter_map(|(k, v)| v.as_ref().map(|t| format!("  {k} := {t}")))
-        .collect();
-        if fields.is_empty() {
+        ] {
+            if let Some(t) = v {
+                let _ = writeln!(s, "  {k} := {t}");
+            }
+        }
+        if s.is_empty() {
             return String::new();
         }
-        format!("instance : Arch where\n{}\n", fields.join("\n"))
+        format!("instance : Arch where\n{s}")
     }
 }
 
@@ -495,16 +519,21 @@ impl ArchFieldsV2 {
     /// Render the `@[reducible] instance : Arch` block.
     #[must_use]
     pub fn render(&self) -> String {
-        let ty = |v: &Option<String>, d: &str| v.as_deref().unwrap_or(d).to_string();
-        let mut lines = vec![
-            format!("  addr_size := {}", ty(&self.addr_size, "64")),
-            format!("  addr_space := {}", ty(&self.addr_space, "Unit")),
-            format!("  CHERI := {}", ty(&self.cheri, "false")),
-            format!("  cap_size_log := {}", ty(&self.cap_size_log, "0")),
-            format!("  register := {}", ty(&self.register, "Register")),
-            format!("  register_type := {}", ty(&self.register_type, "RegisterType")),
-            format!("  mem_acc := {}", ty(&self.mem_acc, "Unit")),
-        ];
+        // `&str`-View statt `to_string()` pro Feld, alles per `write!` in
+        // einen vorreservierten `String` (RAM-Diät Lane 90); Ausgabe identisch.
+        let ty = |v: &Option<String>, d: &str| v.as_deref().unwrap_or(d);
+        let mut s = String::with_capacity(1024);
+        let _ = writeln!(s, "  addr_size := {}", ty(&self.addr_size, "64"));
+        let _ = writeln!(s, "  addr_space := {}", ty(&self.addr_space, "Unit"));
+        let _ = writeln!(s, "  CHERI := {}", ty(&self.cheri, "false"));
+        let _ = writeln!(s, "  cap_size_log := {}", ty(&self.cap_size_log, "0"));
+        let _ = writeln!(s, "  register := {}", ty(&self.register, "Register"));
+        let _ = writeln!(
+            s,
+            "  register_type := {}",
+            ty(&self.register_type, "RegisterType")
+        );
+        let _ = writeln!(s, "  mem_acc := {}", ty(&self.mem_acc, "Unit"));
         for name in Self::default_predicate_names() {
             let val = self
                 .mem_acc_predicates
@@ -512,7 +541,7 @@ impl ArchFieldsV2 {
                 .find(|(n, _)| n == name)
                 .and_then(|(_, v)| v.as_deref())
                 .unwrap_or("fun _ => false");
-            lines.push(format!("  {name} := {val}"));
+            let _ = writeln!(s, "  {name} := {val}");
         }
         for (k, v, d) in [
             ("trans_start", &self.trans_start, "Unit"),
@@ -524,9 +553,9 @@ impl ArchFieldsV2 {
             ("exn", &self.exn, "Unit"),
             ("sys_reg_id", &self.sys_reg_id, "Unit"),
         ] {
-            lines.push(format!("  {k} := {}", ty(v, d)));
+            let _ = writeln!(s, "  {k} := {}", ty(v, d));
         }
-        format!("@[reducible]\ninstance : Arch where\n{}\n", lines.join("\n"))
+        format!("@[reducible]\ninstance : Arch where\n{s}")
     }
 }
 
@@ -653,9 +682,11 @@ impl LakeProject {
     /// Snapshot of the whole project layout as a single `String` for
     /// golden tests: `=== <path> ===` headers followed by contents.
     pub fn layout_snapshot(&self) -> Result<String, String> {
-        let mut snap = String::new();
-        for f in self.layout()? {
-            snap.push_str(&format!("=== {} ===\n{}\n", f.path, f.contents));
+        let layout = self.layout()?;
+        let mut snap =
+            String::with_capacity(layout.iter().map(|f| f.path.len() + f.contents.len() + 16).sum());
+        for f in &layout {
+            let _ = writeln!(snap, "=== {} ===\n{}", f.path, f.contents);
         }
         Ok(snap)
     }
@@ -746,6 +777,26 @@ mod tests {
         let inhabited = render_register_inhabited(InterfaceVersion::V2, &regs);
         // One instance per distinct type, not per register.
         assert_eq!(inhabited.matches("instance : Inhabited").count(), 1);
+    }
+
+    #[test]
+    fn inhabited_dedup_keeps_first_ctor_in_order() {
+        // Lane 90: HashSet-Dedup statt O(n²)-Scan — erster Ctor pro Typ
+        // gewinnt, Erstauftretens-Reihenfolge bleibt.
+        let regs = vec![
+            ("x1".to_string(), "(BitVec 64)".to_string()),
+            ("v0".to_string(), "(BitVec 128)".to_string()),
+            ("x2".to_string(), "(BitVec 64)".to_string()),
+        ];
+        let inhabited = render_register_inhabited(InterfaceVersion::V2, &regs);
+        assert_eq!(inhabited.matches("instance : Inhabited").count(), 2);
+        assert!(inhabited.contains(".Reg x1"));
+        assert!(inhabited.contains(".Reg v0"));
+        assert!(!inhabited.contains(".Reg x2"));
+        assert!(inhabited.find(".Reg x1").unwrap() < inhabited.find(".Reg v0").unwrap());
+        let v1 = render_register_inhabited(InterfaceVersion::V1, &regs);
+        assert_eq!(v1.matches("instance : Inhabited").count(), 2);
+        assert!(v1.contains("RegisterRef RegisterType (BitVec 64)"));
     }
 
     #[test]
