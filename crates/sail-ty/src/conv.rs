@@ -206,7 +206,8 @@ fn typarg_nexp(arg: &TypArg, it: &impl Interner) -> Option<Nexp> {
 
 /// Lift a canonical node back onto a local constraint. `None` for
 /// shapes with no local counterpart.
-pub fn constraint_from_ast(c: &Constraint, it: &impl Interner) -> Option<NConstraint> {    match &c.kind {
+pub fn constraint_from_ast(c: &Constraint, it: &impl Interner) -> Option<NConstraint> {
+    match &c.kind {
         ConstraintKind::True => Some(NConstraint::True),
         ConstraintKind::False => Some(NConstraint::False),
         ConstraintKind::Equal(a, b) => Some(NConstraint::Eq(
