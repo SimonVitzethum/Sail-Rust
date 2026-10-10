@@ -74,6 +74,24 @@ pub const ARM_FILES: &[ArmFile] = &[
     ArmFile { name: "v8_base.sail", lines: 57139 },
 ];
 
+/// Byte-exakter String-Vergleich ohne Allokation (const-fähig).
+#[must_use]
+pub const fn str_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// Klassifikation je Datei (Spiegel von `ARM_COVERAGE.md`).
 #[must_use]
 pub const fn classify(name: &str) -> Option<FileStatus> {
@@ -89,133 +107,118 @@ pub const fn classify(name: &str) -> Option<FileStatus> {
             FileStatus::Deficit { owner: $owner, reason: $reason }
         };
     }
-    // Kurzschluss-Vergleich ohne Allokation.
-    let b = name.as_bytes();
-    let eq = |cand: &str| {
-        let c = cand.as_bytes();
-        if b.len() != c.len() {
-            return false;
-        }
-        let mut i = 0;
-        while i < b.len() {
-            if b[i] != c[i] {
-                return false;
-            }
-            i += 1;
-        }
-        true
-    };
-    if eq("builtins.sail") {
+    // Kurzschluss-Vergleich ohne Allokation (const fn, kein Closure: E0015).
+    if str_eq(name, "builtins.sail") {
         Some(deficit!(
             "lane-04",
             "forall/constraints in val-Sigs + foreach/throw/assert (nexp-Constraint zuerst)"
         ))
-    } else if eq("decode_end.sail") {
+    } else if str_eq(name, "decode_end.sail") {
         Some(deficit!(
             "lane-21",
             "21 function-clause Default-Arme mit throw (gestreuter Dispatch, Prioritaet)"
         ))
-    } else if eq("decode_start.sail") {
+    } else if str_eq(name, "decode_start.sail") {
         Some(deficit!(
             "lane-17",
             "21 scattered-function-Deklarationen + SEE-Register (Grammatik-Hoheit)"
         ))
-    } else if eq("devices.sail") {
+    } else if str_eq(name, "devices.sail") {
         Some(deficit!(
             "lane-19",
             "register __GIC_* + let-Basen + effect-Sigs (Register-Modell)"
         ))
-    } else if eq("elfmain.sail") {
+    } else if str_eq(name, "elfmain.sail") {
         Some(deficit!(
             "lane-34",
             "C-externe vals ({c: ...}) + effect-Mengen + main/step_model (ausfuehrbar)"
         ))
-    } else if eq("event_clauses.sail") {
+    } else if str_eq(name, "event_clauses.sail") {
         Some(deficit!(
             "lane-38",
             "__ListConfig/__Reset/__EndCycle-Eventklauseln (Treiber/Config-Verdrahtung)"
         ))
-    } else if eq("fetch.sail") {
+    } else if str_eq(name, "fetch.sail") {
         Some(deficit!(
             "lane-28",
             "undefined-Inits + throw-Passthrough (try/throw) + Emulator-Register"
         ))
-    } else if eq("impdefs.sail") {
+    } else if str_eq(name, "impdefs.sail") {
         Some(deficit!(
             "lane-25",
             "ImpDefBool/Int/Bits-Externs + lange else-if-Implementierungsketten (FFI)"
         ))
-    } else if eq("instrs32.sail") {
+    } else if str_eq(name, "instrs32.sail") {
         Some(shard!("lane-33"))
-    } else if eq("instrs64.sail") {
+    } else if str_eq(name, "instrs64.sail") {
         Some(shard!("lane-33"))
-    } else if eq("instrs64_sme.sail") {
+    } else if str_eq(name, "instrs64_sme.sail") {
         Some(shard!("lane-32"))
-    } else if eq("instrs64_sve.sail") {
+    } else if str_eq(name, "instrs64_sve.sail") {
         Some(shard!("lane-32"))
-    } else if eq("interface.sail") {
+    } else if str_eq(name, "interface.sail") {
         Some(deficit!(
             "lane-29",
             "9 instantiations (sail_mem_*/tlbi/barrier/exceptions) + union/struct (Archsem)"
         ))
-    } else if eq("interrupts.sail") {
+    } else if str_eq(name, "interrupts.sail") {
         Some(deficit!(
             "lane-22",
             "reine Funktionsdatei, dichte Bitvektor/Int-Ausdruecke + throw (Bitvec-Semantik)"
         ))
-    } else if eq("isla_main.sail") {
+    } else if str_eq(name, "isla_main.sail") {
         Some(deficit!(
             "lane-08",
             "effect-Mengen {configuration, escape, rmem, ...} in val-Sigs (Effekte)"
         ))
-    } else if eq("isla_splice.sail") {
+    } else if str_eq(name, "isla_splice.sail") {
         Some(deficit!(
             "lane-38",
             "Reset/isla-Einstiegspunkte (Treiber-Verdrahtung, sonst trivial)"
         ))
-    } else if eq("map_clauses.sail") {
+    } else if str_eq(name, "map_clauses.sail") {
         Some(deficit!(
             "lane-20",
             "mapping-Klausel __SetConfig (encdec-Abbildung)"
         ))
-    } else if eq("mem.sail") {
+    } else if str_eq(name, "mem.sail") {
         Some(deficit!(
             "lane-29",
             "sail_mem_read/write-Callgraph + forall-Sigs + match-Dispatch (Archsem)"
         ))
-    } else if eq("no_devices.sail") {
+    } else if str_eq(name, "no_devices.sail") {
         Some(deficit!(
             "lane-38",
             "Device-Stub-Funktionen (Treiber-Seite, sonst trivial)"
         ))
-    } else if eq("prelude.sail") {
+    } else if str_eq(name, "prelude.sail") {
         Some(deficit!(
             "lane-18",
             "overload-Operatoren + pure-Externs + type/union/enum (Prelude-Lib)"
         ))
-    } else if eq("reset.sail") {
+    } else if str_eq(name, "reset.sail") {
         Some(deficit!(
             "lane-19",
             "1466 Zeilen Reset-Schreibung vieler Control-Register (Register-Modell)"
         ))
-    } else if eq("stubs.sail") {
+    } else if str_eq(name, "stubs.sail") {
         Some(deficit!(
             "lane-25",
             "105 Stub-Funktionen als Extern-Platzhalter (FFI-Abbildung)"
         ))
-    } else if eq("sysregs.sail") {
+    } else if str_eq(name, "sysregs.sail") {
         Some(deficit!(
             "lane-31",
             "56 handgeschriebene SysReg-read/set-Funktionen (Shard-Folge, autogen ist lane-31-ok)"
         ))
-    } else if eq("sysregs_autogen.sail") {
+    } else if str_eq(name, "sysregs_autogen.sail") {
         Some(shard!("lane-31"))
-    } else if eq("termination_measures.sail") {
+    } else if str_eq(name, "termination_measures.sail") {
         Some(deficit!(
             "lane-26",
             "27 termination_measure-Deklarationen (Mass-Hoheit)"
         ))
-    } else if eq("v8_base.sail") {
+    } else if str_eq(name, "v8_base.sail") {
         Some(shard!("lane-33"))
     } else {
         None
@@ -285,6 +288,21 @@ mod tests {
         assert_eq!(ok, 6);
         assert_eq!(deficits, 20);
         assert_eq!(deficits, deficit_count());
+    }
+
+    #[test]
+    fn const_kontext_ohne_closure_e0015() {
+        // E0015-Regression als Code (E3: wird hier NICHT ausgefuehrt):
+        // `classify`/`str_eq` muessen im const-Kontext aufrufbar sein.
+        // Vor dem Fix scheiterte das an `eq`-Closure in `const fn`.
+        const A: Option<FileStatus> = classify("instrs32.sail");
+        const B: Option<FileStatus> = classify("gibt-es-nicht.sail");
+        const EQ: bool = str_eq("mem.sail", "mem.sail");
+        const NE: bool = str_eq("mem.sail", "fetch.sail");
+        assert!(matches!(A, Some(FileStatus::ShardOk { .. })));
+        assert!(B.is_none());
+        assert!(EQ);
+        assert!(!NE);
     }
 
     #[test]
