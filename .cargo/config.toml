@@ -1,0 +1,3 @@
+# RAM-Schutz (E3): begrenzte Parallelitaet fuer alle Worktrees darunter.
+[build]
+jobs = 4
