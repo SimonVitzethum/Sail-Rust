@@ -11,3 +11,10 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
+
+[dependencies]
+sail-parse = { path = "../sail-parse" }
+sail-lean = { path = "../sail-lean" }
+sail-lake = { path = "../sail-lake" }
+sail-regs = { path = "../sail-regs" }
+sail-prelude = { path = "../sail-prelude" }

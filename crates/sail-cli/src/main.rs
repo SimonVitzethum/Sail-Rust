@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 mod args;
+mod e2e;
 mod memo;
 mod profile;
 
