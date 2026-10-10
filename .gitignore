@@ -1,5 +1,6 @@
 # Rust build artefacts
 target/
+Cargo.lock
 # Incremental / editor noise
 **/*.rs.bk
 .DS_Store
