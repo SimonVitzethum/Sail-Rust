@@ -14,10 +14,12 @@
 #   -h          Hilfe.
 #
 # Verhalten:
-#   - Session existiert noch nicht  -> tmux new-session -d -s SESSION -n FENSTER.
-#   - Session existiert bereits      -> tmux new-window -d -t SESSION -n FENSTER.
+#   - Session existiert noch nicht  -> eigene oneshot-Unit (remain-after-exit) + tmux new-session.
+#   - Session existiert bereits      -> tmux new-window.
 #   - Der Fenster-Befehl lautet: ./scripts/limited-run.sh -m MEM -- <befehl...>
 #     (ohne <befehl...> öffnet das Fenster nur eine Shell).
+#   - "$@" wird als Array durchgereicht, nie re-quotet (ein %q-Join hat -c-Skripte
+#     zerlegt -> Fenster starben instant, Server ohne Fenster beendet sich).
 #
 # Reattach / Bedienung (siehe auch docs/TEST-RIG.md):
 #   tmux attach -t SESSION        # anhaengen
@@ -57,18 +59,16 @@ if [ -z "$WINDOW" ]; then
 fi
 
 if [ "$#" -gt 0 ]; then
-    # Befehl shell-quoted für tmux (sendet exakt ein Kommando pro Fenster).
-    quoted="$(printf ' %q' "$@")"
-    WIN_CMD="./scripts/limited-run.sh -m ${MEM} --${quoted}"
+    HAVE_CMD=1
 else
-    WIN_CMD="$SHELL"
+    HAVE_CMD=0
 fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
     if tmux has-session -t "$SESSION" 2>/dev/null; then
-        echo "dry-run: tmux new-window -d -t ${SESSION} -n ${WINDOW} ${WIN_CMD}"
+        echo "dry-run: tmux new-window -d -t ${SESSION} -n ${WINDOW} [cmd-args: $*]"
     else
-        echo "dry-run: tmux new-session -d -s ${SESSION} -n ${WINDOW} ${WIN_CMD}"
+        echo "dry-run: systemd-run unit tmux-${SESSION} -> tmux new-session -d -s ${SESSION} -n ${WINDOW} [cmd-args: $*]"
     fi
     exit 0
 fi
@@ -78,18 +78,29 @@ if ! command -v tmux >/dev/null 2>&1; then
     exit 1
 fi
 
+# WICHTIG: "$@" wird als Argument-Array durchgereicht, NIE re-quotet (%q-Join hat
+# -c-Skripte zerlegt und Fenster instant gekillt). tmux execvp't Mehrfach-Args direkt.
 if tmux has-session -t "$SESSION" 2>/dev/null; then
-    tmux new-window -d -t "$SESSION" -n "$WINDOW" "$WIN_CMD"
-    echo "tmux-test: Fenster $SESSION:$WINDOW angelegt (cmd: $WIN_CMD)"
+    if [ "$HAVE_CMD" -eq 1 ]; then
+        tmux new-window -d -t "$SESSION" -n "$WINDOW" ./scripts/limited-run.sh -m "$MEM" -- "$@"
+    else
+        tmux new-window -d -t "$SESSION" -n "$WINDOW"
+    fi
+    echo "tmux-test: Fenster $SESSION:$WINDOW angelegt"
 else
-    # WICHTIG: Supervisor-Ansatz (kein forking, kein Scope): die Unit läuft `bash`,
-    # das tmux als Daemon startet und danach per `exec sleep infinity` ewig lebt. Dadurch
-    # bleibt die Unit aktiv, die Cgroup (inkl. MemoryMax) deckt Server + alle Fenster ab, und
-    # nichts hängt vom Lebenszyklus des Aufrufers ab. Verifiziert gegen: direkten Start
-    # (stirbt mit Caller-Scope), Scope-Start (stirbt lautlos), forking-Service (stirbt lautlos).
+    # Eigene oneshot-Unit mit remain-after-exit: überlebt Caller-Scope-Cleanup
+    # (direkt/Scope/forking sterben reproduzierbar). MemoryMax deckt Rig gesamt ab.
+    # Stoppen: systemctl --user stop tmux-$SESSION (killt Cgroup inkl. tmux).
     RIG_UNIT="tmux-${SESSION}"
-    systemd-run --user --unit="$RIG_UNIT" -p MemoryMax=24G -- \
-        bash -c "tmux new-session -d -s \"$SESSION\" -n \"$WINDOW\" $WIN_CMD; exec sleep infinity"
-    echo "tmux-test: Session $SESSION mit Fenster $WINDOW angelegt (cmd: $WIN_CMD, unit: $RIG_UNIT)"
+    if [ "$HAVE_CMD" -eq 1 ]; then
+        # shellcheck disable=SC2086
+        systemd-run --user --unit="$RIG_UNIT" --service-type=oneshot --remain-after-exit \
+            -p MemoryMax=24G -- tmux new-session -d -s "$SESSION" -n "$WINDOW" \
+            ./scripts/limited-run.sh -m "$MEM" -- "$@"
+    else
+        systemd-run --user --unit="$RIG_UNIT" --service-type=oneshot --remain-after-exit \
+            -p MemoryMax=24G -- tmux new-session -d -s "$SESSION" -n "$WINDOW"
+    fi
+    echo "tmux-test: Session $SESSION mit Fenster $WINDOW angelegt (unit: $RIG_UNIT)"
 fi
 echo "tmux-test: Reattach mit: tmux attach -t $SESSION   (Abhaengen: Ctrl-b d)"
