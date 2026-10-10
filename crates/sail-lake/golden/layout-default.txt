@@ -1,0 +1,64 @@
+=== .gitignore ===
+/.lake
+=== lean-toolchain ===
+leanprover/lean4:v4.29.0
+=== lakefile.toml ===
+name = "tiny_arm"
+defaultTargets = ["TinyArm"]
+moreLeanArgs = ["--tstack=400000"]
+
+[[lean_lib]]
+name = "TinyArm"
+leanOptions.weak.linter.style.nameCheck = false
+moreLeancArgs= ["-fbracket-depth=500"]
+
+[[require]]
+name = "Sail"
+git = "https://github.com/rems-project/lean-sail"
+rev = "v6"
+
+=== lake-manifest.json ===
+{
+ "version": "1.1.0",
+ "packagesDir": ".lake/packages",
+ "packages": [],
+ "name": "tiny_arm",
+ "lakeDir": ".lake"}
+
+=== TinyArm/Defs.lean ===
+import Sail
+open PreSail
+
+set_option maxHeartbeats 1_000_000_000
+set_option maxRecDepth 1_000_000
+set_option linter.unusedVariables false
+set_option match.ignoreUnusedAlts true
+
+open Sail
+open Sail.ConcurrencyInterfaceV1
+
+namespace TinyArm
+
+abbrev Register := PEmpty
+abbrev RegisterType : Register -> Type := PEmpty.elim
+
+
+=== TinyArm.lean ===
+import Sail
+import TinyArm.Defs
+
+set_option maxHeartbeats 1_000_000_000
+set_option maxRecDepth 1_000_000
+set_option linter.unusedVariables false
+set_option match.ignoreUnusedAlts true
+
+open Sail
+open Sail.ConcurrencyInterfaceV1
+
+namespace TinyArm
+
+open ConcurrencyInterfaceV1
+
+namespace Functions
+
+

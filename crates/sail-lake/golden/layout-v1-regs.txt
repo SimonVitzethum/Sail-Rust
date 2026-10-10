@@ -1,0 +1,83 @@
+=== .gitignore ===
+/.lake
+=== lean-toolchain ===
+leanprover/lean4:v4.29.0
+=== lakefile.toml ===
+name = "tiny_arm"
+defaultTargets = ["TinyArm"]
+moreLeanArgs = ["--tstack=400000"]
+
+[[lean_lib]]
+name = "TinyArm"
+leanOptions.weak.linter.style.nameCheck = false
+moreLeancArgs= ["-fbracket-depth=500"]
+
+[[require]]
+name = "Sail"
+path = "/opt/lean-sail"
+
+=== lake-manifest.json ===
+{
+ "version": "1.1.0",
+ "packagesDir": ".lake/packages",
+ "packages": [],
+ "name": "tiny_arm",
+ "lakeDir": ".lake"}
+
+=== TinyArm/Defs.lean ===
+import Sail
+open PreSail
+
+set_option maxHeartbeats 1_000_000_000
+set_option maxRecDepth 1_000_000
+set_option linter.unusedVariables false
+set_option match.ignoreUnusedAlts true
+
+open Sail
+open Sail.ConcurrencyInterfaceV1
+
+namespace TinyArm
+
+inductive Register : Type where
+  | x1
+  | x2
+  deriving DecidableEq, Hashable, Repr
+open Register
+
+abbrev RegisterType : Register → Type
+  | .x1 => (BitVec 64)
+  | .x2 => (BitVec 64)
+
+instance : Arch where
+  pa := (BitVec 64)
+  abort := Unit
+  fault := (BitVec 64)
+
+
+abbrev SailM := PreSailM RegisterType trivialChoiceSource exception
+abbrev SailME := PreSailME RegisterType trivialChoiceSource exception
+
+
+instance : Inhabited (RegisterRef RegisterType (BitVec 64)) where
+  default := .Reg x1
+
+=== TinyArm.lean ===
+import Sail
+import TinyArm.Defs
+import Sail.ArmExtras
+
+set_option maxHeartbeats 1_000_000_000
+set_option maxRecDepth 1_000_000
+set_option linter.unusedVariables false
+set_option match.ignoreUnusedAlts true
+
+open Sail
+open Sail.ConcurrencyInterfaceV1
+
+namespace TinyArm
+
+open ConcurrencyInterfaceV1
+
+namespace Functions
+
+

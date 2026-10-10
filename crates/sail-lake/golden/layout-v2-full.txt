@@ -1,0 +1,125 @@
+=== .gitignore ===
+/.lake
+=== lean-toolchain ===
+leanprover/lean4:v4.29.0
+=== lakefile.toml ===
+name = "tiny_arm"
+defaultTargets = ["TinyArm"]
+moreLeanArgs = ["--tstack=400000"]
+
+[[lean_lib]]
+name = "TinyArm"
+leanOptions.weak.linter.style.nameCheck = false
+moreLeancArgs= ["-fbracket-depth=500"]
+
+[[require]]
+name = "Sail"
+git = "https://github.com/rems-project/lean-sail"
+rev = "v6"
+
+
+[[require]]
+name = "mathlib"
+git = "https://github.com/leanprover-community/mathlib4-nightly-testing"
+rev = "v4.29.0"
+
+
+[[lean_exe]]
+name = "run"
+root = "TinyArm"
+
+=== lake-manifest.json ===
+{
+ "version": "1.1.0",
+ "packagesDir": ".lake/packages",
+ "packages": [],
+ "name": "tiny_arm",
+ "lakeDir": ".lake"}
+
+=== TinyArm/Defs.lean ===
+import Sail
+open PreSail
+
+set_option maxHeartbeats 1_000_000_000
+set_option maxRecDepth 1_000_000
+set_option linter.unusedVariables false
+set_option match.ignoreUnusedAlts true
+
+open Sail
+open Sail.ArchSem
+
+noncomputable section
+namespace TinyArm
+
+inductive Register : Type where
+  | x1
+  | x2
+  | v0
+  deriving DecidableEq, Hashable, Repr
+open Register
+
+abbrev RegisterType : Register → Type
+  | .x1 => (BitVec 64)
+  | .x2 => (BitVec 64)
+  | .v0 => (BitVec 128)
+
+@[reducible]
+instance : Arch where
+  addr_size := 64
+  addr_space := Unit
+  CHERI := false
+  cap_size_log := 0
+  register := Register
+  register_type := RegisterType
+  mem_acc := Unit
+  mem_acc_is_explicit := fun _ => false
+  mem_acc_is_ifetch := fun _ => false
+  mem_acc_is_ttw := fun _ => false
+  mem_acc_is_relaxed := fun _ => false
+  mem_acc_is_rel_acq_rcpc := fun _ => false
+  mem_acc_is_rel_acq_rcsc := fun _ => false
+  mem_acc_is_standalone := fun _ => false
+  mem_acc_is_exclusive := fun _ => false
+  mem_acc_is_atomic_rmw := fun _ => false
+  trans_start := Unit
+  trans_end := Unit
+  abort := Unit
+  barrier := Unit
+  cache_op := Unit
+  tlbi := Unit
+  exn := Unit
+  sys_reg_id := Unit
+
+abbrev exception := Unit
+
+abbrev SailM := PreSailM exception
+abbrev SailME := PreSailME exception
+
+
+instance : Inhabited (RegisterRef (BitVec 64)) where
+  default := .Reg x1
+instance : Inhabited (RegisterRef (BitVec 128)) where
+  default := .Reg v0
+
+=== TinyArm.lean ===
+import Sail
+import TinyArm.Defs
+import TinyArm.FakeReal
+import TinyArm.SpecializationArchSem
+
+set_option maxHeartbeats 1_000_000_000
+set_option maxRecDepth 1_000_000
+set_option linter.unusedVariables false
+set_option match.ignoreUnusedAlts true
+
+open Sail
+open Sail.ArchSem
+
+noncomputable section
+namespace TinyArm
+
+open ArchSem
+
+namespace Functions
+
+
