@@ -1,0 +1,11 @@
+# target/-Verzeichnisse (jede Lane baut lokal, nichts davon wird committet)
+/target/
+**/target/
+
+# Cargo.lock wird nie committet (Library-Workspace; reproduciblity via CI-Pins/MSRV)
+Cargo.lock
+**/Cargo.lock
+
+# Inkrementelle / lokale Artefakte
+**/*.d
+.cargo-ok

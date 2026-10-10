@@ -1,3 +1,6 @@
 [workspace]
-members = []
+members = ["crates/sail-release-meta"]
 resolver = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
