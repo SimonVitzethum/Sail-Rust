@@ -39,6 +39,7 @@ members = [
     "crates/sail-arena",
     "crates/sail-smoke",
     "crates/sail-release-meta",
+    "crates/sail-ooc",
 ]
 resolver = "2"
 
