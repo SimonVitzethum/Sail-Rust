@@ -30,6 +30,9 @@ use crate::span::{ParseError, Span};
 /// `sail/src/lib/parser.mly` (skeleton subset). Deliberately excludes
 /// `and` (extra function/mapping clauses, cf. `map_clauses.sail`) and
 /// expression keywords (`if`, `then`, `else`, `match`, `foreach` bodies).
+/// Includes `end` (scattered-block terminator, `End id` →
+/// `SD_end` in the OCaml grammar): a line starting with `end` at top
+/// level only ever closes a `scattered` block.
 const STARTERS: &[&str] = &[
     "val",
     "function",
@@ -57,6 +60,7 @@ const STARTERS: &[&str] = &[
     "termination",
     "termination_measure",
     "clause",
+    "end",
 ];
 
 fn is_starter(word: &str) -> bool {
@@ -157,7 +161,10 @@ impl<'a> Scanner<'a> {
     }
 
     /// Skip one comment starting at the cursor (caller checked `//` or `/*`).
-    /// Block comments are non-nesting, like the OCaml lexer.
+    /// Block comments nest, like the OCaml lexer (`block_comment ...
+    /// depth` in `sail/src/lib/lexer.mll`): every `/*` inside needs its
+    /// own `*/`. Model files rely on this (commented-out code containing
+    /// `/* ... */`, e.g. `aarch64_small` register aliases).
     fn skip_comment(&mut self) -> Result<(), ParseError> {
         if self.peek() == Some(b'/') && self.peek_at(1) == Some(b'/') {
             while matches!(self.peek(), Some(c) if c != b'\n') {
@@ -166,12 +173,19 @@ impl<'a> Scanner<'a> {
             Ok(())
         } else if self.peek() == Some(b'/') && self.peek_at(1) == Some(b'*') {
             let from = self.cur();
-            self.bump(2);
+            let mut depth: u32 = 0;
             loop {
                 match (self.peek(), self.peek_at(1)) {
-                    (Some(b'*'), Some(b'/')) => {
+                    (Some(b'/'), Some(b'*')) => {
+                        depth += 1;
                         self.bump(2);
-                        return Ok(());
+                    }
+                    (Some(b'*'), Some(b'/')) => {
+                        depth -= 1;
+                        self.bump(2);
+                        if depth == 0 {
+                            return Ok(());
+                        }
                     }
                     (Some(_), _) => self.bump(1),
                     (None, _) => {
@@ -709,8 +723,9 @@ fn parse_keyword_def(
                 raw[1..raw.len() - 1].to_owned()
             } else {
                 let (head, end_kind) = sc.capture_header()?;
-                // Name = first ident in header.
-                let nm = first_ident(&head).unwrap_or_default();
+                // Name = first ident in header (skipping a leading
+                // `operator` keyword: `val operator ^^ = ...` names `^^`).
+                let nm = clause_name(&head);
                 return Ok((Def::Val { name: nm, sig_src: finish_val_sig(sc, head, end_kind)? }, sc.cur()));
             };
             let (head, end_kind) = sc.capture_header()?;
@@ -722,7 +737,12 @@ fn parse_keyword_def(
         "function" | "mapping" | "impl" => {
             sc.skip_trivia_all()?;
             let (head, end_kind) = sc.capture_header()?;
-            let name = first_ident(&head).unwrap_or_default();
+            // `function clause NAME ...` / `mapping clause NAME ...` are
+            // scattered clauses (`Function_ Clause funcl` → `SD_funcl`,
+            // `Mapping Clause ...` → `SD_mapcl` in `parser.mly`), not
+            // fresh definitions. Keep the raw head, fix up the name.
+            let clause = head.split_whitespace().next() == Some("clause");
+            let name = clause_name(&head);
             let (head_src, mut body_src) = finish_eq_body(sc, head, end_kind)?;
             // Extra clauses: `and pat = body` (funcls2/mapcls in the OCaml
             // grammar) continue the same definition.
@@ -757,6 +777,10 @@ fn parse_keyword_def(
                 }
             }
             let def = match kw {
+                // Scattered clauses keep their own node (Lane 11 groups
+                // them by name); plain defs keep Fundef/Mapdef/Impl.
+                "function" if clause => Def::Scattered { head_src, body_src },
+                "mapping" if clause => Def::Scattered { head_src, body_src },
                 "function" => Def::Fundef { name, head_src, body_src },
                 "mapping" => Def::Mapdef { name, head_src, body_src },
                 _ => Def::Impl { name, head_src, body_src },
@@ -799,15 +823,19 @@ fn parse_keyword_def(
         "overload" => {
             sc.skip_trivia_all()?;
             let (head, end_kind) = sc.capture_header()?;
-            let name = first_ident(&head).unwrap_or_default();
+            let name = clause_name(&head);
             let (head_src, body_src) = finish_eq_body(sc, head, end_kind)?;
             let ids_src = if body_src.is_empty() { head_src } else { body_src };
             let ids = idents_in(&ids_src);
             Ok((Def::Overload { name, ids }, sc.cur()))
         }
         "infix" | "infixl" | "infixr" => {
+            // Rest-of-line capture (never stop at `=`): operators are
+            // symbolic (`infix 4 >=_s`), and `capture_header` would split
+            // at the `=` inside the operator. Matches the OCaml lexer,
+            // which lexes `infix <digit> <operator>` as one token.
             sc.skip_trivia_all()?;
-            let (head, end_kind) = sc.capture_header()?;
+            let (head, end_kind) = sc.capture_header_inner(false)?;
             let _ = end_kind;
             let mut it = head.split_whitespace();
             let level = it.next().unwrap_or("").to_owned();
@@ -844,6 +872,16 @@ fn parse_keyword_def(
                 _ => Def::Other { keyword: kw.to_owned(), src },
             };
             Ok((def, sc.cur()))
+        }
+        "end" => {
+            // Scattered-block terminator (`End id` → `SD_end` in
+            // `parser.mly`): `end NAME` on its own line. Rest-of-line
+            // capture; body is always empty.
+            sc.skip_trivia_all()?;
+            let (head, end_kind) = sc.capture_header_inner(false)?;
+            let _ = end_kind;
+            let head_src = format!("end {head}").trim_end().to_owned();
+            Ok((Def::Scattered { head_src, body_src: String::new() }, sc.cur()))
         }
         _ => {
             // Unreachable: caller checks is_starter. Kept for robustness.
@@ -950,9 +988,35 @@ fn to_byte_span(sc: &Scanner<'_>, cur: Cur) -> Span {
     sc.span(cur, cur)
 }
 
+/// Definition name from a header: skips a leading `clause` (scattered
+/// clause, cf. `Function_ Clause funcl` in `parser.mly`) or `operator`
+/// keyword (the OCaml lexer turns `operator` into an `Op` token, so
+/// `val operator ^^` / `overload operator <<` name `^^` / `<<`).
+/// Symbolic names (`^^`, `>=_s`) are not identifier-like, so fall back
+/// to the raw first whitespace token.
+fn clause_name(head: &str) -> String {
+    // Strip exactly one leading `clause`/`operator` keyword (exact
+    // first token, so a function literally named `clause` keeps it).
+    let rest = match head.split_whitespace().next() {
+        Some("clause") | Some("operator") => {
+            let i = head.find(|c: char| !c.is_whitespace()).unwrap_or(0);
+            let kwlen = head[i..].find(|c: char| c.is_whitespace()).unwrap_or(head[i..].len());
+            head[i + kwlen..].trim_start()
+        }
+        _ => head,
+    };
+    let leading = rest.split_whitespace().next().unwrap_or("");
+    // Symbolic operator names (`^^`, `<<`, `>=_s`) are not
+    // identifier-like; keep them raw.
+    if leading.bytes().next().is_some_and(is_ident_start) {
+        first_ident(rest).unwrap_or_default()
+    } else {
+        leading.to_owned()
+    }
+}
+
 /// First identifier-like word in `s` (skips punctuation).
-fn first_ident(s: &str) -> Option<String> {
-    let b = s.as_bytes();
+fn first_ident(s: &str) -> Option<String> {    let b = s.as_bytes();
     let mut i = 0;
     while i < b.len() {
         if is_ident_start(b[i]) {
