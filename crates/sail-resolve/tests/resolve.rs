@@ -4,9 +4,11 @@
 //! with a `SimpleInterner` for names; all spans are `DUMMY`.
 
 use sail_ast::{
-    Ast, DecSpec, Def, DefKind, Interner, Mapcl, Name, Node, NodeId, SimpleInterner, Span,
-    TAnnotOpt, Typ, TypKind, TypSchm, TypeDefKind, TypeUnion, ValSpec,
+    Ast, ConstraintKind, DecSpec, Def, DefKind, ExpKind, Fixity, Funcl, FunclSet, Interner, Loop,
+    Mapcl, Name, Node, NodeId, Order, PExp, PExpKind, PatKind, RecOpt, ScatteredDef,
+    SimpleInterner, Span, TAnnotOpt, Typ, TypKind, TypSchm, TypeDefKind, TypeUnion, ValSpec,
 };
+use sail_resolve::ResolveErrorKind;
 use sail_resolve::resolve::resolve;
 
 fn nm(it: &mut SimpleInterner, text: &str) -> Name {
@@ -205,4 +207,329 @@ fn env_is_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<sail_resolve::Env>();
     assert_send_sync::<sail_resolve::resolve::ResolvedProgram>();
+}
+
+// --- Lane 78: full-resolver coverage (code only, E3: no run) ---------------
+
+fn pat_id(it: &mut SimpleInterner, text: &str) -> sail_ast::Pat {
+    Node::dummy(PatKind::Id(nm(it, text)))
+}
+
+fn arm_over(it: &mut SimpleInterner, binder: Option<&str>) -> PExp {
+    let pat = match binder {
+        Some(b) => pat_id(it, b),
+        None => Node::dummy(PatKind::Wild),
+    };
+    PExp {
+        id: NodeId::DUMMY,
+        span: Span::DUMMY,
+        kind: PExpKind::PatExp {
+            pat,
+            body: Node::dummy(ExpKind::Undef),
+        },
+    }
+}
+
+fn funcl(it: &mut SimpleInterner, fname: &str, binder: Option<&str>) -> Funcl {
+    Funcl {
+        id: NodeId::DUMMY,
+        span: Span::DUMMY,
+        name: nm(it, fname),
+        arm: arm_over(it, binder),
+    }
+}
+
+fn fundef(it: &mut SimpleInterner, fname: &str, binder: Option<&str>) -> Def {
+    Node::dummy(DefKind::Fundef {
+        rec: RecOpt::NonRec,
+        annot: TAnnotOpt::None,
+        funcls: vec![funcl(it, fname, binder)],
+    })
+}
+
+fn scattered_open(it: &mut SimpleInterner, which: &str, name: &str) -> Def {
+    let n = nm(it, name);
+    let s = match which {
+        "function" => ScatteredDef::Function { name: n, annot: TAnnotOpt::None },
+        "mapping" => ScatteredDef::Mapping { name: n, annot: TAnnotOpt::None },
+        "variant" => ScatteredDef::Variant { name: n, quant: Vec::new() },
+        _ => ScatteredDef::Enum(n),
+    };
+    Node::dummy(DefKind::Scattered(s))
+}
+
+#[test]
+fn fundef_binds_function_with_rec_flag_and_clause_count() {
+    let mut it = SimpleInterner::new();
+    let rec_def = Node::dummy(DefKind::Fundef {
+        rec: RecOpt::Rec,
+        annot: TAnnotOpt::None,
+        funcls: vec![funcl(&mut it, "loop", Some("x")), funcl(&mut it, "loop", None)],
+    });
+    let ast = Ast::new(vec![rec_def, fundef(&mut it, "plain", None)]);
+    let r = resolve(&ast, &it);
+    assert!(r.errors.is_empty(), " {:?}", r.errors);
+    let loop_e = r.env.lookup_function("loop").expect("loop bound");
+    assert!(loop_e.is_rec);
+    assert_eq!(loop_e.clauses, 2);
+    let plain = r.env.lookup_function("plain").expect("plain bound");
+    assert!(!plain.is_rec);
+    assert_eq!(plain.clauses, 1);
+}
+
+#[test]
+fn duplicate_function_is_error() {
+    let mut it = SimpleInterner::new();
+    let ast = Ast::new(vec![fundef(&mut it, "f", None), fundef(&mut it, "f", None)]);
+    let r = resolve(&ast, &it);
+    assert_eq!(r.errors.len(), 1);
+    assert_eq!(r.errors[0].kind, ResolveErrorKind::DuplicateFunction);
+}
+
+#[test]
+fn intra_clause_duplicate_pattern_is_error() {
+    let mut it = SimpleInterner::new();
+    let dup_pat: sail_ast::Pat = Node::dummy(PatKind::Tuple(vec![
+        pat_id(&mut it, "x"),
+        pat_id(&mut it, "x"),
+    ]));
+    let arm = PExp {
+        id: NodeId::DUMMY,
+        span: Span::DUMMY,
+        kind: PExpKind::PatExp {
+            pat: dup_pat,
+            body: Node::dummy(ExpKind::Undef),
+        },
+    };
+    let def = Node::dummy(DefKind::Fundef {
+        rec: RecOpt::NonRec,
+        annot: TAnnotOpt::None,
+        funcls: vec![Funcl {
+            id: NodeId::DUMMY,
+            span: Span::DUMMY,
+            name: nm(&mut it, "f"),
+            arm,
+        }],
+    });
+    let r = resolve(&Ast::new(vec![def]), &it);
+    assert_eq!(r.errors.len(), 1);
+    assert_eq!(r.errors[0].kind, ResolveErrorKind::DuplicateValue);
+}
+
+#[test]
+fn overload_targets_must_exist_order_independent() {
+    // Overload listed *before* its targets still resolves.
+    let mut it = SimpleInterner::new();
+    let over = Node::dummy(DefKind::Overload {
+        name: nm(&mut it, "o"),
+        overloads: vec![nm(&mut it, "f"), nm(&mut it, "g")],
+    });
+    let ast = Ast::new(vec![over, valspec_def(&mut it, "f"), fundef(&mut it, "g", None)]);
+    let r = resolve(&ast, &it);
+    assert!(r.errors.is_empty(), " {:?}", r.errors);
+    assert_eq!(r.env.lookup_overload("o").map(|o| o.targets.len()), Some(2));
+
+    let mut it2 = SimpleInterner::new();
+    let bad = Node::dummy(DefKind::Overload {
+        name: nm(&mut it2, "o"),
+        overloads: vec![nm(&mut it2, "missing")],
+    });
+    let r2 = resolve(&Ast::new(vec![bad]), &it2);
+    assert_eq!(r2.errors.len(), 1);
+    assert_eq!(r2.errors[0].kind, ResolveErrorKind::UnknownOverloadTarget);
+    assert_eq!(r2.errors[0].name, "missing");
+}
+
+#[test]
+fn scattered_open_clause_impl_end_roundtrip() {
+    let mut it = SimpleInterner::new();
+    let ast = Ast::new(vec![
+        scattered_open(&mut it, "function", "f"),
+        Node::dummy(DefKind::Scattered(ScatteredDef::Funcl(funcl(&mut it, "f", Some(
+            "x",
+        ))))),
+        Node::dummy(DefKind::Impl(funcl(&mut it, "f", None))),
+        Node::dummy(DefKind::Scattered(ScatteredDef::End(nm(&mut it, "f")))),
+    ]);
+    let r = resolve(&ast, &it);
+    assert!(r.errors.is_empty(), " {:?}", r.errors);
+    let open = r.env.lookup_scattered(sail_resolve::ScatteredNamespace::Function, "f");
+    assert!(open.is_some());
+    assert!(open.map(|e| e.closed).unwrap_or(false));
+    assert_eq!(r.env.impls.len(), 1);
+}
+
+#[test]
+fn dangling_impl_clause_end_are_errors() {
+    let mut it = SimpleInterner::new();
+    let ast = Ast::new(vec![
+        Node::dummy(DefKind::Impl(funcl(&mut it, "nope", None))),
+        Node::dummy(DefKind::Scattered(ScatteredDef::Funcl(funcl(&mut it, "orphan", None)))),
+        Node::dummy(DefKind::Scattered(ScatteredDef::End(nm(&mut it, "ghost")))),
+    ]);
+    let r = resolve(&ast, &it);
+    assert_eq!(r.errors.len(), 3, " {:?}", r.errors);
+    assert_eq!(r.errors[0].kind, ResolveErrorKind::DanglingImpl);
+    assert_eq!(r.errors[1].kind, ResolveErrorKind::DanglingScatteredClause);
+    assert_eq!(r.errors[2].kind, ResolveErrorKind::DanglingScatteredEnd);
+}
+
+#[test]
+fn scattered_unioncl_ctor_collides_like_typedef_ctor() {
+    let mut it = SimpleInterner::new();
+    let unioncl = TypeUnion {
+        id: NodeId::DUMMY,
+        span: Span::DUMMY,
+        typ: unknown_typ(),
+        ctor: nm(&mut it, "U"),
+    };
+    let ast = Ast::new(vec![
+        struct_def(&mut it, "U"),
+        scattered_open(&mut it, "variant", "V"),
+        Node::dummy(DefKind::Scattered(ScatteredDef::Unioncl {
+            name: nm(&mut it, "V"),
+            union: unioncl,
+        })),
+    ]);
+    let r = resolve(&ast, &it);
+    assert!(r.errors.is_empty(), " {:?}", r.errors);
+    assert_eq!(r.warnings.len(), 1);
+    assert_eq!(r.ctor_renames.get("U"), Some(&"U_ctor".to_owned()));
+}
+
+#[test]
+fn scattered_enumcl_duplicate_across_owners_renamed() {
+    let mut it = SimpleInterner::new();
+    let ast = Ast::new(vec![
+        scattered_open(&mut it, "enum", "A"),
+        scattered_open(&mut it, "enum", "B"),
+        Node::dummy(DefKind::Scattered(ScatteredDef::Enumcl {
+            enum_name: nm(&mut it, "A"),
+            member: nm(&mut it, "Same"),
+        })),
+        Node::dummy(DefKind::Scattered(ScatteredDef::Enumcl {
+            enum_name: nm(&mut it, "B"),
+            member: nm(&mut it, "Same"),
+        })),
+    ]);
+    let r = resolve(&ast, &it);
+    assert_eq!(r.errors.len(), 1);
+    assert_eq!(r.errors[0].kind, ResolveErrorKind::DuplicateCtor);
+    assert_eq!(r.ctor_renames.get("Same"), Some(&"Same_ctor".to_owned()));
+}
+
+#[test]
+fn top_level_let_binds_values() {
+    let mut it = SimpleInterner::new();
+    let ast = Ast::new(vec![
+        Node::dummy(DefKind::Let {
+            pat: pat_id(&mut it, "v"),
+            exp: Node::dummy(ExpKind::Undef),
+        }),
+        Node::dummy(DefKind::Let {
+            pat: pat_id(&mut it, "v"),
+            exp: Node::dummy(ExpKind::Undef),
+        }),
+    ]);
+    let r = resolve(&ast, &it);
+    assert_eq!(r.errors.len(), 1);
+    assert_eq!(r.errors[0].kind, ResolveErrorKind::DuplicateValue);
+    assert!(r.env.lookup_value("v").is_some());
+}
+
+#[test]
+fn meta_defs_recorded_without_errors() {
+    let mut it = SimpleInterner::new();
+    let ast = Ast::new(vec![
+        Node::dummy(DefKind::Fixity {
+            fixity: Fixity::InfixL,
+            level: "6".to_owned(),
+            id: nm(&mut it, "++"),
+        }),
+        Node::dummy(DefKind::Default(Order::Inc)),
+        Node::dummy(DefKind::Pragma {
+            key: "file_start".to_owned(),
+            payload: "mem.sail".to_owned(),
+        }),
+        Node::dummy(DefKind::Outcome {
+            name: nm(&mut it, "outcome"),
+            typschm: TypSchm { quant: Vec::new(), typ: unknown_typ() },
+            quant: Vec::new(),
+        }),
+        Node::dummy(DefKind::Instantiation {
+            name: nm(&mut it, "inst"),
+            substs: Vec::new(),
+        }),
+        Node::dummy(DefKind::Measure {
+            name: nm(&mut it, "m"),
+            pat: Node::dummy(PatKind::Wild),
+            exp: Node::dummy(ExpKind::Undef),
+        }),
+        Node::dummy(DefKind::LoopMeasures {
+            name: nm(&mut it, "lm"),
+            measures: vec![(Loop::While, Node::dummy(ExpKind::Undef))],
+        }),
+        Node::dummy(DefKind::InternalMutrec(vec![FunclSet {
+            rec: RecOpt::NonRec,
+            annot: TAnnotOpt::None,
+            funcls: vec![funcl(&mut it, "mr", None)],
+        }])),
+        Node::dummy(DefKind::Constraint(Node::dummy(ConstraintKind::True))),
+    ]);
+    let r = resolve(&ast, &it);
+    assert!(r.errors.is_empty(), " {:?}", r.errors);
+    assert!(r.env.lookup_fixity("++").is_some());
+    assert!(r.env.default.is_some());
+    assert_eq!(r.env.pragmas.len(), 1);
+    assert!(r.env.lookup_outcome("outcome").is_some());
+    assert!(r.env.lookup_instantiation("inst").is_some());
+    assert!(r.env.lookup_measure("m").is_some());
+    assert!(r.env.lookup_measure("lm").is_some());
+    assert!(r.env.lookup_function("mr").is_some());
+    assert_eq!(r.env.mutrec_groups, 1);
+    assert_eq!(r.env.constraints.len(), 1);
+}
+
+#[test]
+fn duplicate_default_is_error() {
+    let mut it = SimpleInterner::new();
+    let ast = Ast::new(vec![
+        Node::dummy(DefKind::Default(Order::Inc)),
+        Node::dummy(DefKind::Default(Order::Dec)),
+    ]);
+    let r = resolve(&ast, &it);
+    assert_eq!(r.errors.len(), 1);
+    assert_eq!(r.errors[0].kind, ResolveErrorKind::DuplicateDefault);
+}
+
+#[test]
+fn namespaces_stay_separate_across_all_kinds() {
+    let mut it = SimpleInterner::new();
+    let ast = Ast::new(vec![
+        struct_def(&mut it, "n"),
+        valspec_def(&mut it, "n"),
+        fundef(&mut it, "n", None),
+        register_def(&mut it, "n"),
+        mapping_def(&mut it, "n"),
+        Node::dummy(DefKind::Let {
+            pat: pat_id(&mut it, "n"),
+            exp: Node::dummy(ExpKind::Undef),
+        }),
+    ]);
+    let r = resolve(&ast, &it);
+    assert!(r.errors.is_empty(), " {:?}", r.errors);
+}
+
+#[test]
+fn pat_names_skips_struct_references() {
+    let mut it = SimpleInterner::new();
+    let field_name = nm(&mut it, "field");
+    let pat: sail_ast::Pat = Node::dummy(PatKind::Struct {
+        name: sail_ast::StructName::Id(nm(&mut it, "SomeStruct")),
+        fields: vec![(field_name, pat_id(&mut it, "x"))],
+        wildcard: false,
+    });
+    let names = sail_resolve::resolve::pat_names(&pat, &it);
+    assert_eq!(names.len(), 1);
+    assert_eq!(names[0].0, "x");
 }
