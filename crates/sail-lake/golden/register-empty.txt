@@ -1,0 +1,3 @@
+abbrev Register := PEmpty
+abbrev RegisterType : Register -> Type := PEmpty.elim
+

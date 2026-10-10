@@ -1,0 +1,22 @@
+inductive Register : Type where
+  | x1
+  | x2
+  deriving DecidableEq, Hashable, Repr
+open Register
+
+abbrev RegisterType : Register → Type
+  | .x1 => (BitVec 64)
+  | .x2 => (BitVec 64)
+
+instance : Arch where
+  pa := (BitVec 64)
+  abort := Unit
+  fault := (BitVec 64)
+
+
+abbrev SailM := PreSailM RegisterType trivialChoiceSource exception
+abbrev SailME := PreSailME RegisterType trivialChoiceSource exception
+
+
+instance : Inhabited (RegisterRef RegisterType (BitVec 64)) where
+  default := .Reg x1
