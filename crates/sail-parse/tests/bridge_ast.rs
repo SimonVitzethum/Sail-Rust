@@ -2,7 +2,8 @@
 //!
 //! Fixture-Parität zu `tests/parse_fixtures.rs`: gleiche Dateien, jetzt auf
 //! `sail_ast`-Knoten (`Val`/`Fundef`/`Mapdef`/`Scattered` + Meta-Defs),
-//! Shard-Marker erhalten, Rest verlustfrei in `deferred`, JSON-Roundtrip.
+//! Shard-Marker erhalten, Rümpfe als Skelett auf `sail-ast`, nur `Other`
+//! noch in `deferred`, JSON-Roundtrip.
 
 use sail_ast::{Ast, DefKind, Interner as _, Order, ScatteredDef};
 use sail_parse::{bridge_file, bridge_parsed, parse_file};
@@ -196,12 +197,25 @@ fn rest_is_lossless_deferred_and_json_roundtrips() {
     let src = fixture("registers_types.sail");
     let parsed = parse_file("registers_types.sail", &src).unwrap();
     let out = bridge_parsed(&parsed);
-    // Typ-/Register-Defs brauchen die Vollgrammatik → deferred, nicht verloren.
-    assert!(!out.deferred.is_empty());
-    assert!(out.deferred.iter().any(|d| d.def.kind() == "type"));
-    assert!(out.deferred.iter().any(|d| d.def.kind() == "register"));
-    // Nichts davon liegt doppelt auf sail-ast (nur Val/Fundef/Mapdef/Scattered
-    // + Meta-Defs wurden gebrückt).
+    // Lane 110: Typ-/Register-Rümpfe landen als Skelett auf `sail-ast`
+    // (echte Namen, `Unknown`-Rümpfe, Rohtext im Sidecar); `deferred`
+    // bleibt nur für wirklich Unbekanntes — das Fixture hat keines.
+    assert!(out.deferred.is_empty(), "deferred: {:?}", out.deferred);
+    let types: Vec<_> = out
+        .ast
+        .defs
+        .iter()
+        .filter_map(|d| match &d.kind {
+            DefKind::Type(t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(types.len(), 3, "bitfield + enum + struct");
+    assert!(out.ast.defs.iter().any(|d| matches!(
+        d.kind,
+        DefKind::Register(_)
+    )));
+    // Nichts geht verloren: gebrückt + deferred = geparst.
     let bridged = out.ast.defs.len() + out.deferred.len();
     assert_eq!(bridged, parsed.defs.len());
     for u in &out.unparsed {

@@ -25,7 +25,7 @@ Per Lane-77-Spec („falls noch Skelett: gegen Schnittstelle programmieren +
 |---|---|---|
 | `parse_typ / parse_exp / parse_pat / parse_def` | `src/real.rs` → `sail_grammar::parse_*` → `src/convert.rs` → `sail-ast` | Schnittstelle verdrahtet; Fehler ehrlich mit Span (`FileId(0)`, `[0, len)`), nie Fake-Knoten |
 | `RealParser` (Batch-Fragmente, geteilter Interner) | dto. | dto. |
-| `parse_file_real(path, src) → BridgeOut` | Mini-AST-Split (Spans!) + `let`/`register`/`constraint` über die neuen Einstiege, Rest via `bridge` | Datei-Ebene läuft heute: `let`/`register`/`constraint` parken in `deferred` (Grammatik-Skelett), alles andere wie bisher |
+| `parse_file_real(path, src) → BridgeOut` | Mini-AST-Split (Spans!) + `let`/`register`/`constraint`/`type`/`measure`/`outcome`/`instantiation` über die neuen Einstiege (Grammatik zuerst, Brücken-Skelett als Fallback), Rest via `bridge` | Datei-Ebene läuft heute: ohne Tabellen Skelett + Sidecar (Lane 110), mit Tabellen echt; `deferred` nur noch `Other` |
 | `convert.rs`: ~alle `sail-grammar::ast`-Varianten → `sail-ast` | total gegen die heutige `ast.rs`-Form | kompiliert gegen die Schnittstelle; aktiv ab Tabellen-Generierung |
 
 `BridgeOut`-Form (`ast` + `interner` + `files` + `unparsed` + `deferred`)
@@ -81,13 +81,19 @@ Bewusste `Err`-Fälle (Fehler mit Span statt erfundener Semantik):
 Alle Knoten erhalten den Fragment-Span (Grammatik-AST ohne Locations);
 Namen via Byte-Heuristik (`is_operator`) wie die Brücke.
 
-## 5. Deferred-Gründe in `parse_file_real`
+## 5. Deferred-Gründe in `parse_file_real` (Lane 110)
 
-- `Type / Measure / Outcome / Instantiation / Other`: Mini-AST wirft
-  Schlüssel-Header-Infos weg (Type-Keyword unter `type/struct/enum/…`,
-  Header bei nichtleerem Body), Rekonstruktion wäre Ratespiel → `deferred`.
-- `Let / Register / Constraint`: heute `deferred` (Skelett), nach
-  Tabellen-Generierung echt (keine Codeänderung nötig).
+- `Type / Measure / Outcome / Instantiation`: Mini-AST behält
+  Schlüssel-Header-Infos (`Def::Type` trägt `keyword` + `head_src`,
+  Measure/Outcome/Instantiation den Voll-Rumpf nach Schlüsselwort);
+  `parse_file_real` rekonstruiert daraus den Volltext
+  (`type HEAD [= BODY]`, `termination_measure SRC`, `outcome SRC`,
+  `instantiation SRC`) und senkt über `parse_def_src` echt — Fehler fallen
+  auf das Brücken-Skelett zurück (echte Namen, `Unknown`/`Wild`/`Undef`,
+  Rohtext im `unparsed`-Sidecar), nie `deferred`.
+- `Let / Register / Constraint`: nach Tabellen-Generierung echt über die
+  Fragment-Konverter (keine Codeänderung nötig), bis dahin Brücken-Skelett.
+- `deferred` bleibt nur für wirklich Unbekanntes (`Other`, z.B. `mutual`).
 
 ## 6. Flip-Checkliste (Tabellen landen)
 

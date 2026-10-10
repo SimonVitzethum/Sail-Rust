@@ -21,11 +21,14 @@ verlustfrei in `BridgeOut::deferred`. Namens-Dispatch via `sail-lex`
 `ExpKind::Undef`, leere `Mapdef`-Klauseln statt Fake-Klauseln.
 Gebrückt: `Val`, `Fundef`, `Mapdef`, `Impl`, `Scattered` (Function/Funcl/
 Mapping/Mapcl/Enum/Variant/End, `union`→`Variant`, bare `clause` per
-`<->`-Heuristik), `Fixity`, `Overload`, `Default(Order)`, `Pragma`.
-Offen (brauchen Lane 02/17-Vollgrammatik): `Type`, `Let`, `Constraint`,
-`Register`, `Measure`, `Outcome`, `Instantiation`, `Other` sowie alle
-`Typschm`/`Exp`/`Pat`/`Mapcl`-Inhalte. Tests: `tests/bridge_ast.rs`
-(Code, kein Run per E3).
+`<->`-Heuristik), `Fixity`, `Overload`, `Default(Order)`, `Pragma` sowie
+seit Lane 110 die Rumpf-Skelette `Type` (per `keyword`), `Let`,
+`Constraint` (`True`-Platzhalter), `Register` (Name + Init-Präsenz),
+`Measure`/`LoopMeasures` (per Top-Level-`=`), `Outcome`,
+`Instantiation` (`Id = Id`-Substs abgelesen). `deferred` nur noch für
+`Other`. Offen (brauchen Lane 02/17-Vollgrammatik): alle echten
+`Typschm`/`Exp`/`Pat`/`Mapcl`-Inhalte. Tests: `tests/bridge_ast.rs`,
+`tests/bridge_bodies.rs` (Code, kein Run per E3).
 
 Stand: Lane 01 (`sail-ast`) ist noch nicht gelandet (Branch `lane/01-ast-core`
 ohne Commits). `sail-parse` definiert deshalb lokale Minimal-Typen in
@@ -57,7 +60,7 @@ damit `sail-parse` migrieren kann.
 | `Def::Val { name, sig_src }` | `DEF_val` (val_spec, voll getypt) |
 | `Def::Fundef { name, head_src, body_src }` | `DEF_fundef` (fundef + funcls) |
 | `Def::Mapdef`, `Def::Impl` | `DEF_mapdef`, `DEF_impl` |
-| `Def::Type { name, body_src }` | `DEF_type` (type_def: abbrev/record/enum/...) |
+| `Def::Type { name, keyword, head_src, body_src }` | `DEF_type` (type_def: abbrev/record/enum/...; Lane 110: `keyword` wählt die Sorte, Skelett-Inhalte + `unparsed`-Rohtext) |
 | `Def::Let`, `Def::Constraint` | `DEF_let`, `DEF_constraint` |
 | `Def::Overload { name, ids }` | `DEF_overload` |
 | `Def::Fixity { prec, level, name }` | `DEF_fixity` |

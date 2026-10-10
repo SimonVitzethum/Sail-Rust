@@ -1,13 +1,14 @@
 //! Echte Einstiege (Lane 77, Code ohne Run per E3).
 //!
 //! Strategie: Fehlerpfad + Datei-Ebene sind heute aktiv testbar (ehrliche
-//! Span-Fehler, verlustfreies `deferred`-Parken). Erfolgsfälle brauchen die
+//! Span-Fehler, verlustfreie Senkung: echt oder Brücken-Skelett, Rest nur
+//! noch für `Other` in `deferred`). Erfolgsfälle brauchen die
 //! generierten LALRPOP-Tabellen und sind `ignore`d (siehe `ADAPTER.md`);
 //! sie kompilieren trotzdem gegen die Schnittstelle.
 
 #![forbid(unsafe_code)]
 
-use sail_ast::{DefKind, ExpKind, PatKind, TypKind};
+use sail_ast::{DefKind, ExpKind, PatKind, TypArgKind, TypKind, TypeDefKind};
 use sail_parse::{
     FileId, RealParser, parse_def, parse_exp, parse_file, parse_file_real, parse_pat, parse_typ,
 };
@@ -167,6 +168,51 @@ fn file_real_lowers_let_register_constraint() {
     assert!(out.ast.defs.iter().any(|d| matches!(
         d.kind,
         DefKind::Constraint(_)
+    )));
+    assert!(out.deferred.is_empty(), "deferred: {:?}", out.deferred);
+}
+
+#[test]
+#[ignore = "needs generated LALRPOP tables (see ADAPTER.md)"]
+fn file_real_lowers_bridge_bodies() {
+    let src = "type t = int -> bool\ntermination_measure f(x) = x\noutcome o : int -> int\ninstantiation i with a = b\n";
+    let out = parse_file_real("mini.sail", src).unwrap();
+    // Echt (nicht Skelett): Typ-Rumpf aufgelöst statt `Unknown` ...
+    let ty = out
+        .ast
+        .defs
+        .iter()
+        .find_map(|d| match &d.kind {
+            DefKind::Type(t) => Some(t),
+            _ => None,
+        })
+        .expect("Type fehlt");
+    match &ty.kind {
+        TypeDefKind::Abbrev { arg, .. } => match &arg.kind {
+            TypArgKind::Typ(t) => {
+                assert!(
+                    matches!(t.kind, TypKind::Fn { .. }),
+                    "Skelett-Unknown statt Fn: {:?}",
+                    t.kind
+                );
+            }
+            other => panic!("erwarte Typ-Arg, got {other:?}"),
+        },
+        other => panic!("erwarte Abbrev, got {other:?}"),
+    }
+    // ... Measure mit echtem Muster statt `Wild` ...
+    assert!(out.ast.defs.iter().any(|d| matches!(
+        &d.kind,
+        DefKind::Measure { pat, .. } if matches!(pat.kind, PatKind::Id(_))
+    )));
+    // ... Outcome mit echtem Typschema statt `Unknown` ...
+    assert!(out.ast.defs.iter().any(|d| matches!(
+        &d.kind,
+        DefKind::Outcome { typschm, .. } if matches!(typschm.typ.kind, TypKind::Fn { .. })
+    )));
+    assert!(out.ast.defs.iter().any(|d| matches!(
+        d.kind,
+        DefKind::Instantiation { .. }
     )));
     assert!(out.deferred.is_empty(), "deferred: {:?}", out.deferred);
 }
