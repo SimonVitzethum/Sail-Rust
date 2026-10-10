@@ -6,6 +6,7 @@ description = "Standalone Sail2 lexer: token stream, spans, error recovery (Lane
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+sail-ast = { path = "../sail-ast" }
 
 [lints]
 workspace = true

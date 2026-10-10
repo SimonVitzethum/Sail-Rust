@@ -14,7 +14,7 @@
 //! truncations.
 
 use crate::error::{BitvecError, ErrorKind};
-use crate::span::Span;
+use crate::Span;
 
 /// A single bit of a binary literal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -204,7 +204,7 @@ pub fn check_lit_width(lit: &Lit, expected: u32, span: Span) -> Result<String, B
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::span::FileId;
+    use crate::FileId;
 
     fn span() -> Span {
         Span::new(FileId(0), 0, 4)

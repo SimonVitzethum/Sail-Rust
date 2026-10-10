@@ -5,6 +5,9 @@ edition = "2021"
 description = "Bitvector semantics for the pure-Rust Sail compiler (lane 22): E_vector/P_vector/P_vector_concat mapping, width checks with spans, doc_vector_concat equivalent"
 license = "MIT OR Apache-2.0"
 
+[dependencies]
+sail-ast = { path = "../sail-ast" }
+
 [lib]
 name = "sail_bitvec"
 path = "src/lib.rs"

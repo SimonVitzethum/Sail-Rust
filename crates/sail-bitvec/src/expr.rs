@@ -14,7 +14,7 @@
 
 use crate::error::BitvecError;
 use crate::lit::Lit;
-use crate::span::Span;
+use crate::Span;
 
 /// One already-rendered vector element with its known width.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,7 +112,7 @@ pub fn render_e_lit(lit: &Lit) -> String {
 mod tests {
     use super::*;
     use crate::error::ErrorKind;
-    use crate::span::FileId;
+    use crate::FileId;
 
     fn span() -> Span {
         Span::new(FileId(0), 0, 8)

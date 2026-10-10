@@ -16,7 +16,7 @@
 //! Violations are span-carrying [`BitvecError`]s.
 
 use crate::error::{BitvecError, ErrorKind};
-use crate::span::Span;
+use crate::Span;
 
 /// One named range `NAME : hi .. lo` (or `NAME : b` for a single bit).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,7 +178,7 @@ pub fn cr_type_fixture(span: Span) -> BitfieldDecl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::span::FileId;
+    use crate::FileId;
 
     fn span() -> Span {
         Span::new(FileId(0), 0, 13)

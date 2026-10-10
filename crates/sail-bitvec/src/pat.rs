@@ -17,7 +17,7 @@
 
 use crate::error::BitvecError;
 use crate::lit::Lit;
-use crate::span::Span;
+use crate::Span;
 
 /// A Sail pattern relevant to bitvector matching.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -271,7 +271,7 @@ pub fn render_pat(pat: &Pat, in_vector: bool, in_match_bv: bool) -> Result<Strin
 mod tests {
     use super::*;
     use crate::error::ErrorKind;
-    use crate::span::FileId;
+    use crate::FileId;
 
     fn span(start: u32, end: u32) -> Span {
         Span::new(FileId(0), start, end)
