@@ -98,7 +98,10 @@ impl<'a> Cursor<'a> {
     }
 
     fn u8(&mut self) -> Result<u8, SummaryError> {
-        Ok(self.take(1, "kein Byte")[0])
+        match self.take(1, "kein Byte") {
+            Ok(b) => Ok(b[0]),
+            Err(e) => Err(e),
+        }
     }
 
     fn u32(&mut self) -> Result<u32, SummaryError> {
