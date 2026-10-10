@@ -6,8 +6,11 @@
 > nodes and back (#17–#21; Div/Mod/Abs as `Nexp_app`, Eq/Neq via
 > `Typ_arg`, Range as reversible `range`-app, currying/existentials as
 > `None` pending Lanes 02/09). `Kind` erases `KNat→Int`, never
-> silently recovered (#22). `KindEnv`/`TypeEnv` retained: no `Env.t`
-> target in `sail-ast` yet (#23/#24). `Solver`/`CachingSolver`
+> silently recovered (#22). `KindEnv`/`TypeEnv` retained locally by Lane-72
+> decision: no `Env.t` target in `sail-ast` (checker state, not data —
+> see `sail-ty/src/ast_env.rs`); canonical views (`KOpt` telescope,
+> `TypSchm` schemes) wired there. Driver file table landed centrally as
+> `sail_ast::FileTable` (#3/#25 rest). `Solver`/`CachingSolver`
 > untouched. Checklist items 2–5 become Lane 02/04/09 follow-ups;
 > item 1 done, item 6 holds.
 Lane 05 defines local minimal types (`sail_ty::nexp::{Nexp, NConstraint, MiniTyp, MiniExp, TypQuant}`)
@@ -25,7 +28,7 @@ This file is the swap contract: when those crates land, replace the minimals fie
 | `TypQuant { quants, constraint, typ }` | `TypQ_aux::{TypQ_tq,TypQ_no_forall}` + `kind_aux::{K_int,K_bool,K_type}` | `quants: Vec<(String, Kind)>` ≈ `quant_item` telescope |
 | `MiniExp::{IntLit,BoolLit,Var,Let,App,Tuple,Annot,If}` | `Exp_aux` (tiny subset) | Full `Exp_aux` port is Lane 02/03; checker matches on subsets |
 | `Kind::{KInt,KNat,KBool,KType}` | `kind_aux::{K_int,K_bool,K_type}` | `KNat` is a `sail-ty`-local refinement sub-kind for the Lean `Nat`/`Int` mapping (Lane 04/10); erase to `K_int` when converting |
-| `TypeEnv { shared(vals, registers via Arc), locals }` | `Env.t` (`env.ml`: val specs, registers, scattered defs) | Real env carries kinds + constraints + locations; `TypeEnv` is the closed test skeleton; Lane 68 shares program tables via `Arc` (cheap `Clone` snapshots for workers) |
+| `TypeEnv { shared(vals, registers via Arc), locals }` | RETAINED locally (Lane 72: `Env.t` is checker state, not AST data) — canonical view `val_scheme_ast`/`register_scheme_ast -> TypSchm` in `sail-ty/src/ast_env.rs` | Real env carries kinds + constraints + locations; `TypeEnv` is the closed test skeleton; Lane 68 shares program tables via `Arc` (cheap `Clone` snapshots for workers) |
 
 ## From `sail-nexp` (Lane 04)
 

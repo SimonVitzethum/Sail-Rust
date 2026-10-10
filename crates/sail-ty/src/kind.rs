@@ -50,8 +50,9 @@ impl std::fmt::Display for Kind {
 
 /// Kind environment: maps level variables to their kinds.
 ///
-/// Retained (MIGRATION.md #23): a pure binding map, not an AST node;
-/// `sail-ast` has no kind-context type yet (future `Env.t` Ausschnitt).
+/// Retained (MIGRATION.md #23, Lane 72 decision: kept local, see
+/// [`crate::ast_env`]): a pure binding map, not an AST node;
+/// `sail-ast` has no kind-context type (`Env.t` is checker state, not data).
 /// [`Kind`] itself erases onto `sail_ast::Kind` (see [`crate::conv`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KindEnv {
@@ -66,6 +67,12 @@ impl KindEnv {
 
     pub fn bind(&mut self, var: impl Into<String>, kind: Kind) {
         self.vars.insert(var.into(), kind);
+    }
+
+    /// Iterate `(variable, kind)` bindings (order is hash order; callers
+    /// needing determinism must sort — see [`crate::ast_env`]).
+    pub fn iter(&self) -> impl Iterator<Item = (&str, Kind)> + '_ {
+        self.vars.iter().map(|(var, kind)| (var.as_str(), *kind))
     }
 
     #[must_use]
