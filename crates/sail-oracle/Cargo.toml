@@ -1,0 +1,14 @@
+[package]
+name = "sail-oracle"
+version = "0.1.0"
+edition = "2021"
+description = "Differential test harness: OCaml sail as oracle vs Rust sail output"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "sail-oracle-diff"
+path = "src/main.rs"
+
+[lib]
+name = "sail_oracle"
+path = "src/lib.rs"
