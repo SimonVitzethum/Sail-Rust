@@ -1,0 +1,185 @@
+#![forbid(unsafe_code)]
+//! `Solver` trait + stub + bounded caching wrapper.
+//!
+//! Lane 06 implements this trait with the real Z3 backend. Everything in
+//! Lane 05 must work (and terminate) with [`StubSolver`].
+
+use crate::nexp::NConstraint;
+use std::collections::{HashMap, VecDeque};
+use std::hash::Hash;
+use std::sync::Mutex;
+
+/// Result of attempting to prove a numeric constraint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ProveResult {
+    /// Constraint holds in all models.
+    Proved,
+    /// Constraint is unsatisfiable (its negation holds).
+    Refuted,
+    /// Solver cannot decide (needs stronger backend / more fuel).
+    Unknown,
+}
+
+impl ProveResult {
+    #[must_use]
+    pub fn is_proved(&self) -> bool {
+        *self == Self::Proved
+    }
+}
+
+/// Numeric-constraint solver interface (implemented by Lane 06 with Z3).
+///
+/// Must be `Send + Sync` so one solver (or pool) can be shared across the
+/// multithreaded checking workers.
+pub trait Solver: Send + Sync {
+    /// Try to prove `nc`. Must always terminate (bounded work).
+    fn prove(&self, nc: &NConstraint) -> ProveResult;
+}
+
+/// Stub solver for tests and for checking without Z3.
+///
+/// Decides only what is syntactically obvious:
+/// - boolean constant folding (`True`/`False`, folded comparisons),
+/// - syntactic reflexivity (`n == n` is proved, `n != n` refuted),
+/// - everything else is [`ProveResult::Unknown`].
+///
+/// Always terminates in O(tree size) time.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StubSolver;
+
+impl StubSolver {
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Solver for StubSolver {
+    fn prove(&self, nc: &NConstraint) -> ProveResult {
+        // Fast path: constant folding.
+        if let Some(b) = nc.as_bool() {
+            return if b {
+                ProveResult::Proved
+            } else {
+                ProveResult::Refuted
+            };
+        }
+        // Syntactic reflexivity for non-foldable sides.
+        match nc {
+            NConstraint::Eq(a, b) if a == b => ProveResult::Proved,
+            NConstraint::Neq(a, b) if a == b => ProveResult::Refuted,
+            NConstraint::Ge(a, b) | NConstraint::Le(a, b) if a == b => ProveResult::Proved,
+            NConstraint::Gt(a, b) | NConstraint::Lt(a, b) if a == b => ProveResult::Refuted,
+            // `And`/`Or`/`Not` combinations over stub-decidable parts.
+            NConstraint::And(a, b) => match (self.prove(a), self.prove(b)) {
+                (ProveResult::Proved, ProveResult::Proved) => ProveResult::Proved,
+                (ProveResult::Refuted, _) | (_, ProveResult::Refuted) => ProveResult::Refuted,
+                _ => ProveResult::Unknown,
+            },
+            NConstraint::Or(a, b) => match (self.prove(a), self.prove(b)) {
+                (ProveResult::Proved, _) | (_, ProveResult::Proved) => ProveResult::Proved,
+                (ProveResult::Refuted, ProveResult::Refuted) => ProveResult::Refuted,
+                _ => ProveResult::Unknown,
+            },
+            NConstraint::Not(a) => match self.prove(a) {
+                ProveResult::Proved => ProveResult::Refuted,
+                ProveResult::Refuted => ProveResult::Proved,
+                ProveResult::Unknown => ProveResult::Unknown,
+            },
+            _ => ProveResult::Unknown,
+        }
+    }
+}
+
+/// Cache statistics for [`CachingSolver`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub evictions: u64,
+}
+
+/// Bounded LRU cache in front of any [`Solver`].
+///
+/// This is the caching interface Lane 06 reuses; here it wraps the stub or
+/// any future backend. Capacity-bounded (default 1024) so RAM stays flat;
+/// `Mutex`-guarded for sharing across threads (one entry per solver, no
+/// cross-thread solver sharing needed).
+pub struct CachingSolver<S: Solver> {
+    inner: S,
+    capacity: usize,
+    state: Mutex<CacheState>,
+}
+
+struct CacheState {
+    map: HashMap<NConstraint, ProveResult>,
+    order: VecDeque<NConstraint>,
+    stats: CacheStats,
+}
+
+impl<S: Solver> CachingSolver<S> {
+    pub fn new(inner: S, capacity: usize) -> Self {
+        Self {
+            inner,
+            capacity: capacity.max(1),
+            state: Mutex::new(CacheState {
+                map: HashMap::new(),
+                order: VecDeque::new(),
+                stats: CacheStats::default(),
+            }),
+        }
+    }
+
+    #[must_use]
+    pub fn stats(&self) -> CacheStats {
+        self.state
+            .lock()
+            .map(|s| s.stats)
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.state.lock().map(|s| s.map.len()).unwrap_or(0)
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl<S: Solver> Solver for CachingSolver<S> {
+    fn prove(&self, nc: &NConstraint) -> ProveResult {
+        // Fast path under lock.
+        if let Ok(mut state) = self.state.lock() {
+            if let Some(r) = state.map.get(nc).copied() {
+                state.stats.hits += 1;
+                return r;
+            }
+            state.stats.misses += 1;
+            // Compute outside mutation but still under lock is fine: inner
+            // solvers here are pure/total. Lane 06 keeps per-thread solvers
+            // so no contention pathology.
+            let result = self.inner.prove(nc);
+            if state.map.len() >= self.capacity {
+                if let Some(old) = state.order.pop_front() {
+                    state.map.remove(&old);
+                    state.stats.evictions += 1;
+                }
+            }
+            state.map.insert(nc.clone(), result);
+            state.order.push_back(nc.clone());
+            result
+        } else {
+            // Poisoned lock: fall back to uncached prove (still terminates).
+            self.inner.prove(nc)
+        }
+    }
+}
+
+// `Mutex<CacheState>` is `Send + Sync` given `NConstraint: Send`; assert it.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<CachingSolver<StubSolver>>();
+};
