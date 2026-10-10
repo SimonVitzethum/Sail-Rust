@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/sail-arena"]
+members = ["crates/sail-arena", "crates/sail-ast"]
 resolver = "2"
 
 [workspace.lints.rust]
