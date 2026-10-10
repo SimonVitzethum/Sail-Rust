@@ -1,0 +1,10 @@
+[package]
+name = "sail-termination"
+version = "0.1.0"
+edition = "2021"
+description = "Termination measures for the pure-Rust Sail compiler (lane 26)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_termination"
+path = "src/lib.rs"
