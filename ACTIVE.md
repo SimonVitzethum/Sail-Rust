@@ -262,7 +262,38 @@ Merge-Notizen:
   Haupt-Session).
 - Identitaet unverstellt.
 
-Aktiv (noch in Arbeit, NICHT anfassen):
+E3-Integration Welle 8 (10.10.2026, Integrator — KEINE Builds, nur Merges):
+6 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer, Message endet mit
+Co-authored-by), Branches + Worktrees geloescht: Lane 124, 125, 126, 127,
+128, 129. Keine Lane uebersprungen (alle 6 vorhanden).
+Uebersprungen + Grund:
+- lane/41-lang-delta, lane/42-shared-mem, lane/43-scheduler-replay,
+  lane/44-el3-psci-boot: gesperrt — NICHT angefasst (Branches + Worktrees
+  ungeprueft stehen gelassen).
+Merge-Notizen:
+- Lane 124 (konfliktfrei): solver-sound (z3_backend/query/nexp — Id/Var-Raeume,
+  Keys namentlich, i128, simplify-Soundness) + Operator-Doku.
+- Lane 125 (konfliktfrei): ty-sound (check/freshen/kind/env/solver — Gensym,
+  LRU, ScatteredKind) + Typechecker-Tests.
+- Lane 126 (konfliktfrei): ooc-races (Mutex, Caps, Deckel in ooc-driver/cache/
+  summaries/warm + sail-cli/ooc).
+- Lane 127 (konfliktfrei, ort-auto-vereint mit Lane-126-Stand in
+  sail-cache/lib.rs + sail-ooc/warm.rs): Deps/Parity-Tests + Doku
+  (render-Delegation; sail-rewrite-Dep gestrichen).
+- Lane 128 (konfliktfrei): sail-lean Frames/Monaden + sail-typedef nneg +
+  sail-regs Dedup/Trennung/Pfeile.
+- Lane 129 (ort-auto-vereint mit Lane-128-Stand in sail-lean/lib.rs +
+  tests.rs, verifiziert: 128-Frame/Monad-Zeilen intakt + 129-pats-Hunks
+  drin): sail-lean pats/lits/names (neues Modul pats.rs) — kein stumpfes
+  ours/theirs.
+- lanes/-Specs je Lane mit uebernommen (126, 128 per Branch-Commit; 124,
+  125, 127, 129 uncommitted aus Worktrees kopiert + in den Merge-Commit
+  aufgenommen).
+- Checks nach allen Merges: kein Cargo.lock getrackt, .gitignore unveraendert
+  (worktrees/+target/+Cargo.lock+logs/, keine Lane-Diffs), keine
+  Konfliktmarker, forbid(unsafe_code) nirgends entfernt (187 -> 194 Treffer
+  durch neue Dateien). Build-Verifikation offen (Rig der Haupt-Session).
+- Identitaet unverstellt (SimonVitzethum).
 - Lane 41–44 (Branches lane/41-lang-delta, lane/42-shared-mem,
   lane/43-scheduler-replay, lane/44-el3-psci-boot, Worktrees lane-41..44 —
   BLOCKED bis Gate: Port durch + laeuft + RAM-opt, siehe WAVE3.md)
