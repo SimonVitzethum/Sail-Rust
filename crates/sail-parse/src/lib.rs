@@ -12,10 +12,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod bridge;
 pub mod lexer;
 pub mod mini_ast;
 pub mod parser;
 pub mod span;
+
+pub use bridge::{BridgeOut, Unparsed, bridge_file, bridge_parsed};
 
 pub use mini_ast::{Def, ParsedFile, PragmaArg, SpannedDef};
 pub use span::{FileId, ParseError, Span, Spanned};

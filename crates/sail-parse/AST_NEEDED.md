@@ -9,6 +9,24 @@
 > with genuine `Exp`/`Typ` nodes; `sail-cli` consumes the skeleton.
 > Follow-up owned by Lane 02, seam wired (`sail-ast` dependency).
 
+## Bridge-Stand (Lane 63): Val/Fundef/Mapdef/Scattered auf `sail-ast`
+
+`src/bridge.rs` (`bridge_file`/`bridge_parsed`) löst die Lane-61-Blockaden
+#4–#7 + #42 ohne Grammatik-Rewrite auf: Namen/`rec`/Fixity/Overload/
+Default/Pragma (inkl. Lane-11-Marker) landen auf echten `sail_ast`-Knoten;
+Bodies als Rohtext-Sidecar (`BridgeOut::unparsed`, per `NodeId`), der Rest
+verlustfrei in `BridgeOut::deferred`. Namens-Dispatch via `sail-lex`
+(Branch-Stand), Klausel-Formen nach `sail-grammar/src/ast.rs` gelesen
+(`Funcl`, `MapCl`, `ScatteredDef`); Platzhalter `PatKind::Wild` +
+`ExpKind::Undef`, leere `Mapdef`-Klauseln statt Fake-Klauseln.
+Gebrückt: `Val`, `Fundef`, `Mapdef`, `Impl`, `Scattered` (Function/Funcl/
+Mapping/Mapcl/Enum/Variant/End, `union`→`Variant`, bare `clause` per
+`<->`-Heuristik), `Fixity`, `Overload`, `Default(Order)`, `Pragma`.
+Offen (brauchen Lane 02/17-Vollgrammatik): `Type`, `Let`, `Constraint`,
+`Register`, `Measure`, `Outcome`, `Instantiation`, `Other` sowie alle
+`Typschm`/`Exp`/`Pat`/`Mapcl`-Inhalte. Tests: `tests/bridge_ast.rs`
+(Code, kein Run per E3).
+
 Stand: Lane 01 (`sail-ast`) ist noch nicht gelandet (Branch `lane/01-ast-core`
 ohne Commits). `sail-parse` definiert deshalb lokale Minimal-Typen in
 `src/mini_ast.rs`. Dieses Dokument beschreibt, was Lane 01 liefern muss,
