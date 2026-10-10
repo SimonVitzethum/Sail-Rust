@@ -39,7 +39,7 @@ fn range_return_types_match_expected_lean() {
     assert_eq!(range(NExp::Constant(-2), NExp::Constant(2)).lean_name(), "Int");
     assert_eq!(range(NExp::Constant(0), NExp::Constant(2)).lean_name(), "Nat");
     assert_eq!(
-        range(NExp::neg(NExp::var("n")), NExp::var("n")).lean_name(),
+        range(NExp::negated(NExp::var("n")), NExp::var("n")).lean_name(),
         "Int"
     );
     assert_eq!(
@@ -78,7 +78,7 @@ fn range_def_signatures() {
     let rets = [
         range(NExp::Constant(-2), NExp::Constant(2)),
         range(NExp::Constant(0), NExp::Constant(2)),
-        range(NExp::neg(NExp::var("n")), NExp::var("n")),
+        range(NExp::negated(NExp::var("n")), NExp::var("n")),
         range(NExp::Constant(0), NExp::var("n")),
         range(NExp::var("n"), NExp::var("m")),
     ];

@@ -45,8 +45,8 @@ impl NExp {
         NExp::Var(name.into())
     }
 
-    /// Negation.
-    pub fn neg(e: NExp) -> Self {
+    /// Negation expression.
+    pub fn negated(e: NExp) -> Self {
         NExp::Neg(Box::new(e))
     }
 
@@ -172,8 +172,8 @@ mod tests {
     fn shapes() {
         assert!(provably_nneg(&NExp::abs(NExp::var("n"))));
         assert!(provably_nneg(&NExp::Pow2(Box::new(NExp::var("n")))));
-        assert!(provably_nneg(&NExp::neg(NExp::Constant(-3))));
-        assert!(!provably_nneg(&NExp::neg(NExp::Constant(3))));
+        assert!(provably_nneg(&NExp::negated(NExp::Constant(-3))));
+        assert!(!provably_nneg(&NExp::negated(NExp::Constant(3))));
         assert!(!provably_nneg(&NExp::Sub(
             Box::new(NExp::var("a")),
             Box::new(NExp::var("b"))
