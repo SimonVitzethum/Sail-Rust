@@ -27,6 +27,12 @@ use sail_shard::ShardId;
 
 use crate::ContentId;
 
+/// Harter Deckel für gehaltene Versiegelungs-Belege (RAM-Schutz, Lane 126):
+/// `seal` weist darüber hinaus ab ([`BarrierError::SealedFull`]), statt still
+/// zu wachsen. Aufrufer mit mehr Shards konsumieren/verwerfen Belege
+/// (`sealed()` lesen, dann `clear_sealed`) oder teilen den Lauf.
+pub const MAX_SEALED_RECEIPTS: usize = 65_536;
+
 /// Lebensphase eines Shards im OoC-Durchlauf.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShardPhase {
@@ -64,6 +70,13 @@ pub enum BarrierError {
         /// Shard des Tokens.
         token_shard: ShardId,
     },
+    /// Beleg-Deckel ([`MAX_SEALED_RECEIPTS`]) erreicht: Das Token wird wie bei
+    /// `evict` verworfen (Slot frei, kein Cache-Eintrag) — Aufrufer leeren per
+    /// `clear_sealed` und beginnen den Shard erneut (oder fahren fort).
+    SealedFull {
+        /// Gehaltene Belege.
+        count: usize,
+    },
 }
 
 impl fmt::Display for BarrierError {
@@ -74,6 +87,12 @@ impl fmt::Display for BarrierError {
             }
             Self::StaleToken { token_shard } => {
                 write!(f, "Phasen-Barriere: Token von Shard {token_shard} ist veraltet")
+            }
+            Self::SealedFull { count } => {
+                write!(
+                    f,
+                    "Phasen-Barriere: Beleg-Deckel erreicht ({count} Belege; erst clear_sealed)"
+                )
             }
         }
     }
@@ -185,12 +204,49 @@ impl PhaseBarrier {
     /// Versiegelt die heisse Phase: `serialized` ist die kanonische
     /// Serialisierung des Shard-Ergebnisses; der Beleg traegt dessen
     /// Content-Hash. Danach ist der Shard verworfen (RAM frei).
+    ///
+    /// Deckel: Bei [`MAX_SEALED_RECEIPTS`] gehaltenen Belegen kommt
+    /// [`BarrierError::SealedFull`] — das Token wird dabei wie bei `evict`
+    /// verworfen (Slot frei, kein Cache-Eintrag): erst `clear_sealed`, dann
+    /// den Shard erneut beginnen (oder mit dem naechsten fortfahren).
     pub fn seal(
         &mut self,
         mut token: HotToken,
         serialized: &[u8],
         pass_version: &str,
     ) -> Result<SealReceipt, BarrierError> {
+        // Zuerst Waehrung pruefen (veraltetes Token meldet StaleToken, auch am
+        // Deckel), dann erst den Deckel: Reihenfolge wie in `evict`.
+        {
+            let state = token.state.lock().unwrap_or_else(|e| e.into_inner());
+            match &state.hot {
+                Some((current, generation))
+                    if *current == token.shard && *generation == token.generation => {}
+                _ => {
+                    return Err(BarrierError::StaleToken {
+                        token_shard: token.shard.clone(),
+                    });
+                }
+            }
+        }
+        if self.sealed.len() >= MAX_SEALED_RECEIPTS {
+            // Wie `evict` konsumieren (sonst feuert der Token-`Drop` und die
+            // Barriere bliebe ohne Besitzer heiss): Slot frei, als verworfen
+            // gezaehlt, danach der Deckel-Fehler.
+            {
+                let mut state = token.state.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some((current, generation)) = &state.hot {
+                    if *current == token.shard && *generation == token.generation {
+                        state.hot = None;
+                        state.evicted += 1;
+                    }
+                }
+            }
+            token.consumed = true;
+            return Err(BarrierError::SealedFull {
+                count: self.sealed.len(),
+            });
+        }
         {
             let mut state = token.state.lock().unwrap_or_else(|e| e.into_inner());
             match &state.hot {
@@ -258,6 +314,14 @@ impl PhaseBarrier {
     #[must_use]
     pub fn sealed_count(&self) -> usize {
         self.sealed.len()
+    }
+
+    /// Verwirft alle gehaltenen Belege (RAM-Drop-Punkt; gibt
+    /// [`MAX_SEALED_RECEIPTS`]-Druck ab). Bereits ausgegebene
+    /// [`SealReceipt`]-Kopien bleiben gueltig (nur das Barrieren-Log wird
+    /// geleert; `seq` zaehlt danach ab 0 weiter — keine Identitaet).
+    pub fn clear_sealed(&mut self) {
+        self.sealed.clear();
     }
 
     /// Anzahl verworfener (nicht versiegelter) Shards (inklusive per
@@ -377,5 +441,32 @@ mod tests {
         let hot2 = b.begin(ShardId::new("b", 0)).expect("begin2");
         b.evict(hot2).expect("evict");
         assert_eq!(b.evicted_count(), 1);
+    }
+
+    #[test]
+    fn beleg_deckel_wirft_ab_statt_still_zu_wachsen() {
+        assert!(MAX_SEALED_RECEIPTS > 0);
+        let mut b = PhaseBarrier::new();
+        // Deckel direkt anfahren: Belege fiktiv vollaufen lassen, indem bis
+        // zum Deckel versiegelt wird (kleine Bytes, deterministisch).
+        for i in 0..MAX_SEALED_RECEIPTS {
+            let name = format!("s{i}");
+            let hot = b.begin(ShardId::new(&name, 0)).expect("begin");
+            b.seal(hot, b"x", PASS).expect("seal");
+        }
+        assert_eq!(b.sealed_count(), MAX_SEALED_RECEIPTS);
+        // Ein weiterer Seal wird abgewiesen — wie ein Evict (Slot frei, kein
+        // Leak: sofort danach kann der naechste Shard beginnen).
+        let hot = b.begin(ShardId::new("voll", 0)).expect("begin am Deckel");
+        let err = b.seal(hot, b"x", PASS).expect_err("Deckel");
+        assert_eq!(err, BarrierError::SealedFull { count: MAX_SEALED_RECEIPTS });
+        assert!(!b.is_hot());
+        assert_eq!(b.evicted_count(), 1);
+        // Nach clear_sealed laeuft es weiter (seq zaehlt ab 0, nur Log-Index).
+        b.clear_sealed();
+        assert_eq!(b.sealed_count(), 0);
+        let hot = b.begin(ShardId::new("weiter", 0)).expect("begin nach clear");
+        let receipt = b.seal(hot, b"y", PASS).expect("seal nach clear");
+        assert_eq!(receipt.seq, 0);
     }
 }

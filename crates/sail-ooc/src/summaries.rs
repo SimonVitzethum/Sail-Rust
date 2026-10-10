@@ -59,11 +59,24 @@
 use sail_shard::ShardId;
 
 use crate::{ContentId, ShardSummary, SummaryError, SummaryRecord, SummaryTable};
+use crate::summary::{MAX_DECODE_ENTRIES, MAX_SUMMARY_BYTES, check_u32_len};
 
 // --- Draht-Helfer (deterministisch, little-endian) ---------------------------
 
-fn write_u32(out: &mut Vec<u8>, v: u32) {
-    out.extend_from_slice(&v.to_le_bytes());
+/// Gepruefte Laenge fuers u32-Drahtformat (Anti-Trunkierung, Lane 126).
+fn checked_u32(n: usize, shard: &ShardId) -> Result<u32, SummaryError> {
+    check_u32_len(n).map_err(|bytes| SummaryError::TooLarge {
+        shard: shard.clone(),
+        bytes,
+    })
+}
+
+/// Geprueftes `write_str` (Anti-Trunkierung, Lane 126).
+fn try_write_str(out: &mut Vec<u8>, shard: &ShardId, s: &str) -> Result<(), SummaryError> {
+    let len = checked_u32(s.len(), shard)?;
+    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(s.as_bytes());
+    Ok(())
 }
 
 fn write_u8(out: &mut Vec<u8>, v: u8) {
@@ -74,10 +87,8 @@ fn write_i128(out: &mut Vec<u8>, v: i128) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 
-fn write_str(out: &mut Vec<u8>, s: &str) {
-    write_u32(out, s.len() as u32);
-    out.extend_from_slice(s.as_bytes());
-}
+// Hinweis: `write_u32`/`write_str` (ungeprueft) entfallen bewusst — Laengen
+// laufen immer ueber `checked_u32`/`try_write_str` (Anti-Trunkierung).
 
 struct Cursor<'a> {
     rest: &'a [u8],
@@ -109,6 +120,16 @@ impl<'a> Cursor<'a> {
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
+    /// Gepruefter Draht-Count (DoS-Schutz, Lane 126): Counts ueber
+    /// [`MAX_DECODE_ENTRIES`] passen in keinen gueltigen Eintrag.
+    fn count(&mut self, what: &str) -> Result<usize, SummaryError> {
+        let n = self.u32()?;
+        if n as usize > MAX_DECODE_ENTRIES {
+            return Err(SummaryError::Decode(format!("Summary unlesbar: {what} ueber Deckel")));
+        }
+        Ok(n as usize)
+    }
+
     fn i128(&mut self) -> Result<i128, SummaryError> {
         let b = self.take(16, "kein i128")?;
         let mut arr = [0u8; 16];
@@ -118,6 +139,9 @@ impl<'a> Cursor<'a> {
 
     fn str(&mut self) -> Result<String, SummaryError> {
         let len = self.u32()? as usize;
+        if len > MAX_SUMMARY_BYTES {
+            return Err(SummaryError::Decode("Summary unlesbar: String ueber Deckel".into()));
+        }
         let bytes = self.take(len, "String abgeschnitten")?;
         let s = std::str::from_utf8(bytes)
             .map_err(|_| SummaryError::Decode("Summary unlesbar: kein UTF-8".into()))?;
@@ -134,6 +158,16 @@ impl<'a> Cursor<'a> {
             Err(SummaryError::Decode("Summary unlesbar: Trailing Bytes".into()))
         }
     }
+}
+
+/// Gesamt-Deckel beim Dekodieren (Lane 126): Gueltige Payloads sind
+/// Tabelleneintraege (≤ [`MAX_SUMMARY_BYTES`]); groessere Bloecke sind
+/// korrupt/fremd und werden abgelehnt, statt Riesen-Counts zu jagen.
+fn check_total(bytes: &[u8]) -> Result<(), SummaryError> {
+    if bytes.len() > MAX_SUMMARY_BYTES {
+        return Err(SummaryError::Decode("Summary unlesbar: Eintrag ueber Deckel".into()));
+    }
+    Ok(())
 }
 
 // --- Callgraph (Lane 08) -----------------------------------------------------
@@ -249,23 +283,30 @@ impl ShardSummary for CallgraphSummary {
     }
 
     fn encode(&self) -> Vec<u8> {
+        self.try_encode().expect("CallgraphSummary passt ins u32-Drahtformat")
+    }
+
+    fn try_encode(&self) -> Result<Vec<u8>, SummaryError> {
         let mut out = Vec::new();
-        write_u32(&mut out, self.funcs.len() as u32);
+        let n = checked_u32(self.funcs.len(), &self.shard)?;
+        out.extend_from_slice(&n.to_le_bytes());
         for f in &self.funcs {
-            write_str(&mut out, &f.name);
+            try_write_str(&mut out, &self.shard, &f.name)?;
             write_u8(&mut out, f.effect.as_u8());
             write_u8(&mut out, u8::from(f.has_loop));
-            write_u32(&mut out, f.callees.len() as u32);
+            let m = checked_u32(f.callees.len(), &self.shard)?;
+            out.extend_from_slice(&m.to_le_bytes());
             for c in &f.callees {
-                write_str(&mut out, c);
+                try_write_str(&mut out, &self.shard, c)?;
             }
         }
-        out
+        Ok(out)
     }
 
     fn decode(shard: ShardId, content: ContentId, bytes: &[u8]) -> Result<Self, SummaryError> {
+        check_total(bytes)?;
         let mut cur = Cursor::new(bytes);
-        let n = cur.u32()? as usize;
+        let n = cur.count("Funktions-Count")?;
         let mut funcs = Vec::with_capacity(n.min(1024));
         for _ in 0..n {
             let name = cur.str()?;
@@ -278,7 +319,7 @@ impl ShardSummary for CallgraphSummary {
                 1 => true,
                 _ => return Err(SummaryError::Decode("Summary unlesbar: Loop-Flag".into())),
             };
-            let m = cur.u32()? as usize;
+            let m = cur.count("Callee-Count")?;
             let mut callees = Vec::with_capacity(m.min(1024));
             for _ in 0..m {
                 callees.push(cur.str()?);
@@ -303,7 +344,7 @@ pub fn export_callgraph(
     table: &mut SummaryTable,
     summary: &CallgraphSummary,
 ) -> Result<(), SummaryError> {
-    table.insert(callgraph_record(summary)?);
+    table.insert(callgraph_record(summary)?)?;
     Ok(())
 }
 
@@ -365,25 +406,32 @@ impl ShardSummary for MonoSummary {
     }
 
     fn encode(&self) -> Vec<u8> {
+        self.try_encode().expect("MonoSummary passt ins u32-Drahtformat")
+    }
+
+    fn try_encode(&self) -> Result<Vec<u8>, SummaryError> {
         let mut out = Vec::new();
-        write_u32(&mut out, self.instances.len() as u32);
+        let n = checked_u32(self.instances.len(), &self.shard)?;
+        out.extend_from_slice(&n.to_le_bytes());
         for inst in &self.instances {
-            write_str(&mut out, &inst.func);
-            write_u32(&mut out, inst.type_args.len() as u32);
+            try_write_str(&mut out, &self.shard, &inst.func)?;
+            let m = checked_u32(inst.type_args.len(), &self.shard)?;
+            out.extend_from_slice(&m.to_le_bytes());
             for arg in &inst.type_args {
-                write_str(&mut out, arg);
+                try_write_str(&mut out, &self.shard, arg)?;
             }
         }
-        out
+        Ok(out)
     }
 
     fn decode(shard: ShardId, content: ContentId, bytes: &[u8]) -> Result<Self, SummaryError> {
+        check_total(bytes)?;
         let mut cur = Cursor::new(bytes);
-        let n = cur.u32()? as usize;
+        let n = cur.count("Instanz-Count")?;
         let mut instances = Vec::with_capacity(n.min(1024));
         for _ in 0..n {
             let func = cur.str()?;
-            let m = cur.u32()? as usize;
+            let m = cur.count("Typarg-Count")?;
             let mut type_args = Vec::with_capacity(m.min(16));
             for _ in 0..m {
                 type_args.push(cur.str()?);
@@ -402,7 +450,7 @@ pub fn mono_record(summary: &MonoSummary) -> Result<SummaryRecord, SummaryError>
 
 /// Export-Schnittstelle Mono: Eintrag bauen + in die Tabelle einpflegen.
 pub fn export_mono(table: &mut SummaryTable, summary: &MonoSummary) -> Result<(), SummaryError> {
-    table.insert(mono_record(summary)?);
+    table.insert(mono_record(summary)?)?;
     Ok(())
 }
 
@@ -484,24 +532,30 @@ impl ShardSummary for ConstPropSummary {
     }
 
     fn encode(&self) -> Vec<u8> {
+        self.try_encode().expect("ConstPropSummary passt ins u32-Drahtformat")
+    }
+
+    fn try_encode(&self) -> Result<Vec<u8>, SummaryError> {
         let mut out = Vec::new();
-        write_u32(&mut out, self.facts.len() as u32);
+        let n = checked_u32(self.facts.len(), &self.shard)?;
+        out.extend_from_slice(&n.to_le_bytes());
         for fact in &self.facts {
-            write_str(&mut out, &fact.func);
-            write_str(&mut out, &fact.var);
+            try_write_str(&mut out, &self.shard, &fact.func)?;
+            try_write_str(&mut out, &self.shard, &fact.var)?;
             write_u8(&mut out, fact.value.tag());
             match &fact.value {
                 ConstValue::Int(v) => write_i128(&mut out, *v),
                 ConstValue::Bool(b) => write_u8(&mut out, u8::from(*b)),
-                ConstValue::Bits(s) => write_str(&mut out, s),
+                ConstValue::Bits(s) => try_write_str(&mut out, &self.shard, s)?,
             }
         }
-        out
+        Ok(out)
     }
 
     fn decode(shard: ShardId, content: ContentId, bytes: &[u8]) -> Result<Self, SummaryError> {
+        check_total(bytes)?;
         let mut cur = Cursor::new(bytes);
-        let n = cur.u32()? as usize;
+        let n = cur.count("Fakt-Count")?;
         let mut facts = Vec::with_capacity(n.min(1024));
         for _ in 0..n {
             let func = cur.str()?;
@@ -541,7 +595,7 @@ pub fn export_const_prop(
     table: &mut SummaryTable,
     summary: &ConstPropSummary,
 ) -> Result<(), SummaryError> {
-    table.insert(const_prop_record(summary)?);
+    table.insert(const_prop_record(summary)?)?;
     Ok(())
 }
 
@@ -756,5 +810,54 @@ mod tests {
         // funcs=1, name="f", effekt-Byte auf 9 drehen: offset 4+ (4+1)=9.
         ok[9] = 9;
         assert!(CallgraphSummary::decode(id, c, &ok).is_err());
+    }
+
+    #[test]
+    fn decode_caps_und_try_encode_pfad() {
+        let id = shard("a");
+        let c = content(b"c");
+        // Gesamtbytes ueber Deckel: alle drei Typen lehnen ab.
+        let big = vec![0u8; MAX_SUMMARY_BYTES + 1];
+        assert!(CallgraphSummary::decode(id.clone(), c, &big).is_err());
+        assert!(MonoSummary::decode(id.clone(), c, &big).is_err());
+        assert!(ConstPropSummary::decode(id.clone(), c, &big).is_err());
+        // Count ueber Deckel (4 Bytes, riesiger Count).
+        let mut huge = Vec::new();
+        huge.extend_from_slice(&(crate::summary::MAX_DECODE_ENTRIES as u32 + 1).to_le_bytes());
+        assert!(CallgraphSummary::decode(id.clone(), c, &huge).is_err());
+        assert!(MonoSummary::decode(id.clone(), c, &huge).is_err());
+        assert!(ConstPropSummary::decode(id.clone(), c, &huge).is_err());
+        // Einzellaenge ueber Deckel: Count 1, name-len = u32::MAX.
+        let huge_str = vec![1, 0, 0, 0, 0xff, 0xff, 0xff, 0xff];
+        assert!(CallgraphSummary::decode(id.clone(), c, &huge_str).is_err());
+        assert!(MonoSummary::decode(id.clone(), c, &huge_str).is_err());
+        // Gepruefter Pfad == ungepruefter Pfad (kleine Fakten).
+        let cg = CallgraphSummary::new(
+            id.clone(),
+            c,
+            vec![CallFunc {
+                name: "f".into(),
+                callees: vec!["g".into()],
+                effect: EffectClass::Pure,
+                has_loop: false,
+            }],
+        );
+        assert_eq!(cg.try_encode().expect("klein"), cg.encode());
+        let mono = MonoSummary::new(
+            id.clone(),
+            c,
+            vec![MonoInstance { func: "id".into(), type_args: vec!["int".into()] }],
+        );
+        assert_eq!(mono.try_encode().expect("klein"), mono.encode());
+        let cp = ConstPropSummary::new(
+            id.clone(),
+            c,
+            vec![ConstFact {
+                func: "f".into(),
+                var: "x".into(),
+                value: ConstValue::Bool(true),
+            }],
+        );
+        assert_eq!(cp.try_encode().expect("klein"), cp.encode());
     }
 }
