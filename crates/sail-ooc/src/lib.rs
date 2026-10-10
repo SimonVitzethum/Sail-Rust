@@ -46,7 +46,9 @@ mod summary;
 mod summaries;
 mod warm;
 
-pub use barrier::{BarrierError, HotToken, PhaseBarrier, SealReceipt, ShardPhase};
+pub use barrier::{
+    BarrierError, HotToken, PhaseBarrier, SealReceipt, ShardPhase, MAX_SEALED_RECEIPTS,
+};
 pub use driver::{
     check_phase_budget, DriverError, DriverPhase, DriverState, DriverStats, OocDriverLoop,
     PhaseBudget, KIB_PER_MIB, OOC_DRIVER_PASS_VERSION, PEAK_FETCH_KIB, PEAK_REWRITE_KIB,
@@ -55,7 +57,8 @@ pub use driver::{
 pub use id::ContentId;
 pub use memo::{MEMO_DOMAIN_PREFIX, MemoSpills};
 pub use summary::{
-    ExportedSymbols, MAX_SUMMARY_BYTES, ShardSummary, SummaryError, SummaryRecord, SummaryTable,
+    ExportedSymbols, MAX_SUMMARY_BYTES, MAX_SUMMARY_ENTRIES, ShardSummary, SummaryError,
+    SummaryRecord, SummaryTable,
 };
 pub use summaries::{
     CallFunc, CallgraphSummary, ConstFact, ConstPropSummary, ConstValue, EffectClass,

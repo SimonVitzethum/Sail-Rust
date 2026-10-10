@@ -19,6 +19,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::SystemTime;
 
 /// Standard-Limit für Einträge, wenn keines angegeben wird.
@@ -99,10 +100,28 @@ pub fn fingerprint(input: &[u8], pass_version: &str) -> ShardFingerprint {
 }
 
 /// Disk-Cache für Shard-Outputs unter `<root>/<shard-hash>/`.
+///
+/// Nebenläufigkeit (Lane 126): Alle lesenden/schreibenden Methoden halten eine
+/// prozessweite IO-Sperre (`Mutex`, Vergiftung-tolerant), sodass
+/// Check-then-act in [`DiskCache::store`] (fresh-Prüfung → Schreiben → `gc`),
+/// der LRU-Touch in [`DiskCache::lookup`] (Lesen + Fingerprint-Neuschreiben)
+/// und [`DiskCache::gc`] (Auflisten + Entfernen) je atomar gegen andere
+/// Threads desselben Prozesses laufen. `Clone` teilt sich die Sperre.
+///
+/// Kein Singleflight/Thundering-Herd-Schutz: Gleichzeitige gleiche Anfragen
+/// rechnen parallel (Aufrufer deduplizieren bei Bedarf extern); der Erstling
+/// gewinnt (Zweitlauf-Skip, Determinismus vor Letzt-Schreiber).
+/// Prozessübergreifend bleibt es Best-Effort (atomares Rename je Datei, aber
+/// kein File-Locking): Zwei Prozesse können dieselbe Datei gleichzeitig
+/// neu schreiben — der Inhalt ist identisch (gleicher Fingerprint → gleiche
+/// Bytes per Vertrag), die LRU-mtime beliebig einer der beiden.
+///
+/// Reines Rust: `#![forbid(unsafe_code)]`, nur `std`.
 #[derive(Clone, Debug)]
 pub struct DiskCache {
     root: PathBuf,
     max_entries: usize,
+    io_lock: Arc<Mutex<()>>,
 }
 
 impl DiskCache {
@@ -112,6 +131,7 @@ impl DiskCache {
         Self {
             root: root.as_ref().to_owned(),
             max_entries: DEFAULT_MAX_ENTRIES,
+            io_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -136,12 +156,19 @@ impl DiskCache {
         self.root.join(shard_hash)
     }
 
+    /// Sperrt die prozessweite IO-Sperre (toleriert Vergiftung: Kritische
+    /// Abschnitte halten nie Anwendercode, der Zustand bleibt konsistent).
+    fn lock_io(&self) -> MutexGuard<'_, ()> {
+        self.io_lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// `true`, wenn der Eintrag existiert, der Fingerprint passt und ein
     /// Output vorliegt. Schreibt nichts, fasst nichts an.
     pub fn is_fresh(&self, shard_hash: &str, expected: &ShardFingerprint) -> bool {
         if check_id(shard_hash).is_err() {
             return false;
         }
+        let _guard = self.lock_io();
         is_fresh_inner(&self.entry_dir(shard_hash), expected)
     }
 
@@ -151,6 +178,7 @@ impl DiskCache {
         if check_id(shard_hash).is_err() {
             return None;
         }
+        let _guard = self.lock_io();
         let dir = self.entry_dir(shard_hash);
         let stored = fs::read(dir.join(FINGERPRINT_FILE)).ok()?;
         if stored != expected.as_str().as_bytes() {
@@ -175,6 +203,7 @@ impl DiskCache {
         output: &[u8],
     ) -> io::Result<bool> {
         check_id(shard_hash)?;
+        let _guard = self.lock_io();
         let dir = self.entry_dir(shard_hash);
         if is_fresh_inner(&dir, fp) {
             return Ok(false);
@@ -182,15 +211,22 @@ impl DiskCache {
         fs::create_dir_all(&dir)?;
         atomic_write(&dir, OUTPUT_FILE, output)?;
         atomic_write(&dir, FINGERPRINT_FILE, fp.as_str().as_bytes())?;
-        self.gc()?;
+        self.gc_unlocked()?;
         Ok(true)
     }
 
     /// Entsorgt Einträge über dem LRU-Limit (älteste zuerst).
     /// Gibt die Anzahl entfernter Einträge zurück.
     pub fn gc(&self) -> io::Result<usize> {
+        let _guard = self.lock_io();
+        self.gc_unlocked()
+    }
+
+    /// Entsorgt Einträge über dem LRU-Limit (älteste zuerst); nur mit
+    /// gehaltener `io_lock`-Sperre (s. `lock_io`) aufrufen.
+    fn gc_unlocked(&self) -> io::Result<usize> {
         // list_entries: neueste zuerst → skip behält die neuesten.
-        let entries = self.list_entries()?;
+        let entries = self.list_entries_unlocked()?;
         let mut removed = 0usize;
         for (_, name) in entries.iter().skip(self.max_entries) {
             if fs::remove_dir_all(self.root.join(name)).is_ok() {
@@ -207,6 +243,13 @@ impl DiskCache {
 
     /// `(mtime, name)` aller gültigen Einträge, neueste zuerst.
     fn list_entries(&self) -> io::Result<Vec<(SystemTime, String)>> {
+        let _guard = self.lock_io();
+        self.list_entries_unlocked()
+    }
+
+    /// Wie `list_entries`, ohne Sperre (nur mit gehaltener `io_lock`-Sperre
+    /// (s. `lock_io`) aufrufen).
+    fn list_entries_unlocked(&self) -> io::Result<Vec<(SystemTime, String)>> {
         let read = match fs::read_dir(&self.root) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             r => r?,
@@ -525,5 +568,50 @@ mod tests {
         assert!(cache.store("s", &fp, b"o").expect("store"));
         assert_eq!(cache.entry_count().expect("count"), 0);
         assert!(cache.lookup("s", &fp).is_none());
+    }
+
+    #[test]
+    fn nebenlaeufige_store_lookup_gc_bleiben_konsistent() {
+        use std::sync::{Arc, Barrier};
+        let t = TestDir::new("race");
+        let cache = Arc::new(DiskCache::new(t.path()).with_max_entries(64));
+        let start = Arc::new(Barrier::new(8));
+        let mut handles = Vec::new();
+        for worker in 0..8 {
+            let cache = Arc::clone(&cache);
+            let start = Arc::clone(&start);
+            handles.push(std::thread::spawn(move || {
+                start.wait();
+                for i in 0..50u32 {
+                    // Gleicher Key, gleicher Fingerprint, gleiche Bytes:
+                    // Jeder Ausgang ist ok, aber nie korrupt oder panisch.
+                    let name = format!("w{worker}-{}", i % 8);
+                    let fp = fingerprint(b"race-input", "v1");
+                    let _ = cache.store(&name, &fp, b"race-output");
+                    let hit = cache.lookup(&name, &fp);
+                    assert!(hit.is_none() || hit.as_deref() == Some(b"race-output".as_slice()));
+                    assert!(cache.is_fresh(&name, &fp) || cache.lookup(&name, &fp).is_none());
+                    let _ = cache.gc();
+                    let _ = cache.entry_count();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker");
+        }
+        // Limit eingehalten: nie mehr Einträge als erlaubt (gc läuft in jedem
+        // store unter derselben Sperre).
+        assert!(cache.entry_count().expect("count") <= 64);
+        // Zweitlauf-Skip gilt weiter: frischer Eintrag wird nicht neu geschrieben.
+        let fp = fingerprint(b"race-input", "v1");
+        for i in 0..8 {
+            let name = format!("w0-{i}");
+            if cache.is_fresh(&name, &fp) {
+                let dir = t.path().join(&name);
+                let before = snapshot(&dir);
+                assert!(!cache.store(&name, &fp, b"race-output").expect("zweitlauf"));
+                assert_eq!(before, snapshot(&dir), "Zweitlauf hat Dateien angefasst");
+            }
+        }
     }
 }

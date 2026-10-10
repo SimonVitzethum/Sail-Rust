@@ -500,7 +500,12 @@ impl<H: OocHooks> OocDriver<H> {
         self.begin_hot(shard)?;
         let bytes = rewrite();
         let bytes_len = bytes.len();
-        self.seal_hot(shard, content_key, bytes_len)?;
+        // Seal-Fehler lassen die Barriere nicht lecken (Lane 126): heisse
+        // Phase verwerfen (`evicted`), dann Fehler durchreichen.
+        if let Err(e) = self.seal_hot(shard, content_key, bytes_len) {
+            let _ = self.abort_hot(shard);
+            return Err(e);
+        }
         self.hooks.warm_spill(content_key, &bytes)?;
         self.hooks
             .summary_insert(shard, content_key, summary_payload)?;
@@ -514,6 +519,12 @@ impl<H: OocHooks> OocDriver<H> {
     /// sonst `compute` + Store. `query_key` trägt die Domäne
     /// (s. [`MEMO_DOMAIN_SOLVER_Z3`); Vertrag: Anfrage → Wert ist rein —
     /// bei Miss gewinnt der erstgespeicherte Wert (Determinismus).
+    ///
+    /// Kein Singleflight (Lane 126, Thundering Herd): Gleichzeitige gleiche
+    /// Anfragen rechnen parallel, der Erstling gewinnt; Aufrufer mit teurem
+    /// `compute` deduplizieren gleiche Flüge extern. Der Hook-Store ist
+    /// backend-seitig infallibel; die file-backed Bindung (`sail-ooc`)
+    /// zaehlt/meldet Store-Fehler dort (s. `OocDriverLoop::memo_prove_result`).
     pub fn memo_prove(
         &mut self,
         query_key: &str,
@@ -541,7 +552,15 @@ impl<H: OocHooks> OocDriver<H> {
 
     /// Drop-Punkt am Phasenende (Lane-37-Policy): gibt alle live gehaltenen
     /// Warm-Referenzen frei; Dateien/Memos/Summaries bleiben bestehen.
+    ///
+    /// Heisser Shard (Lane 126): Ist beim Aufruf noch ein Shard heiss, wird er
+    /// wie ein Abbruch verworfen (`evicted` gezaehlt, kein Cache-Eintrag) —
+    /// `finish` leckt die Barriere nie.
     pub fn finish(&mut self) {
+        if let Some(shard) = self.hot.take() {
+            self.hooks.evict(&shard);
+            self.stats.evicted += 1;
+        }
         self.hooks.warm_evict_all();
     }
 }
@@ -664,5 +683,21 @@ mod tests {
             .warm_spill("k", b"anderer inhalt")
             .expect_err("mismatch");
         assert!(matches!(err, OocError::ContentMismatch { .. }));
+    }
+
+    #[test]
+    fn finish_mit_heissem_shard_verwirft_statt_zu_lecken() {
+        let mut d = driver();
+        d.begin_hot("a").expect("begin");
+        d.finish();
+        // Abbruch gezaehlt, Barriere frei, Backend benachrichtigt.
+        assert_eq!(d.stats().evicted, 1);
+        assert_eq!(d.hot(), None);
+        assert!(d.hooks().events.iter().any(|e| e == "evict:a"));
+        assert!(d.hooks().events.iter().any(|e| e == "evict-all"));
+        // Danach laeuft der naechste normal weiter.
+        d.run_shard("b", "key-b", || b"bb".to_vec(), b"s".to_vec())
+            .expect("nach finish weiter");
+        assert_eq!(d.stats().sealed, 1);
     }
 }

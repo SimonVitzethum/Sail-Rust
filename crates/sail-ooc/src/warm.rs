@@ -148,6 +148,9 @@ impl WarmLayer {
     /// live. Idempotent: Existiert die ID bereits mit gleichen Bytes, wird
     /// nichts geschrieben.
     ///
+    /// Unveraenderlichkeit (Lane 126): Haelt der Layer `id` bereits live mit
+    /// *anderen* Bytes, kommt [`WarmError::ContentMismatch`] — der alte
+    /// Ersetzungspfad (`account` schrieb still drueber) ist geschlossen.
     /// Gibt `Err`, wenn das Live-Budget ueberschritten wuerde — dann erst
     /// [`WarmLayer::evict`]/[`WarmLayer::evict_all`] aufrufen.
     pub fn spill(&mut self, id: &ContentId, bytes: &[u8]) -> Result<(), WarmError> {
@@ -155,9 +158,11 @@ impl WarmLayer {
             if held.as_ref() == bytes {
                 return Ok(());
             }
+            // Live anderer Inhalt: Korruption/Domaenenfehler, kein Ersetzen.
+            return Err(WarmError::ContentMismatch { id: *id });
         }
         let add = bytes.len() as u64;
-        if self.live_bytes.saturating_add(add) > self.max_live_bytes {
+        if self.live_bytes.checked_add(add).unwrap_or(u64::MAX) > self.max_live_bytes {
             return Err(WarmError::BudgetExceeded {
                 live: self.live_bytes,
                 add,
@@ -196,7 +201,7 @@ impl WarmLayer {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 let add = bytes.len() as u64;
-                if self.live_bytes.saturating_add(add) > self.max_live_bytes {
+                if self.live_bytes.checked_add(add).unwrap_or(u64::MAX) > self.max_live_bytes {
                     return Err(WarmError::BudgetExceeded {
                         live: self.live_bytes,
                         add,
@@ -204,8 +209,9 @@ impl WarmLayer {
                     });
                 }
                 let arc: Arc<[u8]> = Arc::from(bytes.into_boxed_slice());
-                self.live_bytes = self.live_bytes.saturating_add(arc.len() as u64);
+                self.add_live(arc.len() as u64);
                 self.live.insert(*id, Arc::clone(&arc));
+                self.debug_check_accounting();
                 Ok(Some(arc))
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -233,7 +239,8 @@ impl WarmLayer {
     pub fn evict(&mut self, id: &ContentId) -> bool {
         match self.live.remove(id) {
             Some(bytes) => {
-                self.live_bytes = self.live_bytes.saturating_sub(bytes.len() as u64);
+                self.sub_live(bytes.len() as u64);
+                self.debug_check_accounting();
                 true
             }
             None => false,
@@ -254,9 +261,44 @@ impl WarmLayer {
 
     fn account(&mut self, id: &ContentId, arc: Arc<[u8]>) {
         if let Some(old) = self.live.insert(*id, arc.clone()) {
-            self.live_bytes = self.live_bytes.saturating_sub(old.len() as u64);
+            self.sub_live(old.len() as u64);
         }
-        self.live_bytes = self.live_bytes.saturating_add(arc.len() as u64);
+        self.add_live(arc.len() as u64);
+        self.debug_check_accounting();
+    }
+
+    /// Zaehlt `n` Live-Bytes dazu. Kein `saturating_add` (Lane 126): Saettigung
+    /// wuerde Buchungsfehler still verbergen (Drift); Ueberlauf ist logisch
+    /// unmoeglich (Summe real allokierter Blobs) und faellt hier laut auf.
+    fn add_live(&mut self, n: u64) {
+        self.live_bytes = self
+            .live_bytes
+            .checked_add(n)
+            .expect("live_bytes-Ueberlauf");
+    }
+
+    /// Zieht `n` Live-Bytes ab. Kein `saturating_sub` (Lane 126, s. `add_live`):
+    /// Abzug ohne Deckung ist ein Buchungsfehler und faellt laut auf.
+    fn sub_live(&mut self, n: u64) {
+        self.live_bytes = self
+            .live_bytes
+            .checked_sub(n)
+            .expect("live_bytes-Unterlauf");
+    }
+
+    /// Prueft `live_bytes == Summe(held)` — nur in Debug-Builds (O(n), faengt
+    /// jede Drift zwischen Zaehler und gehaltenen `Arc`s; Release verlaesst
+    /// sich auf die geprueften `add_live`/`sub_live`-Pfade).
+    fn debug_check_accounting(&self) {
+        #[cfg(debug_assertions)]
+        {
+            let sum: u64 = self.live.values().map(|b| b.len() as u64).sum();
+            debug_assert_eq!(
+                self.live_bytes, sum,
+                "WarmLayer-Buchung gedriftet: Zaehler {}, Summe {sum}",
+                self.live_bytes,
+            );
+        }
     }
 }
 
@@ -378,6 +420,53 @@ mod tests {
             matches!(err, WarmError::ContentMismatch { .. }),
             "unerwartet: {err}"
         );
+    }
+
+    #[test]
+    fn live_ersetzung_wird_abgewiesen_statt_still_ersetzt() {
+        let t = TestDir::new("replace");
+        let mut warm = WarmLayer::open(t.path());
+        let id = id_of(b"original");
+        warm.spill(&id, b"original").expect("spill");
+        assert_eq!(warm.live_bytes(), 8);
+        // Gleicher Key, andere Bytes, Eintrag noch live: kein stilles
+        // Ersetzen (Unveraenderlichkeit), Zaehler unveraendert.
+        let err = warm.spill(&id, b"manipuliert!").expect_err("mismatch");
+        assert!(
+            matches!(err, WarmError::ContentMismatch { .. }),
+            "unerwartet: {err}"
+        );
+        assert_eq!(warm.live_bytes(), 8);
+        let got = warm.get(&id).expect("get").expect("da");
+        assert_eq!(got.as_ref(), b"original");
+        // Plattenstand bleibt der alte (nichts ueberschrieben).
+        let on_disk = std::fs::read(warm.blob_path(&id)).expect("platte");
+        assert_eq!(on_disk.as_slice(), b"original");
+    }
+
+    #[test]
+    fn buchung_bleibt_exakt_kein_drift() {
+        let t = TestDir::new("accounting");
+        let mut warm = WarmLayer::open(t.path());
+        let a = id_of(b"aaaa");
+        let b = id_of(b"bb");
+        warm.spill(&a, b"aaaa").expect("spill a");
+        warm.spill(&b, b"bb").expect("spill b");
+        assert_eq!(warm.live_bytes(), 6);
+        // Idempotenter Zweitspill zaehlt nicht doppelt.
+        warm.spill(&a, b"aaaa").expect("respin");
+        assert_eq!(warm.live_bytes(), 6);
+        warm.evict(&a);
+        assert_eq!(warm.live_bytes(), 2);
+        // Nachladen zaehlt exakt dazu; Budgetvergleich ohne Saettigung.
+        warm.evict(&b);
+        assert_eq!(warm.live_bytes(), 0);
+        let got = warm.get(&a).expect("reload").expect("datei bleibt");
+        assert_eq!(got.as_ref(), b"aaaa");
+        assert_eq!(warm.live_bytes(), 4);
+        warm.evict_all();
+        assert_eq!(warm.live_bytes(), 0);
+        assert_eq!(warm.live_count(), 0);
     }
 
     #[test]

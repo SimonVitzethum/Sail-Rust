@@ -24,6 +24,27 @@ use crate::ContentId;
 /// Harte Obergrenze fuer einen Summary-Eintrag (RAM-Schutz).
 pub const MAX_SUMMARY_BYTES: usize = 64 * 1024;
 
+/// Harter Deckel fuer gehaltene Tabellen-Eintraege (RAM-Schutz, Lane 126):
+/// [`SummaryTable::insert`] weist darueber hinaus ab ([`SummaryError::TooMany`]),
+/// statt still zu wachsen. Wer mehr Shards streamt, entfernt fertige per
+/// [`SummaryTable::remove`] (ein Eintrag pro Shard; Ersetzen desselben Shards
+/// ist immer erlaubt und zaehlt nicht gegen den Deckel).
+pub const MAX_SUMMARY_ENTRIES: usize = 65_536;
+
+/// Harter Deckel fuer Draht-Counts beim Dekodieren (DoS-Schutz, Lane 126):
+/// Kein gueltiger Eintrag (≤ [`MAX_SUMMARY_BYTES`]) traegt mehr Zaehler —
+/// kleinster Eintrag (leerer Name: 4 B Laengen-Prefix) passt hoechstens
+/// 16_384-mal hinein. Groessere Counts sind korrupt/fremd.
+pub(crate) const MAX_DECODE_ENTRIES: usize = 16_384;
+
+/// Prueft `n` gegen das u32-Drahtformat (Lane 126, Anti-Trunkierung): `as u32`
+/// wuerde oberhalb `u32::MAX` still kappen und korrupte Belege erzeugen.
+/// `Err` traegt die beanstandete Groesse (Aufrufer mappen auf
+/// [`SummaryError::TooLarge`]).
+pub(crate) fn check_u32_len(n: usize) -> Result<u32, usize> {
+    u32::try_from(n).map_err(|_| n)
+}
+
 /// Fehler beim Einpflegen einer Summary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SummaryError {
@@ -33,6 +54,12 @@ pub enum SummaryError {
         shard: ShardId,
         /// Gemessene Payload-Groesse.
         bytes: usize,
+    },
+    /// Tabellen-Deckel ([`MAX_SUMMARY_ENTRIES`]) erreicht (RAM-Schutz; erst
+    /// fertige Shards per [`SummaryTable::remove`] austragen).
+    TooMany {
+        /// Gehaltene Eintraege.
+        entries: usize,
     },
     /// Dekodieren gescheitert (korrupte/ fremde Bytes).
     Decode(String),
@@ -44,6 +71,10 @@ impl fmt::Display for SummaryError {
             Self::TooLarge { shard, bytes } => write!(
                 f,
                 "Shard-Summary von {shard} zu gross ({bytes} > {MAX_SUMMARY_BYTES} Bytes; Bodies gehoeren auf Platte)"
+            ),
+            Self::TooMany { entries } => write!(
+                f,
+                "Summary-Tabelle voll ({entries} Eintraege; erst fertige Shards austragen)"
             ),
             Self::Decode(msg) => write!(f, "Shard-Summary unlesbar: {msg}"),
         }
@@ -65,7 +96,19 @@ pub trait ShardSummary: Sized {
     /// Content-Hash des zugehoerigen Bodies (warm/kalt referenziert).
     fn content(&self) -> ContentId;
     /// Deterministische Serialisierung (muss unter [`MAX_SUMMARY_BYTES`] bleiben).
+    ///
+    /// Faellt bei logisch riesigen Eingaben (`> u32::MAX` Namen/Eintraege)
+    /// auf [`ShardSummary::try_encode`] zurueck (gepruefter Pfad); direkte
+    /// `encode`-Aufrufer mit solchen Eingaben bekommen einen Panic statt
+    /// still gekappter Laengen (Anti-Trunkierung, Lane 126).
     fn encode(&self) -> Vec<u8>;
+    /// Gepruefte Serialisierung: wie `encode`, meldet u32-Ueberlauf aber als
+    /// [`SummaryError::TooLarge`] statt zu kappen. [`SummaryRecord::from_summary`]
+    /// nutzt diesen Pfad. Default: `Ok(self.encode())` (fuer externe Impls mit
+    /// kleinen, statisch begrenzten Fakten).
+    fn try_encode(&self) -> Result<Vec<u8>, SummaryError> {
+        Ok(self.encode())
+    }
     /// Gegenstueck zu `encode`.
     fn decode(shard: ShardId, content: ContentId, bytes: &[u8]) -> Result<Self, SummaryError>;
 }
@@ -85,8 +128,10 @@ pub struct SummaryRecord {
 
 impl SummaryRecord {
     /// Baut einen Eintrag aus einer Summary; prueft die Groessengrenze.
+    /// Nutzt den geprueften Pfad ([`ShardSummary::try_encode`]): u32-Ueberlauf
+    /// wird [`SummaryError::TooLarge`], nie eine gekappte Laenge.
     pub fn from_summary<S: ShardSummary>(summary: &S) -> Result<Self, SummaryError> {
-        let payload = summary.encode();
+        let payload = summary.try_encode()?;
         Self::new(
             summary.shard().clone(),
             summary.content(),
@@ -143,8 +188,19 @@ impl SummaryTable {
     }
 
     /// Pflegt eine Summary ein (ersetzt aeltere desselben Shards).
-    pub fn insert(&mut self, record: SummaryRecord) {
+    ///
+    /// Deckel: Haelt die Tabelle bereits [`MAX_SUMMARY_ENTRIES`] *fremde*
+    /// Shards, kommt [`SummaryError::TooMany`] (RAM-Schutz) — erst fertige
+    /// Shards per [`SummaryTable::remove`] austragen. Ersetzen desselben
+    /// Shards ist immer erlaubt.
+    pub fn insert(&mut self, record: SummaryRecord) -> Result<(), SummaryError> {
+        if !self.entries.contains_key(&record.shard) && self.entries.len() >= MAX_SUMMARY_ENTRIES {
+            return Err(SummaryError::TooMany {
+                entries: self.entries.len(),
+            });
+        }
         self.entries.insert(record.shard.clone(), record);
+        Ok(())
     }
 
     /// Holt die Summary eines Shards (reine RAM-Auskunft).
@@ -171,10 +227,14 @@ impl SummaryTable {
         self.entries.is_empty()
     }
 
-    /// Alle Shards mit Summary (unsortiert).
+    /// Alle Shards mit Summary, deterministisch sortiert (Name, Chunk).
+    /// Die Tabelle nutzt eine `HashMap` (unsortierte Iteration); ohne
+    /// Sortierung waere jede Auflistung laufabhaengig (Lane 126: Ordnung).
     #[must_use]
     pub fn shards(&self) -> Vec<ShardId> {
-        self.entries.keys().cloned().collect()
+        let mut out: Vec<ShardId> = self.entries.keys().cloned().collect();
+        out.sort();
+        out
     }
 
     /// Gesamt-Payload in Bytes (RAM-Budget-Kontrolle).
@@ -212,28 +272,48 @@ impl ShardSummary for ExportedSymbols {
     }
 
     fn encode(&self) -> Vec<u8> {
+        self.try_encode().expect("ExportedSymbols passt ins u32-Drahtformat")
+    }
+
+    fn try_encode(&self) -> Result<Vec<u8>, SummaryError> {
+        let too_large = |bytes: usize| SummaryError::TooLarge {
+            shard: self.shard.clone(),
+            bytes,
+        };
         let mut names = self.symbols.clone();
         names.sort();
         names.dedup();
         let mut out = Vec::new();
-        out.extend_from_slice(&(names.len() as u32).to_le_bytes());
+        let n = check_u32_len(names.len()).map_err(too_large)?;
+        out.extend_from_slice(&n.to_le_bytes());
         for name in &names {
-            out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            let len = check_u32_len(name.len()).map_err(too_large)?;
+            out.extend_from_slice(&len.to_le_bytes());
             out.extend_from_slice(name.as_bytes());
         }
-        out
+        Ok(out)
     }
 
     fn decode(shard: ShardId, content: ContentId, bytes: &[u8]) -> Result<Self, SummaryError> {
         let err = |msg: &str| SummaryError::Decode(msg.into());
+        if bytes.len() > MAX_SUMMARY_BYTES {
+            return Err(err("Eintrag ueber Deckel"));
+        }
         let n_bytes = bytes.get(..4).ok_or_else(|| err("kein Count"))?;
-        let n = u32::from_le_bytes([n_bytes[0], n_bytes[1], n_bytes[2], n_bytes[3]]) as usize;
+        let n = u32::from_le_bytes([n_bytes[0], n_bytes[1], n_bytes[2], n_bytes[3]]);
+        if n as usize > MAX_DECODE_ENTRIES {
+            return Err(err("Count ueber Deckel"));
+        }
+        let n = n as usize;
         let mut rest = &bytes[4..];
         let mut symbols = Vec::new();
         for _ in 0..n {
             let l_bytes = rest.get(..4).ok_or_else(|| err("keine Laenge"))?;
             let len =
                 u32::from_le_bytes([l_bytes[0], l_bytes[1], l_bytes[2], l_bytes[3]]) as usize;
+            if len > MAX_SUMMARY_BYTES {
+                return Err(err("Laenge ueber Deckel"));
+            }
             let end = len.checked_add(4).ok_or_else(|| err("Laenge ueberlaeuft"))?;
             let name_bytes = rest.get(4..end).ok_or_else(|| err("Name abgeschnitten"))?;
             let name = std::str::from_utf8(name_bytes).map_err(|_| err("Name kein UTF-8"))?;
@@ -293,12 +373,12 @@ mod tests {
         assert!(table.is_empty());
         let a = SummaryRecord::from_summary(&sample(1)).expect("a");
         let bytes_a = a.len();
-        table.insert(a);
+        table.insert(a).expect("insert");
         let mut b_sym = sample(2);
         b_sym.shard = ShardId::new("sve", 0);
         let b = SummaryRecord::from_summary(&b_sym).expect("b");
         let bytes_b = b.len();
-        table.insert(b);
+        table.insert(b).expect("insert");
         assert_eq!(table.len(), 2);
         assert_eq!(table.payload_bytes(), bytes_a + bytes_b);
         assert!(table.get(&ShardId::new("sve", 0)).is_some());
@@ -308,6 +388,48 @@ mod tests {
         // Bodies stehen nie in der Tabelle — nur Content-Referenzen.
         let kept = table.get(&ShardId::new("instrs32", 0)).expect("kept");
         assert_eq!(kept.content, ContentId::of_bytes(&[1]));
+    }
+
+    #[test]
+    fn tabelle_deckel_und_sortierte_ordnung() {
+        assert!(MAX_SUMMARY_ENTRIES > 0);
+        assert!(MAX_DECODE_ENTRIES > 0);
+        // Ordnung: unsortiert eingepflegt, sortiert aufgelistet (deterministisch).
+        let mut table = SummaryTable::new();
+        for name in ["sve", "a", "instrs32", "m"] {
+            let mut s = sample(1);
+            s.shard = ShardId::new(name, 0);
+            table.insert(SummaryRecord::from_summary(&s).expect("klein")).expect("insert");
+        }
+        let names: Vec<String> = table.shards().iter().map(|s| s.name.clone()).collect();
+        assert_eq!(names, vec!["a", "instrs32", "m", "sve"]);
+        // Deckel: Ersetzen desselben Shards bleibt erlaubt (kein TooMany).
+        let mut s = sample(9);
+        s.shard = ShardId::new("a", 0);
+        table.insert(SummaryRecord::from_summary(&s).expect("ersatz")).expect("ersatz");
+        assert_eq!(table.len(), 4);
+    }
+
+    #[test]
+    fn decode_caps_weisen_riesen_counts_ab() {
+        let shard = ShardId::new("a", 0);
+        let content = ContentId::of_bytes(b"c");
+        // Count ueber Deckel (kleine Bytes, riesiger Count).
+        let mut huge_count = Vec::new();
+        huge_count.extend_from_slice(&(MAX_DECODE_ENTRIES as u32 + 1).to_le_bytes());
+        assert!(ExportedSymbols::decode(shard.clone(), content, &huge_count).is_err());
+        // Gesamtbytes ueber Deckel.
+        let big = vec![0u8; MAX_SUMMARY_BYTES + 1];
+        assert!(ExportedSymbols::decode(shard.clone(), content, &big).is_err());
+        // Einzellaenge ueber Deckel (Count 1, len = u32::MAX).
+        let huge_len = vec![1, 0, 0, 0, 0xff, 0xff, 0xff, 0xff];
+        assert!(ExportedSymbols::decode(shard.clone(), content, &huge_len).is_err());
+        // Gepruefter Pfad meldet wie ungepruefter dieselben Bytes.
+        let s = sample(3);
+        assert_eq!(s.try_encode().expect("klein"), s.encode());
+        // u32-Pruefung: Ueberlauf wird erkannt statt gekappt.
+        assert!(check_u32_len(u32::MAX as usize).is_ok());
+        assert_eq!(check_u32_len(u32::MAX as usize + 1), Err(u32::MAX as usize + 1));
     }
 
     #[test]

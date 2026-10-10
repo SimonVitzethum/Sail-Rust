@@ -13,6 +13,13 @@
 //! Vertrag: Anfrage → Wert muss eine **reine Funktion** sein. Gibt es zu einer
 //! Anfrage je einen anderen Wert (Aufruferfehler), gewinnt der erste
 //! gespeicherte (Determinismus vor Letzt-Schreiber).
+//!
+//! Nebenläufigkeit (Lane 126): Die Sperre aus [`sail_cache::DiskCache`]
+//! serialisiert Check-then-act, Touch und `gc` prozessweit. Es gibt aber
+//! **kein Singleflight**: Gleichzeitige gleiche Anfragen rechnen parallel
+//! (Thundering Herd); jede schreibt, der Erstling gewinnt per Zweitlauf-Skip.
+//! Aufrufer mit teurem `compute` deduplizieren gleiche Flüge extern
+//! (z. B. sequentielles Shard-Streaming statt paralleler Duplikate).
 
 use std::io;
 use std::path::Path;
@@ -78,7 +85,8 @@ impl MemoSpills {
     }
 
     /// Holt den gespeicherten Wert zur Anfrage (`None` = Miss).
-    /// Aktualisiert die LRU-Position (Lane-36-Verhalten).
+    /// Aktualisiert die LRU-Position (Lane-36-Verhalten; Touch laeuft unter
+    /// der prozessweiten [`sail_cache::DiskCache`]-Sperre, Lane 126).
     #[must_use]
     pub fn lookup(&self, query: &[u8]) -> Option<Vec<u8>> {
         self.inner
@@ -87,6 +95,9 @@ impl MemoSpills {
 
     /// Legt den Wert zur Anfrage ab. `Ok(true)` = neu geschrieben,
     /// `Ok(false)` = bereits frisch (nichts angefasst, Zweitlauf-Skip).
+    /// Check-then-act laeuft unter der prozessweiten
+    /// [`sail_cache::DiskCache`]-Sperre (Lane 126); kein Singleflight
+    /// (s. Modul-Doku).
     pub fn store(&self, query: &[u8], value: &[u8]) -> io::Result<bool> {
         self.inner
             .store(&self.entry_name(query), &self.query_fingerprint(query), value)

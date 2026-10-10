@@ -267,6 +267,10 @@ pub struct DriverStats {
     pub memo_misses: u64,
     /// Eingepflegte Cross-Shard-Summaries.
     pub summaries: u64,
+    /// Fehlgeschlagene Memo-Stores (Wert wurde trotzdem zurueckgegeben;
+    /// s. [`OocDriverLoop::memo_prove`]. Hält fest, dass nichts geschluckt
+    /// wurde — die gepruefte Variante ist [`OocDriverLoop::memo_prove_result`]).
+    pub memo_store_errors: u64,
 }
 
 /// OoC-Treiberschleife: genau ein heisser Shard, Rest warm/kalt.
@@ -372,6 +376,11 @@ impl OocDriverLoop {
     ///
     /// Reihenfolge ist fix (Seal-vor-Spill): Schlaegt der Spill/die Summary
     /// fehl, ist die Barriere trotzdem frei (versiegelt vor dem Spill).
+    ///
+    /// Leck-Freiheit (Lane 126): Schlaegt ein Schritt *nach* `begin` fehl
+    /// (Budget, Spill, Summary, Seal-Deckel), wird die heisse Phase per
+    /// `evict` verworfen (`evicted` gezaehlt) — die Barriere bleibt nie mit
+    /// heissem Token liegen, der naechste Shard kann sofort beginnen.
     pub fn run_shard(
         &mut self,
         shard: ShardId,
@@ -392,6 +401,23 @@ impl OocDriverLoop {
         let token = self.barrier.begin(shard.clone())?;
         self.hot = Some(token);
         self.hot_phase = Some(DriverPhase::Typecheck);
+        let res = self.run_shard_hot(&shard, fetched, run_phase, summarize);
+        if res.is_err() {
+            // Fehlerpfad nach `begin`: Barriere nicht lecken lassen.
+            self.fail_hot();
+        }
+        res
+    }
+
+    /// Heisser Abschnitt von [`OocDriverLoop::run_shard`] (nur mit gesetztem
+    /// `hot` aufrufen). Fehler ueberlaesst der Aufrufer [`OocDriverLoop::fail_hot`].
+    fn run_shard_hot(
+        &mut self,
+        shard: &ShardId,
+        fetched: Vec<u8>,
+        run_phase: impl FnOnce(&[u8]) -> Vec<u8>,
+        summarize: impl FnOnce(&ShardId, ContentId, &[u8]) -> Result<SummaryRecord, SummaryError>,
+    ) -> Result<SealReceipt, DriverError> {
         self.check_bytes(DriverPhase::Typecheck, fetched.len())?;
         // Typcheck + Rewrite (nur dieser Shard in RAM)
         self.hot_phase = Some(DriverPhase::Rewrite);
@@ -402,18 +428,45 @@ impl OocDriverLoop {
         self.check_bytes(DriverPhase::Seal, produced.len())?;
         let token = self.hot.take().expect("heiss nach begin");
         self.hot_phase = None;
-        let receipt = self.barrier.seal(token, &produced, &self.pass_version)?;
+        let receipt = match self.barrier.seal(token, &produced, &self.pass_version) {
+            Ok(receipt) => receipt,
+            Err(e @ BarrierError::SealedFull { .. }) => {
+                // Beleg-Deckel: `seal` hat das Token wie ein `evict` konsumiert
+                // (Barriere frei, Shard als verworfen gezaehlt) — nur Treiber-
+                // Zaehler nachziehen, dann Fehler durchreichen.
+                self.stats.evicted += 1;
+                return Err(e.into());
+            }
+            Err(e) => {
+                // Veraltetes/fremdes Token (Desync, unerreichbar im Normalpfad):
+                // weder Barriere noch Zaehler angefasst — Fehler durchreichen,
+                // `fail_hot` des Aufrufers findet kein heisses Token mehr.
+                return Err(e.into());
+            }
+        };
         // spillen (warm ablegen)
         self.check_bytes(DriverPhase::Spill, produced.len())?;
         self.warm.spill(&receipt.content, &produced)?;
         self.stats.warm_spills += 1;
         // Summary (nur Fakten in RAM)
         self.check_bytes(DriverPhase::Summary, produced.len())?;
-        let record = summarize(&shard, receipt.content, &produced)?;
-        self.summaries.insert(record);
+        let record = summarize(shard, receipt.content, &produced)?;
+        self.summaries.insert(record).map_err(DriverError::Summary)?;
         self.stats.summaries += 1;
         self.stats.sealed += 1;
         Ok(receipt)
+    }
+
+    /// Verwirft eine liegengebliebene heisse Phase (Fehlerpfad nach `begin`,
+    /// [`OocDriverLoop::finish`] mit heissem Shard): Barriere per `evict` frei,
+    /// `evicted` gezaehlt. Idempotent (nichts heiss → nichts zu tun).
+    fn fail_hot(&mut self) {
+        if let Some(token) = self.hot.take() {
+            self.hot_phase = None;
+            if self.barrier.evict(token).is_ok() {
+                self.stats.evicted += 1;
+            }
+        }
     }
 
     /// Ganzer Plan: jeder Shard durch [`OocDriverLoop::run_shard`], der Reihe nach
@@ -456,6 +509,15 @@ impl OocDriverLoop {
     /// `compute` + Spill (run-uebergreifend wiederverwendbar). Die Domaene
     /// steckt in der Ablage ([`OocDriverLoop::open`]); Vertrag: Anfrage → Wert
     /// ist rein (Erster gewinnt, Determinismus).
+    ///
+    /// Kein Singleflight (Lane 126, Thundering Herd): Gleichzeitige gleiche
+    /// Anfragen rechnen parallel, der Erstling gewinnt; Aufrufer mit teurem
+    /// `compute` deduplizieren gleiche Fluege extern.
+    ///
+    /// Store-Fehler (Lane 126): Diese Variante gibt den Wert trotzdem zurueck
+    /// (Cache ist Best-Effort), zaehlt aber
+    /// [`DriverStats::memo_store_errors`] — nichts wird still geschluckt.
+    /// Wer den Fehler braucht, nutzt [`OocDriverLoop::memo_prove_result`].
     pub fn memo_prove(
         &mut self,
         query: &[u8],
@@ -467,15 +529,42 @@ impl OocDriverLoop {
         }
         self.stats.memo_misses += 1;
         let value = compute();
-        let _ = self.memo.store(query, &value);
+        if self.memo.store(query, &value).is_err() {
+            self.stats.memo_store_errors += 1;
+        }
         value
+    }
+
+    /// Wie [`OocDriverLoop::memo_prove`], gibt aber Store-Fehler als
+    /// [`DriverError::Io`] zurueck (Lane 126: nichts schlucken). Treffer und
+    /// berechnete Werte sind identisch zur infalliblen Variante.
+    pub fn memo_prove_result(
+        &mut self,
+        query: &[u8],
+        compute: impl FnOnce() -> Vec<u8>,
+    ) -> Result<Vec<u8>, DriverError> {
+        if let Some(hit) = self.memo.lookup(query) {
+            self.stats.memo_hits += 1;
+            return Ok(hit);
+        }
+        self.stats.memo_misses += 1;
+        let value = compute();
+        self.memo
+            .store(query, &value)
+            .map_err(|e| DriverError::Io(format!("memo-store: {e}")))?;
+        Ok(value)
     }
 
     /// Drop-Punkt am Phasenende (Lane-37-Policy): gibt alle live gehaltenen
     /// Warm-Referenzen frei (Dateien/Memos/Summaries bleiben). Danach
     /// [`DriverState::Finished`] (bis der naechste Shard beginnt — die Schleife
     /// bleibt wiederverwendbar).
+    ///
+    /// Heisser Shard (Lane 126): Ist beim Aufruf noch ein Shard heiss, wird er
+    /// wie ein Abbruch verworfen (`evicted` gezaehlt, kein Cache-Eintrag) —
+    /// `finish` leckt die Barriere nie.
     pub fn finish(&mut self) {
+        self.fail_hot();
         self.warm.evict_all();
         self.finished = true;
     }
@@ -595,9 +684,85 @@ mod tests {
         assert_eq!(d.stats().sealed, 1);
     }
 
+    /// Lane 126: Fehler *nach* `begin` lassen die Barriere frei (kein Leck).
+    /// Rig-Hinweis: allokiert absichtlich ueber dem Rewrite-Budget (512 MiB),
+    /// laeuft nur im zentralen Test-Rig mit RAM (E3: hier nur Code).
     #[test]
-    fn abort_verwirft_ohne_cache_eintrag() {
-        let dirs = TestDirs::new("abort");
+    fn fehler_nach_begin_leckt_die_barriere_nicht() {
+        let dirs = TestDirs::new("hot-leak");
+        let mut d = driver(&dirs);
+        let huge = (PEAK_REWRITE_KIB as usize + 1) * 1024;
+        let err = d
+            .run_shard(
+                ShardId::new("riesig", 0),
+                || b"klein".to_vec(),
+                |_| vec![0u8; huge],
+                tiny_summary,
+            )
+            .expect_err("Rewrite-Budget");
+        assert!(matches!(err, DriverError::PhaseBudget { .. }));
+        // Heisse Phase verworfen statt geleckt: Barriere frei, evicted gezaehlt.
+        assert_eq!(d.state(), DriverState::Idle);
+        assert_eq!(d.stats().evicted, 1);
+        assert_eq!(d.stats().sealed, 0);
+        // Danach laeuft der naechste normal weiter.
+        d.run_shard(
+            ShardId::new("klein", 0),
+            || b"x".to_vec(),
+            |b| b.to_vec(),
+            tiny_summary,
+        )
+        .expect("weiter");
+        assert_eq!(d.stats().sealed, 1);
+    }
+
+    #[test]
+    fn finish_mit_heissem_shard_verwirft_statt_zu_lecken() {
+        let dirs = TestDirs::new("finish-hot");
+        let mut d = driver(&dirs);
+        // Heiss machen (direkt ueber die Barriere, wie ein unterbrochener Lauf).
+        let token = d.barrier.begin(ShardId::new("a", 0)).expect("begin");
+        d.hot = Some(token);
+        d.hot_phase = Some(DriverPhase::Rewrite);
+        d.finish();
+        assert_eq!(d.stats().evicted, 1);
+        assert_eq!(d.stats().sealed, 0);
+        assert_eq!(d.state(), DriverState::Finished);
+        // Barriere frei: naechster Shard nach finish (wiederverwendbar).
+        let r = d
+            .run_shard(
+                ShardId::new("b", 0),
+                || b"w".to_vec(),
+                |b| b.to_vec(),
+                tiny_summary,
+            )
+            .expect("nach finish weiter");
+        assert_eq!(r.seq, 0);
+    }
+
+    #[test]
+    fn memo_store_fehler_wird_gezaehlt_nicht_geschluckt() {
+        let dirs = TestDirs::new("memo-err");
+        // Memo-Verzeichnis durch eine Datei blockieren: jeder Store scheitert.
+        let blocker = dirs.memo.clone();
+        let _ = std::fs::remove_dir_all(&blocker);
+        std::fs::write(&blocker, b"blockiert").expect("blocker");
+        let mut d = OocDriverLoop::open(&dirs.warm, &blocker, "solver/z3-v1", OOC_DRIVER_PASS_VERSION);
+        // Infallible Variante: Wert trotzdem zurueck, Fehler gezaehlt.
+        let v = d.memo_prove(b"q", || b"sat".to_vec());
+        assert_eq!(v, b"sat");
+        assert_eq!(d.stats().memo_store_errors, 1);
+        // Gepruefte Variante: Fehler kommt als Io zurueck.
+        let err = d.memo_prove_result(b"q2", || b"unsat".to_vec()).expect_err("store");
+        assert!(matches!(err, DriverError::Io(_)));
+        assert_eq!(d.stats().memo_store_errors, 1);
+        // Treffer-Pfad bleibt fehlerfrei (nichts gezaehlt): flottender Speicher
+        // ist leer, also erneut Miss — aber kein Panic, kein Hang.
+        assert_eq!(d.stats().memo_misses, 2);
+    }
+
+    #[test]
+    fn abort_verwirft_ohne_cache_eintrag() {        let dirs = TestDirs::new("abort");
         let mut d = driver(&dirs);
         assert_eq!(d.abort_hot().expect("nichts heiss"), false);
         // Heiss machen, dann abbrechen: kein Seal, kein Spill, kein Summary.
