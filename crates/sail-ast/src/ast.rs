@@ -181,6 +181,7 @@ pub enum ConstraintKind {
     Set { nexp: NExp, members: Vec<String> },
     And(Box<Constraint>, Box<Constraint>),
     Or(Box<Constraint>, Box<Constraint>),
+    Not(Box<Constraint>),
     App { func: Name, args: Vec<TypArg> },
     Id(Name),
     Var(Symbol),

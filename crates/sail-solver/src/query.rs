@@ -48,7 +48,7 @@ impl Constraint {
             NC::True => Constraint::True,
             NC::False => Constraint::False,
             NC::Id(name) => Constraint::atom(format!("(bid {name})")),
-            NC::Var(kid) => Constraint::atom(format!("(bvar {kid})")),
+            NC::Var(kid) => Constraint::atom(format!("(bvar {})", kid.0)),
             NC::Equal(a, b) => {
                 Constraint::atom(format!("(= {} {})", nexp_key(a), nexp_key(b)))
             }
@@ -132,7 +132,7 @@ fn nexp_key(e: &NE) -> String {
     let e = sail_nexp::normalize(e);
     match &e {
         NE::Id(name) => format!("(id {name})"),
-        NE::Var(kid) => format!("(var {kid})"),
+        NE::Var(kid) => format!("(var {})", kid.0),
         NE::Constant(v) => format!("(const {v})"),
         NE::App(f, args) => {
             let argv: Vec<String> = args.iter().map(nexp_key).collect();
@@ -194,5 +194,26 @@ mod tests {
         assert_eq!(a.cache_key(), b.cache_key());
         let c = SolverQuery::new(Constraint::atom("x > 0")).with_timeout(100);
         assert_ne!(a.cache_key(), c.cache_key());
+    }
+
+    #[test]
+    fn not_is_structural_and_var_keys_use_symbol_id() {
+        // `Not` bleibt strukturiert (kein opakes Atom).
+        match Constraint::from_nconstraint(&NC::Not(Box::new(NC::True))) {
+            Constraint::Not(x) => assert_eq!(*x, Constraint::True),
+            other => panic!("expected Not, got {other:?}"),
+        }
+        // Internierte Kids haben kein `Display`: Keys nutzen die rohe
+        // Symbol-Id (deterministisch je Interner).
+        assert_eq!(
+            Constraint::from_nconstraint(&NC::Var(sail_nexp::Kid(3))),
+            Constraint::atom("(bvar 3)")
+        );
+        let key = Constraint::from_nconstraint(&NC::Ge(
+            Box::new(NE::Var(sail_nexp::Kid(1))),
+            Box::new(NE::Constant(0)),
+        ))
+        .cache_key();
+        assert_eq!(key, "(atom (>= (var 1) (const 0)))");
     }
 }
