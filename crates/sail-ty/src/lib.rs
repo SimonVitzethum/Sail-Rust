@@ -12,6 +12,7 @@
 //! the future `sail-ast` / `sail-nexp` crates.
 
 pub mod check;
+pub mod conv;
 pub mod env;
 pub mod error;
 pub mod kind;

@@ -36,6 +36,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
+pub mod conv;
+
 /// Source position for hard errors: the canonical `sail-ast` span
 /// (Lane 61 unification of MIGRATION.md #28; previously a line/col-only
 /// local copy, removed).
