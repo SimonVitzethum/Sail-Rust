@@ -7,7 +7,7 @@ use sail_nexp::{
     int_kind, lean_type_name, normalize, normalize_constraint, provably_neg, provably_neg_in,
     provably_nneg, provably_nneg_in, provably_nonpos, provably_nonpos_in, provably_nonzero,
     provably_nonzero_in, provably_pos, provably_pos_in, provably_zero, provably_zero_in, simplify,
-    simplify_constraint, Facts, NConstraint, NExp,
+    simplify_constraint, Facts, NConstraint, NExp, TypArg,
 };
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -64,6 +64,14 @@ fn all_nexp_operators_evaluate() {
 #[test]
 fn all_nconstraint_operators_evaluate() {
     let e = env(&[("n", 3)]);
+    // Equal/NotEqual vergleichen `typ_arg`-Sorten (Lane 108).
+    let cmp_t = |f: fn(Box<TypArg>, Box<TypArg>) -> NConstraint| {
+        f(
+            Box::new(TypArg::NExp(v("n"))),
+            Box::new(TypArg::NExp(c(3))),
+        )
+        .eval(&e)
+    };
     let cmp = |f: fn(Box<NExp>, Box<NExp>) -> NConstraint| {
         f(Box::new(v("n")), Box::new(c(3))).eval(&e)
     };
@@ -71,8 +79,8 @@ fn all_nconstraint_operators_evaluate() {
     assert_eq!(NConstraint::False.eval(&e), Some(false));
     assert_eq!(NConstraint::Id("p".to_string()).eval(&e), None);
     assert_eq!(NConstraint::Var("b".to_string()).eval(&e), None);
-    assert_eq!(cmp(NConstraint::Equal), Some(true));
-    assert_eq!(cmp(NConstraint::NotEqual), Some(false));
+    assert_eq!(cmp_t(NConstraint::Equal), Some(true));
+    assert_eq!(cmp_t(NConstraint::NotEqual), Some(false));
     assert_eq!(cmp(NConstraint::Ge), Some(true));
     assert_eq!(cmp(NConstraint::Gt), Some(false));
     assert_eq!(cmp(NConstraint::Le), Some(true));
@@ -84,7 +92,7 @@ fn all_nconstraint_operators_evaluate() {
     assert_eq!(NConstraint::Set(Box::new(v("n")), vec![]).eval(&e), Some(false));
     // NC_app (neu): uninterpretiert => None.
     assert_eq!(
-        NConstraint::App("ok".to_string(), vec![v("n")]).eval(&e),
+        NConstraint::App("ok".to_string(), vec![TypArg::NExp(v("n"))]).eval(&e),
         None
     );
     let t = NConstraint::True;
@@ -103,7 +111,11 @@ fn all_nconstraint_operators_evaluate() {
 #[test]
 fn nc_app_vars_subst_simplify() {
     // vars in Erstauftretens-Reihenfolge (Praedikat + Args).
-    let a = NConstraint::App("p".to_string(), vec![v("m"), v("n"), v("m")]);
+    let wrap = |e: NExp| TypArg::NExp(e);
+    let a = NConstraint::App(
+        "p".to_string(),
+        vec![wrap(v("m")), wrap(v("n")), wrap(v("m"))],
+    );
     assert_eq!(a.vars(), vec!["m".to_string(), "n".to_string()]);
     // subst trifft nur Args; unveraendert wird geborgt.
     let empty: BTreeMap<String, NExp> = BTreeMap::new();
@@ -111,16 +123,19 @@ fn nc_app_vars_subst_simplify() {
     let s = subst_of(&[("n", c(9))]);
     assert_eq!(
         a.subst(&s),
-        NConstraint::App("p".to_string(), vec![v("m"), c(9), v("m")])
+        NConstraint::App(
+            "p".to_string(),
+            vec![wrap(v("m")), wrap(c(9)), wrap(v("m"))]
+        )
     );
     // simplify faltet nur Argumente, nie das Praedikat selbst.
     let b = NConstraint::App(
         "p".to_string(),
-        vec![NExp::Sum(Box::new(c(1)), Box::new(c(2)))],
+        vec![wrap(NExp::Sum(Box::new(c(1)), Box::new(c(2))))],
     );
     assert_eq!(
         simplify_constraint(&b),
-        NConstraint::App("p".to_string(), vec![c(3)])
+        NConstraint::App("p".to_string(), vec![wrap(c(3))])
     );
     // normalize sortiert/deduped nichts weg, ordnet aber Args kanonisch.
     assert_eq!(normalize_constraint(&b), normalize_constraint(&b));
@@ -183,7 +198,10 @@ fn facts_from_constraint_covers_equal_and_set() {
         (v("n"), c(5)),
         (c(5), v("n")),
     ] {
-        let f = Facts::from_constraint(&NConstraint::Equal(Box::new(a), Box::new(b)));
+        let f = Facts::from_constraint(&NConstraint::Equal(
+            Box::new(TypArg::NExp(a)),
+            Box::new(TypArg::NExp(b)),
+        ));
         assert_eq!((f.lower("n"), f.upper("n")), (Some(5), Some(5)));
         assert!(provably_pos_in(&v("n"), &f));
         assert!(!provably_zero_in(&v("n"), &f));
@@ -192,10 +210,11 @@ fn facts_from_constraint_covers_equal_and_set() {
     let f = Facts::from_constraint(&NConstraint::Set(Box::new(v("n")), vec![0]));
     assert!(provably_zero_in(&v("n"), &f));
     // `And` sammelt ueber alle Operatoren hinweg.
+    let wrap = |e: NExp| Box::new(TypArg::NExp(e));
     let all = NConstraint::And(
-        Box::new(NConstraint::Equal(Box::new(v("a")), Box::new(c(2)))),
+        Box::new(NConstraint::Equal(wrap(v("a")), wrap(c(2)))),
         Box::new(NConstraint::And(
-            Box::new(NConstraint::NotEqual(Box::new(v("b")), Box::new(c(0)))),
+            Box::new(NConstraint::NotEqual(wrap(v("b")), wrap(c(0)))),
             Box::new(NConstraint::Ge(Box::new(v("d")), Box::new(c(3)))),
         )),
     );
@@ -259,12 +278,13 @@ fn simplify_identities_per_operator() {
     let b = NExp::Times(Box::new(v("a")), Box::new(v("b")));
     assert_eq!(normalize(&a), normalize(&b));
     // Constraint-Faltung je Vergleich.
+    let wrap = |e: NExp| Box::new(TypArg::NExp(e));
     assert_eq!(
-        simplify_constraint(&NConstraint::Equal(Box::new(c(2)), Box::new(c(2)))),
+        simplify_constraint(&NConstraint::Equal(wrap(c(2)), wrap(c(2)))),
         NConstraint::True
     );
     assert_eq!(
-        simplify_constraint(&NConstraint::NotEqual(Box::new(c(2)), Box::new(c(2)))),
+        simplify_constraint(&NConstraint::NotEqual(wrap(c(2)), wrap(c(2)))),
         NConstraint::False
     );
     assert_eq!(

@@ -17,7 +17,7 @@
 
 use std::borrow::Cow;
 
-use crate::expr::{NConstraint, NExp};
+use crate::expr::{NConstraint, NExp, NTyp, TypArg};
 
 /// One rewrite pass over an [`NExp`].
 pub fn simplify(e: &NExp) -> NExp {
@@ -457,11 +457,11 @@ pub fn simplify_constraint_cow(c: &NConstraint) -> Cow<'_, NConstraint> {
             Cow::Borrowed(c)
         }
         NConstraint::Equal(a, b) => {
-            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            let (ra, rb) = (simplify_typarg_cow(a), simplify_typarg_cow(b));
             eq_join(c, ra, rb, NConstraint::Equal, true)
         }
         NConstraint::NotEqual(a, b) => {
-            let (ra, rb) = (simplify_cow(a), simplify_cow(b));
+            let (ra, rb) = (simplify_typarg_cow(a), simplify_typarg_cow(b));
             eq_join(c, ra, rb, NConstraint::NotEqual, false)
         }
         NConstraint::Ge(a, b) => {
@@ -505,7 +505,7 @@ pub fn simplify_constraint_cow(c: &NConstraint) -> Cow<'_, NConstraint> {
         }
         NConstraint::App(f, args) => {
             // Uninterpreted: only simplify the arguments, never fold.
-            let simp: Vec<Cow<'_, NExp>> = args.iter().map(simplify_cow).collect();
+            let simp: Vec<Cow<'_, TypArg>> = args.iter().map(simplify_typarg_cow).collect();
             if simp.iter().all(|x| matches!(x, Cow::Borrowed(_))) {
                 Cow::Borrowed(c)
             } else {
@@ -550,23 +550,40 @@ fn is_sorted_dedup(vs: &[i128]) -> bool {
     vs.windows(2).all(|w| w[0] < w[1])
 }
 
-/// Join already-simplified `Equal`/`NotEqual` children.
+/// Join already-simplified `Equal`/`NotEqual` children over `typ_arg`
+/// sorts.
 ///
 /// `is_equal` selects the polarity (`true` for `Equal`, `false` for
-/// `NotEqual`); the decisions mirror the pre-Lane-90 arms verbatim
-/// (`a == b` first, then the numeric fold).
+/// `NotEqual`); the decisions mirror the pre-Lane-108 arms verbatim
+/// (`a == b` first, then the fold), extended per sort:
+/// - `(NExp, NExp)`: constant fold (as before);
+/// - `(Bool, Bool)`: `True`/`False`-literal fold;
+/// - mixed sorts: never equal (different `typ_arg` constructors);
+/// - `(Typ, Typ)`: only the `a == b` rule fires (conservative).
 fn eq_join<'a>(
     orig: &'a NConstraint,
-    a: Cow<'a, NExp>,
-    b: Cow<'a, NExp>,
-    rebuild: fn(Box<NExp>, Box<NExp>) -> NConstraint,
+    a: Cow<'a, TypArg>,
+    b: Cow<'a, TypArg>,
+    rebuild: fn(Box<TypArg>, Box<TypArg>) -> NConstraint,
     is_equal: bool,
 ) -> Cow<'a, NConstraint> {
-    // `a == b` was checked before the numeric fold in the old arms.
+    // `a == b` was checked before the fold in the old arms.
     let provably_same = a.as_ref() == b.as_ref();
-    let nums = match (num(a.as_ref()), num(b.as_ref())) {
-        (Some(x), Some(y)) => Some(x == y),
-        _ => None,
+    let decided: Option<bool> = match (a.as_ref(), b.as_ref()) {
+        (TypArg::NExp(x), TypArg::NExp(y)) => match (num(x), num(y)) {
+            (Some(x), Some(y)) => Some(x == y),
+            _ => None,
+        },
+        (TypArg::Bool(x), TypArg::Bool(y)) => match (x.as_ref(), y.as_ref()) {
+            (NConstraint::True, NConstraint::True)
+            | (NConstraint::False, NConstraint::False) => Some(true),
+            (NConstraint::True, NConstraint::False)
+            | (NConstraint::False, NConstraint::True) => Some(false),
+            _ => None,
+        },
+        (TypArg::Typ(_), TypArg::Typ(_)) => None,
+        // Mixed sorts are never equal.
+        _ => Some(false),
     };
     let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
     if provably_same {
@@ -576,7 +593,7 @@ fn eq_join<'a>(
             NConstraint::False
         });
     }
-    if let Some(are_equal) = nums {
+    if let Some(are_equal) = decided {
         return Cow::Owned(if are_equal == is_equal {
             NConstraint::True
         } else {
@@ -587,6 +604,172 @@ fn eq_join<'a>(
         Cow::Borrowed(orig)
     } else {
         Cow::Owned(rebuild(Box::new(a.into_owned()), Box::new(b.into_owned())))
+    }
+}
+
+/// One rewrite pass over a [`TypArg`].
+pub fn simplify_typarg(a: &TypArg) -> TypArg {
+    simplify_typarg_cow(a).into_owned()
+}
+
+/// One rewrite pass over a [`TypArg`], borrowing `a` wherever the
+/// rewrite leaves the node untouched (see [`simplify_cow`]).
+///
+/// `NExp` arguments fold with [`simplify_cow`], `Bool` arguments with
+/// [`simplify_constraint_cow`], `Typ` payloads structurally (see
+/// [`simplify_typ_cow`]). Owned outputs are value-identical to
+/// [`simplify_typarg`].
+pub fn simplify_typarg_cow(a: &TypArg) -> Cow<'_, TypArg> {
+    match a {
+        TypArg::NExp(e) => {
+            let r = simplify_cow(e);
+            if matches!(r, Cow::Borrowed(_)) {
+                Cow::Borrowed(a)
+            } else {
+                Cow::Owned(TypArg::NExp(r.into_owned()))
+            }
+        }
+        TypArg::Bool(c) => {
+            let r = simplify_constraint_cow(c);
+            if matches!(r, Cow::Borrowed(_)) {
+                Cow::Borrowed(a)
+            } else {
+                Cow::Owned(TypArg::Bool(Box::new(r.into_owned())))
+            }
+        }
+        TypArg::Typ(t) => {
+            let r = simplify_typ_cow(t);
+            if matches!(r, Cow::Borrowed(_)) {
+                Cow::Borrowed(a)
+            } else {
+                Cow::Owned(TypArg::Typ(r.into_owned()))
+            }
+        }
+    }
+}
+
+/// One rewrite pass over an [`NTyp`], borrowing `t` wherever the
+/// rewrite leaves the node untouched (see [`simplify_cow`]).
+///
+/// Only the argument positions simplify (`App` arguments via
+/// [`simplify_typarg_cow`], `Exist` bodies via
+/// [`simplify_constraint_cow`]/recursion); binders and leaves never
+/// change.
+fn simplify_typ_cow(t: &NTyp) -> Cow<'_, NTyp> {
+    match t {
+        NTyp::Unknown | NTyp::Id(_) | NTyp::Var(_) => Cow::Borrowed(t),
+        NTyp::Fn(args, ret) => {
+            let simp: Vec<Cow<'_, NTyp>> = args.iter().map(simplify_typ_cow).collect();
+            let rret = simplify_typ_cow(ret);
+            if simp.iter().all(|x| matches!(x, Cow::Borrowed(_)))
+                && matches!(rret, Cow::Borrowed(_))
+            {
+                Cow::Borrowed(t)
+            } else {
+                Cow::Owned(NTyp::Fn(
+                    simp.into_iter().map(Cow::into_owned).collect(),
+                    Box::new(rret.into_owned()),
+                ))
+            }
+        }
+        NTyp::Bidir(a, b) => {
+            let (ra, rb) = (simplify_typ_cow(a), simplify_typ_cow(b));
+            if matches!(ra, Cow::Borrowed(_)) && matches!(rb, Cow::Borrowed(_)) {
+                Cow::Borrowed(t)
+            } else {
+                Cow::Owned(NTyp::Bidir(
+                    Box::new(ra.into_owned()),
+                    Box::new(rb.into_owned()),
+                ))
+            }
+        }
+        NTyp::Tuple(ts) => {
+            let simp: Vec<Cow<'_, NTyp>> = ts.iter().map(simplify_typ_cow).collect();
+            if simp.iter().all(|x| matches!(x, Cow::Borrowed(_))) {
+                Cow::Borrowed(t)
+            } else {
+                Cow::Owned(NTyp::Tuple(simp.into_iter().map(Cow::into_owned).collect()))
+            }
+        }
+        NTyp::App(f, args) => {
+            let simp: Vec<Cow<'_, TypArg>> =
+                args.iter().map(simplify_typarg_cow).collect();
+            if simp.iter().all(|x| matches!(x, Cow::Borrowed(_))) {
+                Cow::Borrowed(t)
+            } else {
+                Cow::Owned(NTyp::App(
+                    f.clone(),
+                    simp.into_iter().map(Cow::into_owned).collect(),
+                ))
+            }
+        }
+        NTyp::Exist(binders, c, ty) => {
+            let (rc, rt) = (simplify_constraint_cow(c), simplify_typ_cow(ty));
+            if matches!(rc, Cow::Borrowed(_)) && matches!(rt, Cow::Borrowed(_)) {
+                Cow::Borrowed(t)
+            } else {
+                Cow::Owned(NTyp::Exist(
+                    binders.clone(),
+                    Box::new(rc.into_owned()),
+                    Box::new(rt.into_owned()),
+                ))
+            }
+        }
+    }
+}
+
+/// Iterate [`simplify_typarg`] to a fixpoint (at most 64 rounds).
+///
+/// Same loop-shape guarantee as [`normalize`]: only the per-round pass
+/// borrows via [`simplify_typarg_cow`]; the canonical step is the
+/// single-pass [`canonical_typarg`], so results are canonical up to
+/// operand order of distinct atoms (like [`normalize_constraint`]).
+pub fn normalize_typarg(a: &TypArg) -> TypArg {
+    let mut cur = a.clone();
+    for _ in 0..64 {
+        let simp = simplify_typarg_cow(&cur);
+        let next = canonical_typarg(simp.as_ref());
+        if next == cur {
+            return next;
+        }
+        cur = next;
+    }
+    cur
+}
+
+/// Single-pass canonical form of an already-simplified [`TypArg`]:
+/// embedded [`NExp`]s are [`normalize`]d, embedded constraints go
+/// through the single-pass `canonical_constraint` (the outer
+/// [`normalize_typarg`]/[`normalize_constraint`] loop iterates to the
+/// fixpoint), types recurse structurally via [`canonical_typ`].
+fn canonical_typarg(a: &TypArg) -> TypArg {
+    match a {
+        TypArg::NExp(e) => TypArg::NExp(normalize(e)),
+        TypArg::Bool(c) => TypArg::Bool(Box::new(canonical_constraint(c))),
+        TypArg::Typ(t) => TypArg::Typ(canonical_typ(t)),
+    }
+}
+
+/// Single-pass canonical form of an already-simplified [`NTyp`]
+/// (structural recursion; binders are already canonical).
+fn canonical_typ(t: &NTyp) -> NTyp {
+    match t {
+        NTyp::Unknown | NTyp::Id(_) | NTyp::Var(_) => t.clone(),
+        NTyp::Fn(args, ret) => NTyp::Fn(
+            args.iter().map(canonical_typ).collect(),
+            Box::new(canonical_typ(ret)),
+        ),
+        NTyp::Bidir(a, b) => NTyp::Bidir(
+            Box::new(canonical_typ(a)),
+            Box::new(canonical_typ(b)),
+        ),
+        NTyp::Tuple(ts) => NTyp::Tuple(ts.iter().map(canonical_typ).collect()),
+        NTyp::App(f, args) => NTyp::App(f.clone(), args.iter().map(canonical_typarg).collect()),
+        NTyp::Exist(binders, c, ty) => NTyp::Exist(
+            binders.clone(),
+            Box::new(canonical_constraint(c)),
+            Box::new(canonical_typ(ty)),
+        ),
     }
 }
 
@@ -783,8 +966,12 @@ fn canonical_constraint(c: &NConstraint) -> NConstraint {
             rebuild_or(parts)
         }
         NConstraint::Not(x) => NConstraint::Not(Box::new(canonical_constraint(x))),
-        NConstraint::Equal(a, b) => NConstraint::Equal(norm_box(a), norm_box(b)),
-        NConstraint::NotEqual(a, b) => NConstraint::NotEqual(norm_box(a), norm_box(b)),
+        NConstraint::Equal(a, b) => {
+            NConstraint::Equal(Box::new(canonical_typarg(a)), Box::new(canonical_typarg(b)))
+        }
+        NConstraint::NotEqual(a, b) => {
+            NConstraint::NotEqual(Box::new(canonical_typarg(a)), Box::new(canonical_typarg(b)))
+        }
         NConstraint::Ge(a, b) => NConstraint::Ge(norm_box(a), norm_box(b)),
         NConstraint::Gt(a, b) => NConstraint::Gt(norm_box(a), norm_box(b)),
         NConstraint::Le(a, b) => NConstraint::Le(norm_box(a), norm_box(b)),
@@ -796,7 +983,7 @@ fn canonical_constraint(c: &NConstraint) -> NConstraint {
             NConstraint::Set(Box::new(normalize(n)), sorted)
         }
         NConstraint::App(f, args) => {
-            NConstraint::App(f.clone(), args.iter().map(normalize).collect())
+            NConstraint::App(f.clone(), args.iter().map(canonical_typarg).collect())
         }
         _ => c.clone(),
     }
@@ -1082,7 +1269,10 @@ mod tests {
             NConstraint::Var(b)
         );
         assert_eq!(
-            simplify_constraint(&NConstraint::Equal(Box::new(c(2)), Box::new(c(3)))),
+            simplify_constraint(&NConstraint::Equal(
+                Box::new(TypArg::NExp(c(2))),
+                Box::new(TypArg::NExp(c(3)))
+            )),
             NConstraint::False
         );
     }
@@ -1168,11 +1358,17 @@ mod tests {
         // Constraint folds with hand-written expectations.
         let ccases: Vec<(NConstraint, NConstraint)> = vec![
             (
-                NConstraint::Equal(Box::new(c(2)), Box::new(c(2))),
+                NConstraint::Equal(
+                    Box::new(TypArg::NExp(c(2))),
+                    Box::new(TypArg::NExp(c(2))),
+                ),
                 NConstraint::True,
             ),
             (
-                NConstraint::NotEqual(Box::new(v(n)), Box::new(v(n))),
+                NConstraint::NotEqual(
+                    Box::new(TypArg::NExp(v(n))),
+                    Box::new(TypArg::NExp(v(n))),
+                ),
                 NConstraint::False,
             ),
             (
