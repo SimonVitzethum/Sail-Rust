@@ -235,3 +235,50 @@ fn parallel_matches_sequential() {
         assert_eq!(&seq, res.as_ref().unwrap(), "parallel != sequential for {path}");
     }
 }
+
+#[test]
+fn scattered_clauses_end_operator_names_nested_comments() {
+    // Nested block comment with an unbalanced `{` inside must not break
+    // brace tracking; the file must parse as a whole.
+    let src = fixture("scattered.sail");
+    let pf = parse_file("scattered.sail", &src).unwrap();
+    let kinds: Vec<&'static str> = pf.defs.iter().map(|d| d.def.kind()).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            "pragma", // file_start
+            "val", "fixity", "overload",
+            "scattered", // scattered function step
+            "scattered", // function clause (braced body)
+            "scattered", // function clause (braceless body)
+            "scattered", // mapping clause
+            "scattered", // end step
+            "pragma", // file_end
+        ]
+    );
+
+    // Operator names survive the `operator` keyword prefix.
+    let val = pf.defs.iter().find(|d| d.def.kind() == "val").unwrap();
+    assert!(matches!(&val.def, Def::Val { name, .. } if name == "^^"), "{:?}", val.def);
+    let fx = pf.defs.iter().find(|d| d.def.kind() == "fixity").unwrap();
+    assert!(
+        matches!(&fx.def, Def::Fixity { level, name, .. } if level == "4" && name == ">=_s"),
+        "{:?}", fx.def
+    );
+    let ov = pf.defs.iter().find(|d| d.def.kind() == "overload").unwrap();
+    assert!(matches!(&ov.def, Def::Overload { name, .. } if name == "<<"), "{:?}", ov.def);
+
+    // Clause names skip the `clause` keyword; `end` keeps its target.
+    let names: Vec<String> = pf
+        .defs
+        .iter()
+        .filter_map(|d| match &d.def {
+            Def::Scattered { head_src, .. } => Some(head_src.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(names.iter().any(|h| h.starts_with("function step")), "{names:?}");
+    assert!(names.iter().any(|h| h.starts_with("clause step")), "{names:?}");
+    assert!(names.iter().any(|h| h.starts_with("clause csr_map")), "{names:?}");
+    assert!(names.iter().any(|h| h == "end step"), "{names:?}");
+}
