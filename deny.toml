@@ -1,0 +1,76 @@
+# Lane 67 — cargo-deny-Konfiguration (Supply-Chain-Hygiene).
+#
+# Prueft: Advisories (RustSec), Lizenzen, Bans, Sources.
+# Aufruf lokal:  cargo deny check advisories licenses bans sources
+# CI-Einbau: siehe AUDIT.md (Vorschlag, hier nicht eingebaut).
+#
+# Hinweis: Das Repo checkt derzeit KEIN Cargo.lock ein. `cargo deny check`
+# braucht ein Lockfile (cargo generate-lockfile genuegt, kein Build).
+
+[graph]
+# Alle Targets pruefen (auch Tests/Benches), alle Features aufloesen,
+# damit die optionale z3-Abhaengigkeit (s. AUDIT.md, RUSTSEC-2026-0295)
+# ebenfalls erfasst wird.
+all-features = true
+targets = [
+    "x86_64-unknown-linux-gnu",
+]
+
+[advisories]
+version = 2
+# RUSTSEC-DB-Abfrage laeuft uebers Netz (Lesen der Advisory-DB ist ok, E3).
+db-urls = ["https://github.com/rustsec/advisory-db"]
+db-path = "~/.cargo/advisory-dbs"
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+# Informational-Notices (u. a. `informational = "unsound"`, z. B.
+# RUSTSEC-2022-0019 fuer crossbeam-channel): warnen, nicht blockieren.
+# Die Lane-67-Frage "ban unsound Strict?" ist damit beantwortet als:
+# Nein — warnend, weil `unsound`-Notices auch lang gepatchte
+# Historie betreffen und sonst jede alte Transitive blockieren wuerde.
+notice = "warn"
+ignore = []
+# Ohne eingechecktes Cargo.lock keine Version-Pins: cargo-deny nutzt das
+# jeweils frisch aufgeloeste Lockfile. Sobald Cargo.lock eingecheckt ist,
+# gilt der Audit gegen exakt diese Pins (s. AUDIT.md Aktion A1).
+
+[licenses]
+version = 2
+# Policy: MIT/Apache-2.0-only (Lane-67-Vorgabe). OR-Ausdruecke passieren,
+# sobald EINE Alternative erlaubt ist (z. B. blake3: CC0-1.0 OR Apache-2.0
+# -> ok ueber Apache-2.0).
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+]
+# SPDX-Confidence-Schwelle: niedrigere Treffer landen zur manuellen
+# Klaerung in `clarify` statt still akzeptiert zu werden.
+confidence-threshold = 0.8
+exceptions = []
+# BEKANNT (Stand 2026-10-10, s. AUDIT.md Aktion A2/A3): Diese Policy ist
+# das ZIEL und faellt derzeit auf Workspace-Crates zurueck:
+# - 5 Crates deklarieren BSD-2-Clause (sail-extern, sail-grammar,
+#   sail-mapping, sail-parse, sail-prelude)
+# - 6 Crates haben gar kein license-Feld (sail-archsem, sail-int,
+#   sail-lean, sail-nexp, sail-patterns, sail-regs)
+# Sobald A2/A3 umgesetzt sind (license.workspace = true ueberall),
+# laeuft `cargo deny check licenses` gruen. Bis dahin KEINE
+# BSD-Ausnahme hier eintragen — Abweichung bleibt sichtbar.
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+# Transitive Duplikate (erlaubt, aber sichtbar):
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
