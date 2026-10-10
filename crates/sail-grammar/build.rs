@@ -1,7 +1,5 @@
 fn main() {
-    // The LALRPOP grammar in `src/sail.lalrpop` is kept as a documentation
-    // artifact (see `GRAMMAR.md`): the direct Menhir port has LALR(1)
-    // conflicts that LALRPOP rejects (Menhir resolves them as shift).
-    // This crate therefore builds as a skeleton (AST + lexer + coverage
-    // tests) without invoking the LALRPOP code generator.
+    // Generate the LALRPOP tables from `src/sail.lalrpop` (E3c/E4
+    // conflict fixes, see `GRAMMAR.md`). Lane 59 task (b).
+    lalrpop::process_root().unwrap();
 }

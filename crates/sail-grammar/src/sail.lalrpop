@@ -1,9 +1,24 @@
 // Sail grammar ported from `sail/src/lib/parser.mly` (Menhir) to LALRPOP.
 //
 // Conventions of this port:
-// - Every Menhir rule `A | A B` (common prefix) is factored to `A B?`
-//   with LALRPOP `?`/`*` operators: Menhir tolerates the resulting
-//   shift/reduce conflicts (resolving to shift), LALRPOP rejects them.
+// - Menhir tolerates shift/reduce conflicts (resolving to shift), LALRPOP
+//   rejects them. The direct port failed with 4 conflicts (see GRAMMAR.md);
+//   the fixes below are validated designs from scratch experiments with
+//   LALRPOP 0.22 (see `/tmp/opencode/laltest`, exit 0):
+//   - E3c (dangling `else`): open `Exp` vs closed `ClosedExp` WITHOUT an
+//     `Exp ::= ClosedExp` unit production. `then`/`else` branches and every
+//     tail that can end the enclosing expression are `ClosedExp`, so `else`
+//     never lands in `FOLLOW(Exp)` and `if E then C` + `else` shifts
+//     unambiguously (innermost binding).
+//   - E4 (dangling `in`, 2x): expression-level `let`/`var` REQUIRE `in`;
+//     bare `let`/`var` without `in` exist only as `BlockItem` inside strict
+//     (non-empty, right-recursive) `Block`s. This also settles
+//     `LoopExp ... "by" Exp "in" Typ`, since a step can no longer end in a
+//     bare `let`/`var` waiting for `in`.
+//   - D1/D2 (`Typ` index-range vs tuple, paren vs tuple): UNCHANGED, pending
+//     corpus evaluation via `tests/corpus.rs` (see GRAMMAR.md).
+// - Every Menhir `A | A B` common-prefix rule is factored to `A B?` with
+//   LALRPOP `?`/`*`.
 // - Semantic actions only call AST constructors. All OCaml helper logic
 //   (`simp_infix`, `same_pat_ops`, deprecation warnings, name mangling,
 //   `fix_extern`, …) is dropped; see GRAMMAR.md.
@@ -488,54 +503,79 @@ FPat: FieldPat = {
 // expressions
 // ---------------------------------------------------------------------------
 
-// `exp`: factored `if` head + optional `else` (innermost binding, no conflict).
+// `exp`: open expressions (E3c-`E`). A bare `if..then` without `else`
+// defaults to `()` as in the Menhir port; it may appear anywhere an `Exp`
+// is expected except in `then`/`else` branches and the tail positions of
+// `PlainExp` (those are `ClosedExp`, E3c-`R`).
 pub Exp: Exp = {
-    <h:IfHead> <t:("else" <Exp>)?> => Exp::If(
-        h.0,
-        h.1,
-        Box::new(t.unwrap_or(Exp::Lit(Lit::Unit))),
+    "if" <c:Exp> "then" <t:ClosedExp> => Exp::If(
+        Box::new(c),
+        Box::new(t),
+        Box::new(Exp::Lit(Lit::Unit)),
+    ),
+    "if" <c:Exp> "then" <t:ClosedExp> "else" <e:ClosedExp> => Exp::If(
+        Box::new(c),
+        Box::new(t),
+        Box::new(e),
     ),
     <e:PlainExp> => e,
 }
 
-IfHead: (Box<Exp>, Box<Exp>) = {
-    "if" <c:Exp> "then" <t:Exp> => (Box::new(c), Box::new(t)),
+// E3c closed expressions: every `if` carries `else`. There is deliberately
+// no `Exp ::= ClosedExp` unit production (that was the ambiguous E3b shape):
+// both rules share `PlainExp` instead, so `else` stays out of `FOLLOW(Exp)`
+// and `if E then C` followed by `else` shifts unambiguously.
+ClosedExp: Exp = {
+    "if" <c:Exp> "then" <t:ClosedExp> "else" <e:ClosedExp> => Exp::If(
+        Box::new(c),
+        Box::new(t),
+        Box::new(e),
+    ),
+    <e:PlainExp> => e,
 }
 
-// All `exp` forms except `if`.
+// All `exp` forms except `if` (shared by `Exp` and `ClosedExp`).
+//
+// E4 (`in`-Pflicht): expression-level `let`/`var` REQUIRE `in`; bare forms
+// without `in` live only in `BlockItem`. Tail positions whose value can end
+// the enclosing expression (assignment RHS, `let`/`var` bodies,
+// `return`/`throw`, attribute bodies, `do` bodies, `repeat..until` RHS,
+// `internal_*` bodies) are `ClosedExp`, since any of them can sit under a
+// `then` branch. All other positions (conditions, scrutinees, arguments,
+// elements, bodies inside braces, top-level tails) stay `Exp`.
 PlainExp: Exp = {
-    <l:Exp0> <r:("=" <Exp>)?> => match r {
+    <l:Exp0> <r:("=" <ClosedExp>)?> => match r {
         Some(e) => Exp::Assign(Box::new(l), Box::new(e)),
         None => l,
     },
-    <a:Attrs> <e:Exp> => Exp::Attr(a, Box::new(e)),
-    "let" <p:Pat> "=" <e:Exp> <b:("in" <Exp>)?> => Exp::Let(
+    <a:Attrs> <e:ClosedExp> => Exp::Attr(a, Box::new(e)),
+    "let" <p:Pat> "=" <e:Exp> "in" <b:ClosedExp> => Exp::Let(
         p,
         Box::new(e),
-        Box::new(b.unwrap_or(Exp::Lit(Lit::Unit))),
+        Box::new(b),
     ),
-    "var" <a:AtomicExp> "=" <e:Exp> <b:("in" <Exp>)?> => Exp::Var(
+    "var" <a:AtomicExp> "=" <e:Exp> "in" <b:ClosedExp> => Exp::Var(
         Box::new(a),
         Box::new(e),
-        Box::new(b.unwrap_or(Exp::Lit(Lit::Unit))),
+        Box::new(b),
     ),
-    "return" <e:Exp> => Exp::Return(Box::new(e)),
-    "throw" <e:Exp> => Exp::Throw(Box::new(e)),
+    "return" <e:ClosedExp> => Exp::Return(Box::new(e)),
+    "throw" <e:ClosedExp> => Exp::Throw(Box::new(e)),
     "match" <e:Exp> "{" <cs:CaseList> "}" => Exp::Match(Box::new(e), cs),
     "try" <e:Exp> "catch" "{" <cs:CaseList> "}" => Exp::Try(Box::new(e), cs),
-    "foreach" "(" <l:LoopExp> ")" "do"? <e:Exp> => Exp::For(Box::new(l), Box::new(e)),
+    "foreach" "(" <l:LoopExp> ")" "do"? <e:ClosedExp> => Exp::For(Box::new(l), Box::new(e)),
     "foreach" <l:LoopExp> "{" <b:Block> "}" => Exp::For(
         Box::new(l),
         Box::new(Exp::Block(b)),
     ),
-    "foreach" <l:LoopExp> "do" <e:Exp> => Exp::For(Box::new(l), Box::new(e)),
-    "repeat" <m:RepeatMeas?> <e1:Exp> "until" <e2:Exp> => Exp::Loop(
+    "foreach" <l:LoopExp> "do" <e:ClosedExp> => Exp::For(Box::new(l), Box::new(e)),
+    "repeat" <m:RepeatMeas?> <e1:Exp> "until" <e2:ClosedExp> => Exp::Loop(
         LoopKind::Until,
         m.unwrap_or(Measure::None),
         Box::new(e2),
         Box::new(e1),
     ),
-    "while" <e1:Exp> <m:RepeatMeas?> "do" <e2:Exp> => Exp::Loop(
+    "while" <e1:Exp> <m:RepeatMeas?> "do" <e2:ClosedExp> => Exp::Loop(
         LoopKind::While,
         m.unwrap_or(Measure::None),
         Box::new(e1),
@@ -547,10 +587,10 @@ PlainExp: Exp = {
         Box::new(e1),
         Box::new(Exp::Block(b)),
     ),
-    "internal_plet" <p:Pat> "=" <e1:Exp> "in" <e2:Exp>
+    "internal_plet" <p:Pat> "=" <e1:Exp> "in" <e2:ClosedExp>
         => Exp::InternalPlet(p, Box::new(e1), Box::new(e2)),
-    "internal_return" <e:Exp> => Exp::InternalReturn(Box::new(e)),
-    "internal_assume" <t:AtomicTyp> "in" <e:Exp>
+    "internal_return" <e:ClosedExp> => Exp::InternalReturn(Box::new(e)),
+    "internal_assume" <t:AtomicTyp> "in" <e:ClosedExp>
         => Exp::InternalAssume(t, Box::new(e)),
 }
 
@@ -615,12 +655,34 @@ CaseList: Vec<PatExp> = {
     },
 }
 
-// `block`.
+// `block`: E4 strict — non-empty and right-recursive (as in the validated
+// toy), so a trailing `;` parses but `{}` does not. Items admit bare
+// `let`/`var` without `in` (E4-`I`); the missing body defaults to `()` as
+// in the Menhir port.
 Block: Vec<Exp> = {
-    <mut v:(<Exp> ";")*> <last:Exp?> => {
-        if let Some(e) = last { v.push(e); }
+    <i:BlockItem> => vec![i],
+    <i:BlockItem> ";" <b:Block> => {
+        let mut v = vec![i];
+        v.extend(b);
         v
     },
+    <i:BlockItem> ";" => vec![i],
+}
+
+// Block item: any expression, or bare `let`/`var` without `in` (expression
+// position requires `in`; the `in` vs `;`/`}` lookahead keeps them apart).
+BlockItem: Exp = {
+    "let" <p:Pat> "=" <e:Exp> => Exp::Let(
+        p,
+        Box::new(e),
+        Box::new(Exp::Lit(Lit::Unit)),
+    ),
+    "var" <a:AtomicExp> "=" <e:Exp> => Exp::Var(
+        Box::new(a),
+        Box::new(e),
+        Box::new(Exp::Lit(Lit::Unit)),
+    ),
+    <e:Exp> => e,
 }
 
 // `atomic_exp`: head with applied suffixes, folded left to right.

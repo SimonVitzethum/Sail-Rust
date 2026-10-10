@@ -9,5 +9,11 @@ license = "BSD-2-Clause"
 name = "sail_grammar"
 path = "src/lib.rs"
 
+[dependencies]
+lalrpop-util = "0.22"
+
+[build-dependencies]
+lalrpop = "0.22"
+
 [lints.rust]
 unsafe_code = "forbid"

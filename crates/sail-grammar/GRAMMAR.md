@@ -1,12 +1,14 @@
 # GRAMMAR.md — Menhir (`parser.mly`) → LALRPOP port (`sail-grammar`)
 
-Status: **skeleton**. The crate ships the hand-written lexer
-(`src/lexer.rs`), the skeletal AST (`src/ast.rs`), the LALRPOP grammar
-(`src/sail.lalrpop`) as a **documentation artifact**, and rule-coverage
-tests (`tests/grammar_coverage.rs`). The LALRPOP tables are deliberately
-_not_ generated: `build.rs` is a no-op and the crate has no `lalrpop`
-dependency. The `parse_*` entry points lex their input and return
-`SKELETON_MSG` until the conflicts below are resolved.
+Status: **generating**. The crate ships the hand-written lexer
+(`src/lexer.rs`), the skeletal AST (`src/ast.rs`), and the LALRPOP grammar
+(`src/sail.lalrpop`), wired up via `build.rs`
+(`lalrpop::process_root()`, `lalrpop` 0.22 build-dep) +
+`lalrpop_mod!(sail)` in `src/lib.rs`. The `parse_*` entry points tokenize
+their input and run the generated `*Parser`s. Rule coverage:
+`tests/grammar_coverage.rs`; Sail-library corpus: `tests/corpus.rs`
+(written in this lane, executed later on the Test-Rig — E3, no local runs
+here).
 
 ## Sources
 
@@ -17,36 +19,65 @@ dependency. The `parse_*` entry points lex their input and return
 | `sail/src/lib/infix_parser.mly` | 468 lines | **out of scope** (precedence climbing stays in elaboration) |
 | `sail/src/lib/project_parser.mly` | 192 lines | **out of scope** (project files, not Sail source) |
 
-Port files: `src/sail.lalrpop` (1433 lines, 124 rules), `src/ast.rs`
-(526 lines), `src/lexer.rs` (~850 lines).
+Port files: `src/sail.lalrpop`, `src/ast.rs` (526 lines), `src/lexer.rs`
+(~850 lines).
 
-## Why skeleton: LALR(1) conflicts
+## Conflict fixes (E3c + E4)
 
-`cargo build` with `lalrpop::process_root()` rejects the direct port with
-shift/reduce conflicts. Menhir tolerates these (resolves to shift);
-LALRPOP does not. Observed conflicts (rule refs to `src/sail.lalrpop`):
+The direct port failed with 4 LALR conflicts (Menhir resolves them as
+shift; LALRPOP rejects them). The fixes below are validated designs from
+scratch experiments with LALRPOP 0.22 (`/tmp/opencode/laltest`, exit 0),
+lifted onto the Sail rules in this lane:
 
-1. **Dangling `else`** (`Exp`, ~line 493):
-   `Exp = IfHead (*) | IfHead (*) "else" Exp`. The factored
-   `if c then t` head with optional `else` still conflicts on `else`
-   (innermost binding). Menhir shifts; LALRPOP reports reduce-vs-shift.
-2. **`in` after `foreach … by` step** (`LoopExp`, ~line 563):
-   `LoopExp = Ident "from" Exp ToOrd Exp "by" Exp (*) "in" Typ`
-   conflicts with `Exp`'s `let … in` / `var … in`: on lookahead `in` the
-   parser can reduce `LoopExp` or shift `in` into the step expression.
-   Same root cause as Menhir's documented `loop_exp` shift preference.
-3. **Index ranges vs tuples** (`AtomicIndexRange`, ~line 1202):
-   `AtomicIndexRange = Typ (*) | Typ (*) ".." Typ` conflicts on both
-   `".."` and `","`, because `Typ` itself contains tuple
-   `"(" Typ "," … ")"` (`AtomicTyp`). A `Typ` followed by `,`/`..`
-   inside `name : range` is ambiguous between tuple-type and range.
-4. **Parenthesised vs tuple types** (same area): `AtomicTyp =
-   "(" Typ (*) ")" | "(" Typ (*) "," TypList ")"` — the classic
-   parenthesised-singleton vs tuple conflict, shifted in Menhir.
+1. **E3c — dangling `else`**: open `Exp` vs closed `ClosedExp` WITHOUT an
+   `Exp ::= ClosedExp` unit production (that shape was the ambiguous E3b).
+   `then`/`else` branches are always `ClosedExp`, and every tail position
+   whose value can end the enclosing expression is `ClosedExp` in both
+   rules (assignment RHS, `let`/`var` bodies, `return`/`throw`, attribute
+   bodies, `do` bodies, `repeat..until` RHS, `internal_*` bodies — any of
+   them can sit under a `then` branch). All other positions (conditions,
+   scrutinees, arguments, elements, bodies inside braces, top-level tails)
+   stay `Exp`. Both rules share the non-`if` forms via `PlainExp`, so
+   `else` never lands in `FOLLOW(Exp)` and `if E then C` followed by `else`
+   shifts unambiguously (innermost binding). A bare `if..then` without
+   `else` still parses in `Exp` positions and defaults to `()`.
+2&3. **E4 — dangling `in` (2×, self-inflicted by optional `in`)**:
+   expression-level `let`/`var` REQUIRE `in`; bare `let`/`var` without
+   `in` exist only as `BlockItem` inside strict `Block`s (non-empty,
+   right-recursive, trailing `;` ok). The `in` vs `;`/`}` lookahead keeps
+   `let p = E in C` (shift) and bare `let p = E` (reduce) apart. This also
+   settles `LoopExp ... "by" Exp "in" Typ`: a step can no longer end in a
+   bare `let`/`var` waiting for `in`.
+4. **Nullable Block + `with`**: `Block` is strict now (see E4), so after
+   `{ Exp` the lookahead `with` can only shift the `StructUpdate` arm of
+   `BlockOrUpd` (`;`/`}` reduce the block item instead).
 
-Conventions already applied in the port (insufficient for the above):
-every Menhir `A | A B` common-prefix rule is factored to `A B?` with
-LALRPOP `?`/`*`; semantic actions are AST constructors only.
+## D1/D2 — unchanged, evaluated per corpus
+
+- **D1** (`AtomicIndexRange`: `Typ (".." Typ)?` competing with tuple `,`
+  / `..` inside `name : range`) and **D2** (`AtomicTyp` parenthesised
+  singleton vs tuple) are intentionally UNCHANGED in this lane. Whether
+  they surface as real LALR conflicts (first Rig build) and whether the
+  ambiguous inputs occur in real code (`tests/corpus.rs`) decides the fix:
+  candidates are a comma-free `Typ` subset inside `IndexRange` (D1) and an
+  explicit paren/tuple split (D2), at the cost of rejecting currently
+  accepted inputs — hence no blind fix here.
+
+## Known acceptance deltas vs Menhir (watched by `tests/corpus.rs`)
+
+E3c/E4 trade Menhir's shift-preference for rejections; the corpus test
+quantifies them on `crates/sail-prelude/sail-lib`:
+
+- An open `if..then` (no `else`) is rejected in `then`/`else` branches and
+  in the `PlainExp` tails (e.g. `let x = 1 in if a then b`,
+  `return if a then b`). Menhir binds a trailing `else` innermost and
+  accepts; the port requires the inner `if` to carry `else`.
+- `else`-`if` chains ending in a bare `if..then` are rejected for the same
+  reason (the final `else` branch must be closed).
+- Bare `let`/`var` without `in` are rejected outside blocks (call
+  arguments, `do` bodies, ...); only `BlockItem`s admit them.
+- `{}` is rejected (strict `Block`); no occurrences in the corpus at the
+  time of writing (checked via `grep`, non-binding — the Rig decides).
 
 ## Dropped OCaml action logic (intentional)
 
@@ -64,9 +95,9 @@ LALRPOP `?`/`*`; semantic actions are AST constructors only.
 ## Coverage: `parser.mly` → port
 
 Exp rules (`exp`, `atomic_exp`, `case`, `block`, `loop_exp`,
-`fexp_exp`, `vector_update`, `exp_list` …) → `Exp` + `ExpSuffix` +
-`FieldExp` + `VectorUpdate` + `PatExp` + `LoopHead`; all 33 `Exp`
-constructors built in tests.
+`fexp_exp`, `vector_update`, `exp_list` …) → `Exp` + `ClosedExp` +
+`PlainExp` + `BlockItem` + `ExpSuffix` + `FieldExp` + `VectorUpdate` +
+`PatExp` + `LoopHead`; all 33 `Exp` constructors built in tests.
 
 Pat rules (`pat`, `atomic_pat`, `fpat`, `lit`, `negative_lit`,
 `pat_op`, `mpat`, `atomic_mpat`, `fmpat`, `mpexp`) → `Pat` (14
@@ -94,15 +125,21 @@ only for `Id`/`TyVar`/`Num`/`Bin`/`Hex`/`Real`/`Str`/`OpId`/`DocBlock`/
 `DocLine`/`Pragma`/`StructPragma`/`Attr`/`Fixity`; comments skipped,
 `///` + `/*! … */` kept as doc tokens, `$[…]` / `$pragma` forms kept.
 
-## Next steps (to generate tables)
+## Wiring
 
-- Give `else` an explicit precedence (or split `Exp` into if/non-if
-  levels with `%precedence`-style layering) instead of the factored
-  optional-`else`.
-- Split the `Typ` used inside `IndexRange` into a comma-free subset so
-  ranges no longer compete with tuples.
-- Disambiguate `LoopExp … "by" Exp` vs `in` by requiring the order
-  annotation or delimiting the step expression.
-- Re-enable `lalrpop` build-dep + `lalrpop_mod!(sail)` in `lib.rs`
-  once `cargo build -p sail-grammar` is conflict-free, and turn the
-  skeleton `Err` tests into real parse tests.
+- `Cargo.toml`: `lalrpop-util = "0.22"` dependency,
+  `lalrpop = "0.22"` build-dependency.
+- `build.rs`: `lalrpop::process_root().unwrap()`.
+- `src/lib.rs`: `lalrpop_mod!(sail)` + `parse_*` running
+  `FileParser` / `TypParser` / `TypSchmParser` / `ExpParser` /
+  `PatParser` / `DefParser` over `lexer::tokenize` output; lex errors
+  surface as strings, parse errors as `parse error: {Debug}`.
+
+## Verification (Test-Rig only, E3 — NOT run in this lane)
+
+- `cargo test -p sail-grammar` on the Rig (see `docs/TEST-RIG.md`,
+  `scripts/limited-run.sh`): green, incl. `tests/corpus.rs`, and no
+  LALR conflicts from `build.rs`.
+- If the Rig build still reports D1/D2 conflicts, fix per the D1/D2
+  section above; if the corpus reports E3c/E4 deviations in real Sail
+  libs, quantify there before touching the grammar.
