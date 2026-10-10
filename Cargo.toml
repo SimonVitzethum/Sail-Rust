@@ -9,5 +9,6 @@ members = [
     "crates/sail-rewrite",
     "crates/sail-effects",
     "crates/sail-lower",
+    "crates/sail-lean",
 ]
 resolver = "2"
