@@ -1,0 +1,1524 @@
+//! Surface- (`sail-grammar`) → Core- (`sail-ast`) Lowering (Lane 77).
+//!
+//! Gegen die `sail_grammar::parse_*`-Schnittstelle programmiert: Sobald die
+//! LALRPOP-Tabellen generiert sind (derzeit Skelett, siehe `ADAPTER.md`),
+//! liefern die Einstiege hier echte `sail-ast`-Knoten. Fehler sind
+//! Meldungen ohne Span; [`crate::real`] hängt den Fragment-Span an
+//! ([`sail_grammar::ast`] trägt keine Locations — `GRAMMAR.md` streicht
+//! sie bewusst, Byte-Offsets leben nur im Lexer).
+//!
+//! Abbildungsregeln (Fälle, die der Core nicht ausdrücken kann, sind
+//! `Err`, nie erfundene Semantik; Details + Begründungen in `ADAPTER.md`):
+//! * Namen: per Byte-Heuristik (`is_operator`), wie [`crate::bridge`].
+//! * Alle Knoten erhalten den übergebenen Fragment-Span (Approximation).
+//! * `Typ::Wild` → [`sail_ast::TypKind::Unknown`]; `Zero`/`One` → `"0"`/`"1"`.
+//! * Infix-Ketten brauchen Elaboration-Faltung → `Err` (außer den
+//!   Constraint-/NExp-/Pat-Teilmengen, die eindeutig abbildbar sind).
+//! * Attribute/Doku/`private`-Hüllen entfallen (Core hat keine Slots).
+//! * `Bidir`-Mapcl-Arme erhalten `Undef`-Rümpfe (Muster-als-Ausdruck
+//!   braucht Elaboration; Präzedenz: Brücken-`dummy_arm`).
+
+#![forbid(unsafe_code)]
+
+use sail_ast::{
+    Constraint, ConstraintKind, DecSpec, Def, DefKind, Exp, ExpKind, Extern, FExp, Fixity, Funcl,
+    FunclSet, IdGen, IndexRange, IndexRangeKind, Interner as _, KOpt, Kind, LExp, LExpKind, Lit,
+    LitKind, Loop, Mapcl, MapclKind, Name, NExp, NExpKind, Node, Order, PExp, PExpKind, Pat,
+    PatKind, QuantItem, RecOpt, ScatteredDef, SimpleInterner, Span, StructName, Subst, TAnnotOpt,
+    Typ, TypArg, TypArgKind, TypKind, TypPatKind, TypSchm, TypeDefKind, TypeUnion, ValSpec,
+};
+use sail_grammar::ast as g;
+
+/// Lower-Kontext: frische IDs + Interner, vom Aufrufer geliehen (Datei-Pfad
+/// teilt sich so einen ID-Raum mit [`crate::bridge`]).
+pub(crate) struct Ctx<'a> {
+    pub(crate) ids: &'a mut IdGen,
+    pub(crate) interner: &'a mut SimpleInterner,
+}
+
+impl Ctx<'_> {
+    fn node<K>(&mut self, span: Span, kind: K) -> Node<K> {
+        Node::new(self.ids.fresh(), span, kind)
+    }
+
+    /// Byte-Heuristik wie die Brücke: kein Ident-Start → Operator-Name.
+    fn name(&mut self, span: Span, text: &str) -> Name {
+        let is_operator = text
+            .bytes()
+            .next()
+            .is_some_and(|b| !(b.is_ascii_alphabetic() || b == b'_'));
+        Name::new(self.ids.fresh(), span, self.interner.intern(text), is_operator)
+    }
+
+    fn lit(&mut self, span: Span, l: &g::Lit) -> Lit {
+        let kind = match l {
+            g::Lit::True => LitKind::True,
+            g::Lit::False => LitKind::False,
+            g::Lit::Unit => LitKind::Unit,
+            g::Lit::Num(s) => LitKind::Num(s.clone()),
+            g::Lit::Zero => LitKind::Num("0".to_owned()),
+            g::Lit::One => LitKind::Num("1".to_owned()),
+            g::Lit::Bin(s) => LitKind::Bin(s.clone()),
+            g::Lit::Hex(s) => LitKind::Hex(s.clone()),
+            g::Lit::Str(s) => LitKind::String(s.clone()),
+            g::Lit::Real(s) => LitKind::Real(s.clone()),
+        };
+        self.node(span, kind)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fragment-Einstiege: Grammatik rufen, dann senken.
+// ---------------------------------------------------------------------------
+
+pub(crate) fn parse_typ_src(c: &mut Ctx, span: Span, src: &str) -> Result<Typ, String> {
+    let t = sail_grammar::parse_typ(src)?;
+    conv_typ(c, span, &t)
+}
+
+pub(crate) fn parse_typschm_src(
+    c: &mut Ctx,
+    span: Span,
+    src: &str,
+) -> Result<TypSchm, String> {
+    let s = sail_grammar::parse_typschm(src)?;
+    conv_typschm(c, span, &s)
+}
+
+pub(crate) fn parse_constraint_src(
+    c: &mut Ctx,
+    span: Span,
+    src: &str,
+) -> Result<Constraint, String> {
+    // Die Grammatik hat keinen `constraint_eof`-Einstieg; Constraints sind
+    // dort `Typ`-Formen (`DefAux::Constraint(Typ)`).
+    let t = sail_grammar::parse_typ(src)?;
+    conv_constraint(c, span, &t)
+}
+
+pub(crate) fn parse_exp_src(c: &mut Ctx, span: Span, src: &str) -> Result<Exp, String> {
+    let e = sail_grammar::parse_exp(src)?;
+    conv_exp(c, span, &e)
+}
+
+pub(crate) fn parse_pat_src(c: &mut Ctx, span: Span, src: &str) -> Result<Pat, String> {
+    let p = sail_grammar::parse_pat(src)?;
+    conv_pat(c, span, &p)
+}
+
+pub(crate) fn parse_def_src(c: &mut Ctx, span: Span, src: &str) -> Result<Def, String> {
+    let d = sail_grammar::parse_def(src)?;
+    let kind = conv_def(c, span, &d)?;
+    Ok(c.node(span, kind))
+}
+
+/// `let`-Def aus Mini-AST-Rohtext senken (Datei-Pfad, [`crate::real`]).
+pub(crate) fn conv_let(
+    c: &mut Ctx,
+    span: Span,
+    pat_src: &str,
+    body_src: &str,
+) -> Result<DefKind, String> {
+    Ok(DefKind::Let {
+        pat: parse_pat_src(c, span, pat_src)?,
+        exp: parse_exp_src(c, span, body_src)?,
+    })
+}
+
+/// `register`-Def aus Mini-AST-Rohtext senken. `type_src` hat die Form
+/// `NAME : TYP` (vgl. Parser-Tests); der Namenspräfix wird abgestreift.
+pub(crate) fn conv_register(
+    c: &mut Ctx,
+    span: Span,
+    name_text: &str,
+    type_src: &str,
+    init_src: &Option<String>,
+) -> Result<DefKind, String> {
+    let typ_src = type_src.split_once(':').map(|(_, t)| t).unwrap_or(type_src);
+    let typ_src = typ_src.trim();
+    if typ_src.is_empty() {
+        return Err("register without type".to_owned());
+    }
+    let typ = parse_typ_src(c, span, typ_src)?;
+    let init = match init_src {
+        None => None,
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => Some(parse_exp_src(c, span, s)?),
+    };
+    Ok(DefKind::Register(DecSpec {
+        id: c.ids.fresh(),
+        span,
+        typ,
+        name: c.name(span, name_text),
+        init,
+    }))
+}
+
+/// `constraint`-Def aus Mini-AST-Rohtext senken.
+pub(crate) fn conv_constraint_def(
+    c: &mut Ctx,
+    span: Span,
+    src: &str,
+) -> Result<DefKind, String> {
+    Ok(DefKind::Constraint(parse_constraint_src(c, span, src)?))
+}
+
+// ---------------------------------------------------------------------------
+// Typen
+// ---------------------------------------------------------------------------
+
+fn conv_kind(k: &g::Kind) -> Result<Kind, String> {
+    match k {
+        g::Kind::Int => Ok(Kind::Int),
+        // `Nat` existiert im Core nicht; beide sind Int-Sorte mit
+        // Nichtnegativitäts-Invariante (siehe ADAPTER.md).
+        g::Kind::Nat => Ok(Kind::Int),
+        g::Kind::Type => Ok(Kind::Type),
+        g::Kind::Bool => Ok(Kind::Bool),
+        g::Kind::Order => Err("kind `Order` has no sail-ast core slot".to_owned()),
+    }
+}
+
+fn conv_quant_items(c: &mut Ctx, span: Span, q: &Option<g::TypQuant>) -> Result<Vec<QuantItem>, String> {
+    let Some(q) = q else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for kopt in &q.kopts {
+        // Fehlende Kind-Annotation defaultet auf `Type` (Oberflächen-
+        // Elaboration entscheidet sonst nach Präfix; siehe ADAPTER.md).
+        let kind = match &kopt.kind {
+            Some(k) => conv_kind(k)?,
+            None => Kind::Type,
+        };
+        for kid in &kopt.kids {
+            out.push(QuantItem::Id(KOpt {
+                kind,
+                kid: c.interner.intern(kid),
+            }));
+        }
+    }
+    if let Some(t) = &q.constraint {
+        out.push(QuantItem::Constraint(conv_constraint(c, span, t)?));
+    }
+    Ok(out)
+}
+
+fn conv_typschm(c: &mut Ctx, span: Span, s: &g::TypSchm) -> Result<TypSchm, String> {
+    if s.effect.as_ref().is_some_and(|e| !e.is_empty()) {
+        return Err("effect sets have no sail-ast typschm slot".to_owned());
+    }
+    let quant = conv_quant_items(c, span, &s.quant)?;
+    // Binär abbilden (rechtsgenestete Pfeile bleiben curried `Fn`-Knoten).
+    let typ = match &s.arrow {
+        g::Arrow::Fn => c.node(span, TypKind::Fn {
+            args: vec![conv_typ(c, span, &s.lhs)?],
+            ret: Box::new(conv_typ(c, span, &s.rhs)?),
+        }),
+        g::Arrow::Bidir => c.node(span, TypKind::Bidir {
+            lhs: Box::new(conv_typ(c, span, &s.lhs)?),
+            rhs: Box::new(conv_typ(c, span, &s.rhs)?),
+        }),
+    };
+    Ok(TypSchm { quant, typ })
+}
+
+fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
+    let kind = match t {
+        g::Typ::Id(s) => TypKind::Id(c.name(span, s)),
+        g::Typ::Wild => TypKind::Unknown,
+        g::Typ::Var(s) => TypKind::Var(c.interner.intern(s)),
+        g::Typ::App(f, args) => {
+            let mut cargs = Vec::with_capacity(args.len());
+            for a in args {
+                cargs.push(conv_typarg(c, span, a)?);
+            }
+            TypKind::App {
+                name: c.name(span, f),
+                args: cargs,
+            }
+        }
+        g::Typ::Tuple(ts) => {
+            let mut cts = Vec::with_capacity(ts.len());
+            for x in ts {
+                cts.push(conv_typ(c, span, x)?);
+            }
+            TypKind::Tuple(cts)
+        }
+        g::Typ::Fn(a, b) => TypKind::Fn {
+            args: vec![conv_typ(c, span, a)?],
+            ret: Box::new(conv_typ(c, span, b)?),
+        },
+        g::Typ::Exist(kopts, cond, body) => {
+            // Feldreihenfolge wie im Core: Binder, Constraint, Typ
+            // (Annahme, siehe ADAPTER.md).
+            let mut binders = Vec::new();
+            for kopt in kopts {
+                let kind = match &kopt.kind {
+                    Some(k) => conv_kind(k)?,
+                    None => Kind::Type,
+                };
+                for kid in &kopt.kids {
+                    binders.push(KOpt {
+                        kind,
+                        kid: c.interner.intern(kid),
+                    });
+                }
+            }
+            TypKind::Exist {
+                binders,
+                constraint: Box::new(conv_constraint(c, span, cond)?),
+                typ: Box::new(conv_typ(c, span, body)?),
+            }
+        }
+        g::Typ::Lit(_)
+        | g::Typ::Dec
+        | g::Typ::Inc
+        | g::Typ::NSet(_)
+        | g::Typ::If(..)
+        | g::Typ::Infix(_) => {
+            return Err("type form needs elaboration, no sail-ast core node (see ADAPTER.md)".to_owned());
+        }
+    };
+    Ok(c.node(span, kind))
+}
+
+fn conv_typarg(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<TypArg, String> {
+    let kind = match t {
+        g::Typ::Lit(g::Lit::Num(s)) => TypArgKind::NExp(c.node(span, NExpKind::Constant(s.clone()))),
+        g::Typ::Lit(g::Lit::Zero) => {
+            TypArgKind::NExp(c.node(span, NExpKind::Constant("0".to_owned())))
+        }
+        g::Typ::Lit(g::Lit::One) => {
+            TypArgKind::NExp(c.node(span, NExpKind::Constant("1".to_owned())))
+        }
+        g::Typ::Var(s) => TypArgKind::NExp(c.node(span, NExpKind::Var(c.interner.intern(s)))),
+        g::Typ::Id(_) | g::Typ::App(..) | g::Typ::Infix(_) | g::Typ::If(..) => {
+            match conv_nexp(c, span, t) {
+                Ok(n) => TypArgKind::NExp(n),
+                // Keine NExp-Lesart (z.B. mehrgliedrige Kette): als Typ.
+                Err(_) => TypArgKind::Typ(conv_typ(c, span, t)?),
+            }
+        }
+        _ => TypArgKind::Typ(conv_typ(c, span, t)?),
+    };
+    Ok(c.node(span, kind))
+}
+
+fn conv_nexp(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<NExp, String> {
+    let kind = match t {
+        g::Typ::Id(s) => NExpKind::Id(c.name(span, s)),
+        g::Typ::Var(s) => NExpKind::Var(c.interner.intern(s)),
+        g::Typ::Lit(g::Lit::Num(s)) => NExpKind::Constant(s.clone()),
+        g::Typ::Lit(g::Lit::Zero) => NExpKind::Constant("0".to_owned()),
+        g::Typ::Lit(g::Lit::One) => NExpKind::Constant("1".to_owned()),
+        g::Typ::App(f, args) => {
+            let mut cargs = Vec::with_capacity(args.len());
+            for a in args {
+                cargs.push(conv_nexp(c, span, a)?);
+            }
+            NExpKind::App {
+                func: c.name(span, f),
+                args: cargs,
+            }
+        }
+        g::Typ::Infix(chain) => return infix_nexp(c, span, chain),
+        g::Typ::If(cond, th, el) => NExpKind::If {
+            cond: Box::new(conv_constraint(c, span, cond)?),
+            then_branch: Box::new(conv_nexp(c, span, th)?),
+            else_branch: Box::new(conv_nexp(c, span, el)?),
+        },
+        _ => return Err("not a numeric expression (see ADAPTER.md)".to_owned()),
+    };
+    Ok(c.node(span, kind))
+}
+
+/// Eingliedrige arithmetische Kette (`+`, `-`, `*`); alles andere
+/// braucht Elaboration-Faltung.
+fn infix_nexp(c: &mut Ctx, span: Span, chain: &g::InfixChain<g::Typ>) -> Result<NExp, String> {
+    if !chain.prefixes.is_empty() {
+        return Err("prefix operators need elaboration-time folding".to_owned());
+    }
+    let [(op, local, rhs)] = chain.tail.as_slice() else {
+        return Err("infix chains need elaboration-time folding".to_owned());
+    };
+    if !local.is_empty() {
+        return Err("operator-local prefixes need elaboration-time folding".to_owned());
+    }
+    let lhs = conv_nexp(c, span, &chain.head)?;
+    let rhs = conv_nexp(c, span, rhs)?;
+    let kind = match op.as_str() {
+        "+" => NExpKind::Sum(Box::new(lhs), Box::new(rhs)),
+        "-" => NExpKind::Minus(Box::new(lhs), Box::new(rhs)),
+        "*" => NExpKind::Times(Box::new(lhs), Box::new(rhs)),
+        // Binäres `^`, Division und alle übrigen Operatoren haben keinen
+        // Core-Slot (Faltung ist Elaboration; siehe ADAPTER.md).
+        _ => {
+            return Err(format!("nexp operator `{op}` has no sail-ast core node"));
+        }
+    };
+    Ok(c.node(span, kind))
+}
+
+fn conv_constraint(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Constraint, String> {
+    let kind = match t {
+        g::Typ::Id(s) if s == "true" => ConstraintKind::True,
+        g::Typ::Id(s) if s == "false" => ConstraintKind::False,
+        g::Typ::Id(s) => ConstraintKind::Id(c.name(span, s)),
+        g::Typ::Var(s) => ConstraintKind::Var(c.interner.intern(s)),
+        g::Typ::Lit(g::Lit::True) => ConstraintKind::True,
+        g::Typ::Lit(g::Lit::False) => ConstraintKind::False,
+        g::Typ::App(f, args) => {
+            let mut cargs = Vec::with_capacity(args.len());
+            for a in args {
+                cargs.push(conv_typarg(c, span, a)?);
+            }
+            ConstraintKind::App {
+                func: c.name(span, f),
+                args: cargs,
+            }
+        }
+        g::Typ::Infix(chain) => return infix_constraint(c, span, chain),
+        _ => return Err("not a constraint form (see ADAPTER.md)".to_owned()),
+    };
+    Ok(c.node(span, kind))
+}
+
+/// Eingliedrige Vergleichs-/Junktions-Kette (`=`, `==`, `!=`, `<`, `<=`,
+/// `>`, `>=`, `&`, `|`, `in {…}`).
+fn infix_constraint(
+    c: &mut Ctx,
+    span: Span,
+    chain: &g::InfixChain<g::Typ>,
+) -> Result<Constraint, String> {
+    if !chain.prefixes.is_empty() {
+        return Err("prefix operators need elaboration-time folding".to_owned());
+    }
+    let [(op, local, rhs)] = chain.tail.as_slice() else {
+        return Err("infix chains need elaboration-time folding".to_owned());
+    };
+    if !local.is_empty() {
+        return Err("operator-local prefixes need elaboration-time folding".to_owned());
+    }
+    let kind = match op.as_str() {
+        "=" | "==" => ConstraintKind::Equal(
+            Box::new(conv_typarg(c, span, &chain.head)?),
+            Box::new(conv_typarg(c, span, rhs)?),
+        ),
+        "!=" => ConstraintKind::NotEqual(
+            Box::new(conv_typarg(c, span, &chain.head)?),
+            Box::new(conv_typarg(c, span, rhs)?),
+        ),
+        ">=" => ConstraintKind::Ge(
+            conv_nexp(c, span, &chain.head)?,
+            conv_nexp(c, span, rhs)?,
+        ),
+        ">" => ConstraintKind::Gt(
+            conv_nexp(c, span, &chain.head)?,
+            conv_nexp(c, span, rhs)?,
+        ),
+        "<=" => ConstraintKind::Le(
+            conv_nexp(c, span, &chain.head)?,
+            conv_nexp(c, span, rhs)?,
+        ),
+        "<" => ConstraintKind::Lt(
+            conv_nexp(c, span, &chain.head)?,
+            conv_nexp(c, span, rhs)?,
+        ),
+        "&" => ConstraintKind::And(
+            Box::new(conv_constraint(c, span, &chain.head)?),
+            Box::new(conv_constraint(c, span, rhs)?),
+        ),
+        "|" => ConstraintKind::Or(
+            Box::new(conv_constraint(c, span, &chain.head)?),
+            Box::new(conv_constraint(c, span, rhs)?),
+        ),
+        "in" => {
+            let g::Typ::NSet(members) = rhs else {
+                return Err("`in` needs a set literal on the right".to_owned());
+            };
+            ConstraintKind::Set {
+                nexp: conv_nexp(c, span, &chain.head)?,
+                members: members.clone(),
+            }
+        }
+        _ => return Err(format!("constraint operator `{op}` has no sail-ast core node")),
+    };
+    Ok(c.node(span, kind))
+}
+
+// ---------------------------------------------------------------------------
+// Muster
+// ---------------------------------------------------------------------------
+
+fn conv_pat(c: &mut Ctx, span: Span, p: &g::Pat) -> Result<Pat, String> {
+    let kind = match p {
+        g::Pat::Wild => PatKind::Wild,
+        g::Pat::Lit(l) => PatKind::Lit(c.lit(span, l)),
+        g::Pat::Id(s) => PatKind::Id(c.name(span, s)),
+        g::Pat::KidVar(s) => PatKind::Var {
+            pat: Box::new(c.node(span, PatKind::Wild)),
+            typ_pat: c.node(span, TypPatKind::Var(c.interner.intern(s))),
+        },
+        g::Pat::App(f, args) => {
+            let mut cargs = Vec::with_capacity(args.len());
+            for a in args {
+                cargs.push(conv_pat(c, span, a)?);
+            }
+            PatKind::App {
+                func: c.name(span, f),
+                args: cargs,
+            }
+        }
+        g::Pat::VectorSubrange(id, lo, hi) => PatKind::VectorSubrange {
+            id: c.name(span, id),
+            lo: lo.clone(),
+            hi: hi.clone(),
+        },
+        g::Pat::Tuple(ps) => {
+            let mut cps = Vec::with_capacity(ps.len());
+            for x in ps {
+                cps.push(conv_pat(c, span, x)?);
+            }
+            PatKind::Tuple(cps)
+        }
+        g::Pat::Vector(ps) => {
+            let mut cps = Vec::with_capacity(ps.len());
+            for x in ps {
+                cps.push(conv_pat(c, span, x)?);
+            }
+            PatKind::Vector(cps)
+        }
+        g::Pat::List(ps) => {
+            let mut cps = Vec::with_capacity(ps.len());
+            for x in ps {
+                cps.push(conv_pat(c, span, x)?);
+            }
+            PatKind::List(cps)
+        }
+        g::Pat::Struct(name, fields) => {
+            let name = match name {
+                Some(n) => StructName::Id(c.name(span, n)),
+                None => StructName::Anon,
+            };
+            let mut cfields = Vec::new();
+            let mut wildcard = false;
+            for f in fields {
+                match f {
+                    g::FieldPat::Field(n, q) => {
+                        cfields.push((c.name(span, n), conv_pat(c, span, q)?));
+                    }
+                    g::FieldPat::Wild => wildcard = true,
+                }
+            }
+            PatKind::Struct {
+                name,
+                fields: cfields,
+                wildcard,
+            }
+        }
+        g::Pat::Typ(q, t) => PatKind::Typ {
+            typ: conv_typ(c, span, t)?,
+            pat: Box::new(conv_pat(c, span, q)?),
+        },
+        g::Pat::Infix(head, tail) => return infix_pat(c, span, head, tail),
+        // Oberflächen-`as` trägt einen `Typ`; nur Namen/Variablen sind als
+        // Bindung darstellbar (siehe ADAPTER.md).
+        g::Pat::As(q, t) => match t {
+            g::Typ::Id(s) | g::Typ::Var(s) => PatKind::As {
+                pat: Box::new(conv_pat(c, span, q)?),
+                id: c.name(span, s),
+            },
+            _ => return Err("`as` with non-name has no sail-ast core node".to_owned()),
+        },
+        // Attribute haben im Core keinen Muster-Slot → Hülle entfällt.
+        g::Pat::Attr(_, q) => return conv_pat(c, span, q),
+    };
+    Ok(c.node(span, kind))
+}
+
+/// Ein-Operator-Ketten (`@` → concat, `::` → rechtsgenestetes Cons,
+/// `^` → append); gemischte Ketten brauchen Faltung.
+fn infix_pat(
+    c: &mut Ctx,
+    span: Span,
+    head: &g::Pat,
+    tail: &[(g::PatOp, g::Pat)],
+) -> Result<Pat, String> {
+    let mut items = Vec::with_capacity(tail.len() + 1);
+    items.push(conv_pat(c, span, head)?);
+    let mut op0: Option<&g::PatOp> = None;
+    for (op, q) in tail {
+        if op0.replace(op).is_some_and(|first| first != op) {
+            return Err("mixed pattern operators need elaboration-time folding".to_owned());
+        }
+        items.push(conv_pat(c, span, q)?);
+    }
+    let kind = match op0 {
+        None => return Err("empty pattern infix chain".to_owned()),
+        Some(g::PatOp::VectorConcat) => PatKind::VectorConcat(items),
+        Some(g::PatOp::StringAppend) => PatKind::StringAppend(items),
+        Some(g::PatOp::Cons) => {
+            let mut it = items.into_iter().rev();
+            let mut acc = it.next().expect("non-empty");
+            for x in it {
+                acc = c.node(span, PatKind::Cons(Box::new(x), Box::new(acc)));
+            }
+            return Ok(acc);
+        }
+    };
+    Ok(c.node(span, kind))
+}
+
+fn conv_mpat(c: &mut Ctx, span: Span, p: &g::MPat) -> Result<Pat, String> {
+    // Mapping-Muster senken auf Wert-Muster (Approximation, ADAPTER.md).
+    let kind = match p {
+        g::MPat::Lit(l) => PatKind::Lit(c.lit(span, l)),
+        g::MPat::Id(s) => PatKind::Id(c.name(span, s)),
+        g::MPat::App(f, args) => {
+            let mut cargs = Vec::with_capacity(args.len());
+            for a in args {
+                cargs.push(conv_mpat(c, span, a)?);
+            }
+            PatKind::App {
+                func: c.name(span, f),
+                args: cargs,
+            }
+        }
+        g::MPat::VectorSubrange(id, lo, hi) => PatKind::VectorSubrange {
+            id: c.name(span, id),
+            lo: lo.clone(),
+            hi: hi.clone(),
+        },
+        g::MPat::Tuple(ps) => {
+            let mut cps = Vec::with_capacity(ps.len());
+            for x in ps {
+                cps.push(conv_mpat(c, span, x)?);
+            }
+            PatKind::Tuple(cps)
+        }
+        g::MPat::Vector(ps) => {
+            let mut cps = Vec::with_capacity(ps.len());
+            for x in ps {
+                cps.push(conv_mpat(c, span, x)?);
+            }
+            PatKind::Vector(cps)
+        }
+        g::MPat::List(ps) => {
+            let mut cps = Vec::with_capacity(ps.len());
+            for x in ps {
+                cps.push(conv_mpat(c, span, x)?);
+            }
+            PatKind::List(cps)
+        }
+        g::MPat::Struct(name, fields) => {
+            let name = match name {
+                Some(n) => StructName::Id(c.name(span, n)),
+                None => StructName::Anon,
+            };
+            let mut cfields = Vec::with_capacity(fields.len());
+            for (n, q) in fields {
+                cfields.push((c.name(span, n), conv_mpat(c, span, q)?));
+            }
+            PatKind::Struct {
+                name,
+                fields: cfields,
+                wildcard: false,
+            }
+        }
+        g::MPat::Typ(q, t) => PatKind::Typ {
+            typ: conv_typ(c, span, t)?,
+            pat: Box::new(conv_mpat(c, span, q)?),
+        },
+        g::MPat::Infix(head, tail) => {
+            let mut items = Vec::with_capacity(tail.len() + 1);
+            items.push(conv_mpat(c, span, head)?);
+            let mut op0: Option<&g::PatOp> = None;
+            for (op, q) in tail {
+                if op0.replace(op).is_some_and(|first| first != op) {
+                    return Err("mixed mapping-pattern operators need folding".to_owned());
+                }
+                items.push(conv_mpat(c, span, q)?);
+            }
+            match op0 {
+                None => return Err("empty mapping-pattern infix chain".to_owned()),
+                Some(g::PatOp::VectorConcat) => PatKind::VectorConcat(items),
+                Some(g::PatOp::StringAppend) => PatKind::StringAppend(items),
+                Some(g::PatOp::Cons) => {
+                    let mut it = items.into_iter().rev();
+                    let mut acc = it.next().expect("non-empty");
+                    for x in it {
+                        acc = c.node(span, PatKind::Cons(Box::new(x), Box::new(acc)));
+                    }
+                    return Ok(acc);
+                }
+            }
+        }
+        g::MPat::As(q, s) => PatKind::As {
+            pat: Box::new(conv_mpat(c, span, q)?),
+            id: c.name(span, s),
+        },
+    };
+    Ok(c.node(span, kind))
+}
+
+// ---------------------------------------------------------------------------
+// Ausdrücke
+// ---------------------------------------------------------------------------
+
+/// Oberflächen-Ausdruck als L-Wert lesen (Teilmenge mit Core-Slots).
+fn exp_to_lexp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<LExp, String> {
+    let kind = match e {
+        g::Exp::Id(s) => LExpKind::Id(c.name(span, s)),
+        g::Exp::Suffix(head, sufs) => {
+            let [suf] = sufs.as_slice() else {
+                return Err("lexp suffix chain has no sail-ast core node".to_owned());
+            };
+            match suf {
+                g::ExpSuffix::Field(f) => LExpKind::Field {
+                    lexp: Box::new(exp_to_lexp(c, span, head)?),
+                    field: c.name(span, f),
+                },
+                g::ExpSuffix::TypAnnot(t) => {
+                    let g::Exp::Id(s) = &**head else {
+                        return Err("annotated lexp needs a plain identifier".to_owned());
+                    };
+                    LExpKind::Typ {
+                        typ: conv_typ(c, span, t)?,
+                        id: c.name(span, s),
+                    }
+                }
+                _ => return Err("lexp suffix has no sail-ast core node".to_owned()),
+            }
+        }
+        g::Exp::Tuple(es) => {
+            let mut ces = Vec::with_capacity(es.len());
+            for x in es {
+                ces.push(exp_to_lexp(c, span, x)?);
+            }
+            LExpKind::Tuple(ces)
+        }
+        // `@` auf L-Werten: Vektor-Konkatenation.
+        g::Exp::Infix(chain) => {
+            if !chain.prefixes.is_empty() {
+                return Err("prefix operators need elaboration-time folding".to_owned());
+            }
+            let mut items = Vec::with_capacity(chain.tail.len() + 1);
+            items.push(exp_to_lexp(c, span, &chain.head)?);
+            for (op, local, rhs) in &chain.tail {
+                if op != "@" || !local.is_empty() {
+                    return Err("lexp infix has no sail-ast core node".to_owned());
+                }
+                items.push(exp_to_lexp(c, span, rhs)?);
+            }
+            LExpKind::VectorConcat(items)
+        }
+        _ => return Err("expression is not a valid l-value".to_owned()),
+    };
+    Ok(c.node(span, kind))
+}
+
+fn conv_fexp_field(c: &mut Ctx, span: Span, f: &g::FieldExp) -> Result<FExp, String> {
+    match f {
+        // Annahme: erstes Element ist der Feld-Designator (Id), zweites
+        // der Wert (siehe ADAPTER.md).
+        g::FieldExp::Field(designator, value) => {
+            let g::Exp::Id(n) = &**designator else {
+                return Err("computed struct field has no sail-ast core node".to_owned());
+            };
+            Ok(FExp {
+                id: c.ids.fresh(),
+                span,
+                field: c.name(span, n),
+                value: conv_exp(c, span, value)?,
+            })
+        }
+        // Punning `f` = `{ f = f }` (Desugar, dokumentiert).
+        g::FieldExp::Punning(n) => Ok(FExp {
+            id: c.ids.fresh(),
+            span,
+            field: c.name(span, n),
+            value: c.node(span, ExpKind::Id(c.name(span, n))),
+        }),
+    }
+}
+
+fn conv_patexp(c: &mut Ctx, span: Span, p: &g::PatExp) -> Result<PExp, String> {
+    let kind = match p {
+        // Annahme: Tupel-Reihenfolge ist (Muster, Rumpf) bzw.
+        // (Muster, Guard, Rumpf) (siehe ADAPTER.md).
+        g::PatExp::Exp(q, body) => PExpKind::PatExp {
+            pat: conv_pat(c, span, q)?,
+            body: conv_exp(c, span, body)?,
+        },
+        g::PatExp::When(q, guard, body) => PExpKind::PatWhen {
+            pat: conv_pat(c, span, q)?,
+            guard: conv_exp(c, span, guard)?,
+            body: conv_exp(c, span, body)?,
+        },
+        g::PatExp::Attr(_, inner) => return conv_patexp(c, span, inner),
+    };
+    Ok(PExp {
+        id: c.ids.fresh(),
+        span,
+        kind,
+    })
+}
+
+fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
+    let kind = match e {
+        g::Exp::Id(s) => ExpKind::Id(c.name(span, s)),
+        g::Exp::Ref(s) => ExpKind::Ref(c.name(span, s)),
+        g::Exp::Lit(l) => ExpKind::Lit(c.lit(span, l)),
+        g::Exp::Undef => ExpKind::Undef,
+        g::Exp::Config(k) => ExpKind::Config(vec![k.clone()]),
+        g::Exp::Exit(x) => ExpKind::Exit(Box::new(conv_exp(c, span, x)?)),
+        g::Exp::Sizeof(t) => ExpKind::Sizeof(conv_nexp(c, span, t)?),
+        g::Exp::Constraint(t) => ExpKind::Constraint(conv_constraint(c, span, t)?),
+        g::Exp::Assert(x, y) => ExpKind::Assert {
+            cond: Box::new(conv_exp(c, span, x)?),
+            msg: Box::new(conv_exp(c, span, y)?),
+        },
+        g::Exp::App(f, args) => {
+            let mut cargs = Vec::with_capacity(args.len());
+            for a in args {
+                cargs.push(conv_exp(c, span, a)?);
+            }
+            ExpKind::App {
+                func: c.name(span, f),
+                args: cargs,
+            }
+        }
+        g::Exp::Suffix(head, sufs) => {
+            let mut acc = conv_exp(c, span, head)?;
+            for suf in sufs {
+                let next = match suf {
+                    g::ExpSuffix::Field(f) => ExpKind::Field {
+                        record: Box::new(acc),
+                        field: c.name(span, f),
+                    },
+                    g::ExpSuffix::TypAnnot(t) => ExpKind::Typ {
+                        typ: conv_typ(c, span, t)?,
+                        exp: Box::new(acc),
+                    },
+                    _ => {
+                        return Err(
+                            "expression suffix has no sail-ast core node (see ADAPTER.md)"
+                                .to_owned(),
+                        );
+                    }
+                };
+                acc = c.node(span, next);
+            }
+            return Ok(acc);
+        }
+        g::Exp::Assign(x, y) => ExpKind::Assign {
+            lexp: Box::new(exp_to_lexp(c, span, x)?),
+            value: Box::new(conv_exp(c, span, y)?),
+        },
+        g::Exp::Let(q, x, y) => ExpKind::Let {
+            pat: conv_pat(c, span, q)?,
+            bind: Box::new(conv_exp(c, span, x)?),
+            body: Box::new(conv_exp(c, span, y)?),
+        },
+        g::Exp::Var(x, y, z) => ExpKind::Var {
+            lexp: Box::new(exp_to_lexp(c, span, x)?),
+            init: Box::new(conv_exp(c, span, y)?),
+            body: Box::new(conv_exp(c, span, z)?),
+        },
+        g::Exp::Block(es) => {
+            let mut ces = Vec::with_capacity(es.len());
+            for x in es {
+                ces.push(conv_exp(c, span, x)?);
+            }
+            ExpKind::Block(ces)
+        }
+        g::Exp::Return(x) => ExpKind::Return(Box::new(conv_exp(c, span, x)?)),
+        g::Exp::Throw(x) => ExpKind::Throw(Box::new(conv_exp(c, span, x)?)),
+        g::Exp::If(x, y, z) => ExpKind::If {
+            cond: Box::new(conv_exp(c, span, x)?),
+            then_branch: Box::new(conv_exp(c, span, y)?),
+            else_branch: Box::new(conv_exp(c, span, z)?),
+        },
+        g::Exp::Match(x, arms) => {
+            let mut carms = Vec::with_capacity(arms.len());
+            for a in arms {
+                carms.push(conv_patexp(c, span, a)?);
+            }
+            ExpKind::Match {
+                scrutinee: Box::new(conv_exp(c, span, x)?),
+                arms: carms,
+            }
+        }
+        g::Exp::Try(x, arms) => {
+            let mut carms = Vec::with_capacity(arms.len());
+            for a in arms {
+                carms.push(conv_patexp(c, span, a)?);
+            }
+            ExpKind::Try {
+                exp: Box::new(conv_exp(c, span, x)?),
+                arms: carms,
+            }
+        }
+        g::Exp::For(head, body) => {
+            let step = match &head.step {
+                // Ohne Schritt: `1` (Sail-Default, dokumentiert).
+                None => c.node(span, ExpKind::Lit(c.node(span, LitKind::Num("1".to_owned())))),
+                Some(s) => conv_exp(c, span, s)?,
+            };
+            let order = match &head.order {
+                // Ohne Ordnung: aufsteigend (Sail-Default, dokumentiert).
+                None => Order::Inc,
+                Some(g::Typ::Inc) => Order::Inc,
+                Some(g::Typ::Dec) => Order::Dec,
+                Some(_) => return Err("foreach order needs `inc`/`dec`".to_owned()),
+            };
+            ExpKind::For {
+                var: c.name(span, &head.var),
+                from: Box::new(conv_exp(c, span, &head.from)?),
+                to: Box::new(conv_exp(c, span, &head.to)?),
+                step: Box::new(step),
+                order,
+                body: Box::new(conv_exp(c, span, body)?),
+            }
+        }
+        g::Exp::Loop(lk, m, cond, body) => ExpKind::Loop {
+            loop_kind: match lk {
+                g::LoopKind::While => Loop::While,
+                g::LoopKind::Until => Loop::Until,
+            },
+            measure: match m {
+                g::Measure::None => None,
+                g::Measure::Some(x) => Some(Box::new(conv_exp(c, span, x)?)),
+            },
+            cond: Box::new(conv_exp(c, span, cond)?),
+            body: Box::new(conv_exp(c, span, body)?),
+        },
+        g::Exp::Infix(_) => {
+            return Err("infix chains need elaboration-time folding (see GRAMMAR.md)".to_owned());
+        }
+        g::Exp::Struct(name, fields) => {
+            let name = match name {
+                Some(n) => StructName::Id(c.name(span, n)),
+                None => StructName::Anon,
+            };
+            let mut cfields = Vec::with_capacity(fields.len());
+            for f in fields {
+                cfields.push(conv_fexp_field(c, span, f)?);
+            }
+            ExpKind::Struct { name, fields: cfields }
+        }
+        g::Exp::StructUpdate(x, fields) => {
+            let mut cfields = Vec::with_capacity(fields.len());
+            for f in fields {
+                cfields.push(conv_fexp_field(c, span, f)?);
+            }
+            ExpKind::StructUpdate {
+                record: Box::new(conv_exp(c, span, x)?),
+                fields: cfields,
+            }
+        }
+        g::Exp::Vector(es) => {
+            let mut ces = Vec::with_capacity(es.len());
+            for x in es {
+                ces.push(conv_exp(c, span, x)?);
+            }
+            ExpKind::Vector(ces)
+        }
+        g::Exp::VectorUpdate(..) => {
+            return Err("vector updates have no sail-ast core node (see ADAPTER.md)".to_owned());
+        }
+        g::Exp::List(es) => {
+            let mut ces = Vec::with_capacity(es.len());
+            for x in es {
+                ces.push(conv_exp(c, span, x)?);
+            }
+            ExpKind::List(ces)
+        }
+        g::Exp::Tuple(es) => {
+            let mut ces = Vec::with_capacity(es.len());
+            for x in es {
+                ces.push(conv_exp(c, span, x)?);
+            }
+            ExpKind::Tuple(ces)
+        }
+        g::Exp::InternalPlet(q, x, y) => ExpKind::InternalPlet {
+            pat: conv_pat(c, span, q)?,
+            bind: Box::new(conv_exp(c, span, x)?),
+            body: Box::new(conv_exp(c, span, y)?),
+        },
+        g::Exp::InternalReturn(x) => ExpKind::InternalReturn(Box::new(conv_exp(c, span, x)?)),
+        g::Exp::InternalAssume(t, x) => ExpKind::InternalAssume {
+            constraint: conv_constraint(c, span, t)?,
+            exp: Box::new(conv_exp(c, span, x)?),
+        },
+        // Attribute haben im Core keinen Ausdruck-Slot → Hülle entfällt.
+        g::Exp::Attr(_, x) => return conv_exp(c, span, x),
+    };
+    Ok(c.node(span, kind))
+}
+
+// ---------------------------------------------------------------------------
+// Klauseln, Definitionen
+// ---------------------------------------------------------------------------
+
+fn conv_tannot(
+    c: &mut Ctx,
+    span: Span,
+    t: &Option<(Option<g::TypQuant>, g::Typ)>,
+) -> Result<TAnnotOpt, String> {
+    let Some((quant, typ)) = t else {
+        return Ok(TAnnotOpt::None);
+    };
+    Ok(TAnnotOpt::Some {
+        quant: conv_quant_items(c, span, quant)?,
+        typ: conv_typ(c, span, typ)?,
+    })
+}
+
+fn conv_funcl(c: &mut Ctx, span: Span, f: &g::Funcl) -> Result<Funcl, String> {
+    // Klausel-Annotationen (`private`/Attr/Doku) haben im Core keinen
+    // `Funcl`-Slot → entfallen (siehe ADAPTER.md).
+    let (pat, body_guard) = match &f.pat {
+        g::GuardedPat::Plain(p) => (conv_pat(c, span, p)?, None),
+        g::GuardedPat::Guarded(p, g) => (conv_pat(c, span, p)?, Some(conv_exp(c, span, g)?)),
+    };
+    let arm_kind = match &f.body {
+        // Annahme: `When` trägt (Guard, Rumpf) (siehe ADAPTER.md).
+        g::PatExpBody::Exp(e) => match body_guard {
+            None => PExpKind::PatExp {
+                pat,
+                body: conv_exp(c, span, e)?,
+            },
+            Some(guard) => PExpKind::PatWhen {
+                pat,
+                guard,
+                body: conv_exp(c, span, e)?,
+            },
+        },
+        g::PatExpBody::When(g, b) => {
+            if body_guard.is_some() {
+                return Err("clause has two guards".to_owned());
+            }
+            PExpKind::PatWhen {
+                pat,
+                guard: conv_exp(c, span, g)?,
+                body: conv_exp(c, span, b)?,
+            }
+        }
+    };
+    Ok(Funcl {
+        id: c.ids.fresh(),
+        span,
+        name: c.name(span, &f.name),
+        arm: PExp {
+            id: c.ids.fresh(),
+            span,
+            kind: arm_kind,
+        },
+    })
+}
+
+/// Mapping-Muster + optionaler Guard zu Muster + optionalem Guard senken.
+fn conv_mpexp_parts(
+    c: &mut Ctx,
+    span: Span,
+    m: &g::MPExp,
+) -> Result<(Pat, Option<Exp>), String> {
+    Ok((
+        conv_mpat(c, span, &m.pat)?,
+        m.guard
+            .as_ref()
+            .map(|g| conv_exp(c, span, g))
+            .transpose()?,
+    ))
+}
+
+fn conv_mapcl(c: &mut Ctx, span: Span, m: &g::MapCl) -> Result<Mapcl, String> {
+    // `Bidir`-Rümpfe: Muster-als-Ausdruck braucht Elaboration → `Undef`
+    // (Präzedenz: Brücken-`dummy_arm`).
+    let undef = |c: &mut Ctx| c.node(span, ExpKind::Undef);
+    let kind = match m {
+        g::MapCl::Bidir(fwd, bwd) => {
+            let (fpat, _) = conv_mpexp_parts(c, span, fwd)?;
+            let (bpat, _) = conv_mpexp_parts(c, span, bwd)?;
+            let mk = |c: &mut Ctx, pat: Pat| PExp {
+                id: c.ids.fresh(),
+                span,
+                kind: PExpKind::PatExp {
+                    pat,
+                    body: undef(c),
+                },
+            };
+            let fwd_arm = mk(c, fpat);
+            let bwd_arm = mk(c, bpat);
+            MapclKind::Bidir {
+                forwards: fwd_arm,
+                backwards: bwd_arm,
+            }
+        }
+        g::MapCl::Forwards(p) => MapclKind::Forwards(conv_patexp(c, span, p)?),
+        g::MapCl::ForwardsDeprecated(mp, body) => {
+            let (pat, guard) = conv_mpexp_parts(c, span, mp)?;
+            let body = conv_exp(c, span, body)?;
+            MapclKind::Forwards(PExp {
+                id: c.ids.fresh(),
+                span,
+                kind: match guard {
+                    None => PExpKind::PatExp { pat, body },
+                    Some(guard) => PExpKind::PatWhen { pat, guard, body },
+                },
+            })
+        }
+        g::MapCl::Backwards(p) => MapclKind::Backwards(conv_patexp(c, span, p)?),
+        g::MapCl::When(inner, guard) => {
+            let guard = conv_exp(c, span, guard)?;
+            let inner = conv_mapcl(c, span, inner)?;
+            let attach = |arm: PExp| -> Result<PExp, String> {
+                match arm.kind {
+                    PExpKind::PatExp { pat, body } => Ok(PExp {
+                        id: c.ids.fresh(),
+                        span,
+                        kind: PExpKind::PatWhen {
+                            pat,
+                            guard: guard.clone(),
+                            body,
+                        },
+                    }),
+                    PExpKind::PatWhen { .. } => Err("mapping clause has two guards".to_owned()),
+                }
+            };
+            match inner.kind {
+                MapclKind::Forwards(a) => MapclKind::Forwards(attach(a)?),
+                MapclKind::Backwards(a) => MapclKind::Backwards(attach(a)?),
+                MapclKind::Bidir { .. } => {
+                    return Err("guard over bidir clause needs elaboration".to_owned());
+                }
+            }
+        }
+        g::MapCl::Attr(_, inner) => return conv_mapcl(c, span, inner),
+        g::MapCl::Doc(_, inner) => return conv_mapcl(c, span, inner),
+    };
+    Ok(Mapcl {
+        id: c.ids.fresh(),
+        span,
+        kind,
+    })
+}
+
+fn conv_fundef_parts(
+    c: &mut Ctx,
+    span: Span,
+    f: &g::FunDef,
+) -> Result<(RecOpt, TAnnotOpt, Vec<Funcl>), String> {
+    // `function rec` ist im Grammatik-AST nicht repräsentiert (kein Flag);
+    // nur ein explizites Maß wird erkannt (siehe ADAPTER.md).
+    let rec = match &f.rec_measure {
+        None => RecOpt::NonRec,
+        Some((p, e)) => RecOpt::Measure {
+            pat: conv_pat(c, span, p)?,
+            exp: conv_exp(c, span, e)?,
+        },
+    };
+    let annot = conv_tannot(c, span, &f.head.typ)?;
+    let mut funcls = Vec::with_capacity(f.tail.len() + 1);
+    funcls.push(conv_funcl(c, span, &f.head)?);
+    for t in &f.tail {
+        funcls.push(conv_funcl(c, span, t)?);
+    }
+    Ok((rec, annot, funcls))
+}
+
+fn conv_mapdef(c: &mut Ctx, span: Span, m: &g::MapDef) -> Result<(Name, TAnnotOpt, Vec<Mapcl>), String> {
+    let name = c.name(span, &m.name);
+    let annot = match &m.typschm {
+        None => TAnnotOpt::None,
+        Some(s) => {
+            let schm = conv_typschm(c, span, s)?;
+            TAnnotOpt::Some {
+                quant: schm.quant,
+                typ: schm.typ,
+            }
+        }
+    };
+    let mut clauses = Vec::with_capacity(m.clauses.len());
+    for cl in &m.clauses {
+        clauses.push(conv_mapcl(c, span, cl)?);
+    }
+    Ok((name, annot, clauses))
+}
+
+fn conv_struct_field_one(
+    c: &mut Ctx,
+    span: Span,
+    f: &g::StructField,
+) -> Result<(Name, Typ), String> {
+    match f {
+        g::StructField::Item(n, t) => Ok((c.name(span, n), conv_typ(c, span, t)?)),
+        g::StructField::Doc(_, inner) => conv_struct_field_one(c, span, inner),
+        g::StructField::Attr(_, inner) => conv_struct_field_one(c, span, inner),
+    }
+}
+
+fn conv_struct_fields(
+    c: &mut Ctx,
+    span: Span,
+    fs: &[g::StructField],
+) -> Result<Vec<(Name, Typ)>, String> {
+    let mut out = Vec::with_capacity(fs.len());
+    for f in fs {
+        out.push(conv_struct_field_one(c, span, f)?);
+    }
+    Ok(out)
+}
+
+fn conv_enum_member(c: &mut Ctx, span: Span, m: &g::EnumMember) -> Result<Name, String> {
+    match m {
+        g::EnumMember::Item(n) => Ok(c.name(span, n)),
+        g::EnumMember::Doc(_, inner) => conv_enum_member(c, span, inner),
+        g::EnumMember::Attr(_, inner) => conv_enum_member(c, span, inner),
+    }
+}
+
+fn conv_type_union(c: &mut Ctx, span: Span, u: &g::TypeUnion) -> Result<TypeUnion, String> {
+    match u {
+        g::TypeUnion::Id(ctor, t) => Ok(TypeUnion {
+            id: c.ids.fresh(),
+            span,
+            typ: conv_typ(c, span, t)?,
+            ctor: c.name(span, ctor),
+        }),
+        g::TypeUnion::Private(inner) => conv_type_union(c, span, inner),
+        g::TypeUnion::Attr(_, inner) => conv_type_union(c, span, inner),
+        g::TypeUnion::Doc(_, inner) => conv_type_union(c, span, inner),
+        g::TypeUnion::AnonRecord(..) => {
+            Err("anonymous-record union ctors have no sail-ast core node".to_owned())
+        }
+    }
+}
+
+fn conv_index_range(c: &mut Ctx, span: Span, r: &g::IndexRange) -> Result<IndexRange, String> {
+    let kind = match r {
+        g::IndexRange::Single(t) => IndexRangeKind::Single(conv_nexp(c, span, t)?),
+        g::IndexRange::Range(a, b) => IndexRangeKind::Range {
+            lo: conv_nexp(c, span, a)?,
+            hi: conv_nexp(c, span, b)?,
+        },
+        g::IndexRange::Concat(a, b) => IndexRangeKind::Concat(
+            Box::new(conv_index_range(c, span, a)?),
+            Box::new(conv_index_range(c, span, b)?),
+        ),
+    };
+    Ok(c.node(span, kind))
+}
+
+fn conv_reg_field(
+    c: &mut Ctx,
+    span: Span,
+    f: &g::RegField,
+) -> Result<(Name, IndexRange), String> {
+    match f {
+        g::RegField::Item(n, r) => Ok((c.name(span, n), conv_index_range(c, span, r)?)),
+        g::RegField::Doc(_, inner) => conv_reg_field(c, span, inner),
+        g::RegField::Attr(_, inner) => conv_reg_field(c, span, inner),
+    }
+}
+
+fn conv_typedef(c: &mut Ctx, span: Span, t: &g::TypeDef) -> Result<TypeDefKind, String> {
+    match t {
+        g::TypeDef::Abbrev(name, quant, _kind, body) => Ok(TypeDefKind::Abbrev {
+            name: c.name(span, name),
+            quant: conv_quant_items(c, span, &Some(quant.clone()))?,
+            // Kind-Annotation entfällt (Core hat keinen Slot).
+            arg: c.node(span, TypArgKind::Typ(conv_typ(c, span, body)?)),
+        }),
+        g::TypeDef::Abstract(name, kind, _aliases) => Ok(TypeDefKind::Abstract {
+            name: c.name(span, name),
+            kind: conv_kind(kind)?,
+        }),
+        g::TypeDef::Record(name, quant, fields) => Ok(TypeDefKind::Record {
+            name: c.name(span, name),
+            quant: conv_quant_items(c, span, &Some(quant.clone()))?,
+            fields: conv_struct_fields(c, span, fields)?,
+            // Die Grammatik trägt kein WF-Flag → angenommen (ADAPTER.md).
+            wf: true,
+        }),
+        g::TypeDef::Enum(name, params, members) => {
+            if !params.is_empty() {
+                return Err("enum type parameters have no sail-ast core slot".to_owned());
+            }
+            let mut cnames = Vec::with_capacity(members.len());
+            for (m, value) in members {
+                if value.is_some() {
+                    return Err("enum values have no sail-ast core slot".to_owned());
+                }
+                cnames.push(conv_enum_member(c, span, m)?);
+            }
+            Ok(TypeDefKind::Enum {
+                name: c.name(span, name),
+                members: cnames,
+                wf: true,
+            })
+        }
+        g::TypeDef::Variant(name, quant, ctors, wf) => {
+            let mut cctors = Vec::with_capacity(ctors.len());
+            for u in ctors {
+                cctors.push(conv_type_union(c, span, u)?);
+            }
+            Ok(TypeDefKind::Variant {
+                name: c.name(span, name),
+                quant: conv_quant_items(c, span, &Some(quant.clone()))?,
+                ctors: cctors,
+                wf: *wf,
+            })
+        }
+        g::TypeDef::Bitfield(name, typ, fields) => {
+            let mut cfields = Vec::with_capacity(fields.len());
+            for f in fields {
+                cfields.push(conv_reg_field(c, span, f)?);
+            }
+            Ok(TypeDefKind::Bitfield {
+                name: c.name(span, name),
+                typ: conv_typ(c, span, typ)?,
+                fields: cfields,
+            })
+        }
+    }
+}
+
+fn conv_valspec(c: &mut Ctx, span: Span, v: &g::ValSpec) -> Result<ValSpec, String> {
+    Ok(ValSpec {
+        id: c.ids.fresh(),
+        span,
+        name: c.name(span, &v.name),
+        typschm: conv_typschm(c, span, &v.typschm)?,
+        extern_opt: v
+            .ext
+            .as_ref()
+            .map(|e| Extern {
+                // `pure` defaultet auf false (Oberflächen-Default).
+                pure: e.pure.unwrap_or(false),
+                bindings: e.bindings.clone(),
+            }),
+    })
+}
+
+fn conv_regdef(c: &mut Ctx, span: Span, r: &g::RegDef) -> Result<DecSpec, String> {
+    Ok(DecSpec {
+        id: c.ids.fresh(),
+        span,
+        typ: conv_typ(c, span, &r.typ)?,
+        name: c.name(span, &r.name),
+        init: r
+            .init
+            .as_ref()
+            .map(|e| conv_exp(c, span, e))
+            .transpose()?,
+    })
+}
+
+fn conv_defaultdef(d: &g::DefaultDef) -> Result<Order, String> {
+    if d.kind != g::Kind::Order {
+        return Err("only `default Order` has a sail-ast core node".to_owned());
+    }
+    match &d.order {
+        g::Typ::Inc => Ok(Order::Inc),
+        g::Typ::Dec => Ok(Order::Dec),
+        _ => Err("default order needs `inc`/`dec`".to_owned()),
+    }
+}
+
+fn conv_scattered(c: &mut Ctx, span: Span, s: &g::ScatteredDef) -> Result<ScatteredDef, String> {
+    match s {
+        g::ScatteredDef::Enum(n) => Ok(ScatteredDef::Enum(c.name(span, n))),
+        g::ScatteredDef::Variant(n, q) => Ok(ScatteredDef::Variant {
+            name: c.name(span, n),
+            quant: conv_quant_items(c, span, &Some(q.clone()))?,
+        }),
+        g::ScatteredDef::Function(n) => Ok(ScatteredDef::Function {
+            name: c.name(span, n),
+            annot: TAnnotOpt::None,
+        }),
+        // Mitgeführte Mapping-Annotation entfällt (Core-Slot fehlt).
+        g::ScatteredDef::Mapping(n, _) => Ok(ScatteredDef::Mapping {
+            name: c.name(span, n),
+            annot: TAnnotOpt::None,
+        }),
+        g::ScatteredDef::EnumClause(e, m) => Ok(ScatteredDef::Enumcl {
+            enum_name: c.name(span, e),
+            member: c.name(span, m),
+        }),
+        g::ScatteredDef::FunClause(f) => Ok(ScatteredDef::Funcl(conv_funcl(c, span, f)?)),
+        g::ScatteredDef::UnionClause(n, u) => Ok(ScatteredDef::Unioncl {
+            name: c.name(span, n),
+            union: conv_type_union(c, span, u)?,
+        }),
+        g::ScatteredDef::MapClause(n, m) => Ok(ScatteredDef::Mapcl {
+            name: c.name(span, n),
+            clause: conv_mapcl(c, span, m)?,
+        }),
+        g::ScatteredDef::End(n) => Ok(ScatteredDef::End(c.name(span, n))),
+    }
+}
+
+fn conv_subst(c: &mut Ctx, span: Span, s: &g::Subst) -> Result<Subst, String> {
+    match s {
+        g::Subst::Typ(kid, t) => Ok(Subst::Typ {
+            kid: c.interner.intern(kid),
+            arg: c.node(span, TypArgKind::Typ(conv_typ(c, span, t)?)),
+        }),
+        g::Subst::Id(from, to) => Ok(Subst::Id {
+            from: c.name(span, from),
+            to: c.name(span, to),
+        }),
+    }
+}
+
+fn attr_data_string(d: &g::AttrData) -> String {
+    match d {
+        g::AttrData::Num(s) => s.clone(),
+        g::AttrData::Str(s) => format!("{s:?}"),
+        g::AttrData::Bool(b) => b.to_string(),
+        g::AttrData::List(v) => {
+            let inner: Vec<String> = v.iter().map(attr_data_string).collect();
+            format!("[{}]", inner.join(", "))
+        }
+        g::AttrData::Object(kvs) => {
+            let inner: Vec<String> = kvs
+                .iter()
+                .map(|(k, v)| format!("{k} = {}", attr_data_string(v)))
+                .collect();
+            format!("{{ {} }}", inner.join(", "))
+        }
+    }
+}
+
+fn conv_pragma(p: &g::Pragma) -> (String, String) {
+    match p {
+        g::Pragma::Line(k, v) => (k.clone(), v.clone()),
+        // Strukturierte Nutzdaten werden kompakt gerendert (ADAPTER.md).
+        g::Pragma::Structured(k, kvs) => {
+            let inner: Vec<String> = kvs
+                .iter()
+                .map(|(k, v)| format!("{k} = {}", attr_data_string(v)))
+                .collect();
+            (k.clone(), inner.join(", "))
+        }
+    }
+}
+
+fn conv_defaux(c: &mut Ctx, span: Span, d: &g::DefAux) -> Result<DefKind, String> {
+    match d {
+        g::DefAux::Fun(f) => {
+            let (rec, annot, funcls) = conv_fundef_parts(c, span, f)?;
+            Ok(DefKind::Fundef {
+                rec,
+                annot,
+                funcls,
+            })
+        }
+        g::DefAux::Map(m) => {
+            let (name, annot, clauses) = conv_mapdef(c, span, m)?;
+            Ok(DefKind::Mapdef {
+                name,
+                annot,
+                clauses,
+            })
+        }
+        g::DefAux::Impl(f) => Ok(DefKind::Impl(conv_funcl(c, span, f)?)),
+        g::DefAux::Fixity(assoc, level, name) => Ok(DefKind::Fixity {
+            fixity: match assoc {
+                g::FixAssoc::Infix => Fixity::Infix,
+                g::FixAssoc::InfixL => Fixity::InfixL,
+                g::FixAssoc::InfixR => Fixity::InfixR,
+            },
+            level: level.to_string(),
+            id: c.name(span, name),
+        }),
+        g::DefAux::Val(v) => Ok(DefKind::Val(conv_valspec(c, span, v)?)),
+        g::DefAux::Outcome(spec, defs) => {
+            if !defs.is_empty() {
+                return Err("outcome bodies have no sail-ast core slot".to_owned());
+            }
+            Ok(DefKind::Outcome {
+                name: c.name(span, &spec.name),
+                typschm: conv_typschm(c, span, &spec.typschm)?,
+                quant: conv_quant_items(c, span, &spec.param)?,
+            })
+        }
+        g::DefAux::Instantiation(name, substs) => {
+            let mut csubsts = Vec::with_capacity(substs.len());
+            for s in substs {
+                csubsts.push(conv_subst(c, span, s)?);
+            }
+            Ok(DefKind::Instantiation {
+                name: c.name(span, name),
+                substs: csubsts,
+            })
+        }
+        g::DefAux::Type(t) => Ok(DefKind::Type(c.node(span, conv_typedef(c, span, t)?))),
+        g::DefAux::Let(p, e) => Ok(DefKind::Let {
+            pat: conv_pat(c, span, p)?,
+            exp: conv_exp(c, span, e)?,
+        }),
+        g::DefAux::Register(r) => Ok(DefKind::Register(conv_regdef(c, span, r)?)),
+        g::DefAux::Overload(n, ids) => {
+            let mut overloads = Vec::with_capacity(ids.len());
+            for o in ids {
+                overloads.push(c.name(span, o));
+            }
+            Ok(DefKind::Overload {
+                name: c.name(span, n),
+                overloads,
+            })
+        }
+        g::DefAux::Default(d) => Ok(DefKind::Default(conv_defaultdef(d)?)),
+        g::DefAux::Constraint(t) => Ok(DefKind::Constraint(conv_constraint(c, span, t)?)),
+        g::DefAux::MutRec(fs) => {
+            let mut sets = Vec::with_capacity(fs.len());
+            for f in fs {
+                let (rec, annot, funcls) = conv_fundef_parts(c, span, f)?;
+                sets.push(FunclSet {
+                    rec,
+                    annot,
+                    funcls,
+                });
+            }
+            Ok(DefKind::InternalMutrec(sets))
+        }
+        g::DefAux::Pragma(p) => {
+            let (key, payload) = conv_pragma(p);
+            Ok(DefKind::Pragma { key, payload })
+        }
+        g::DefAux::Measure(n, p, e) => Ok(DefKind::Measure {
+            name: c.name(span, n),
+            pat: conv_pat(c, span, p)?,
+            exp: conv_exp(c, span, e)?,
+        }),
+        g::DefAux::LoopMeasures(n, ms) => {
+            let mut cms = Vec::with_capacity(ms.len());
+            for (k, e) in ms {
+                let k = match k {
+                    g::LoopKind::While => Loop::While,
+                    g::LoopKind::Until => Loop::Until,
+                };
+                cms.push((k, conv_exp(c, span, e)?));
+            }
+            Ok(DefKind::LoopMeasures {
+                name: c.name(span, n),
+                measures: cms,
+            })
+        }
+        g::DefAux::Scattered(s) => Ok(DefKind::Scattered(conv_scattered(c, span, s)?)),
+    }
+}
+
+fn conv_def(c: &mut Ctx, span: Span, d: &g::Def) -> Result<DefKind, String> {
+    match d {
+        g::Def::Aux(a) => conv_defaux(c, span, a),
+        // Hüllen entfallen (Core-Slots fehlen; siehe ADAPTER.md).
+        g::Def::Private(inner) => conv_def(c, span, inner),
+        g::Def::Attr(_, inner) => conv_def(c, span, inner),
+        g::Def::Doc(_, inner) => conv_def(c, span, inner),
+    }
+}

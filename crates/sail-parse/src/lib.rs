@@ -16,7 +16,10 @@ pub mod bridge;
 pub mod lexer;
 pub mod mini_ast;
 pub mod parser;
+pub mod real;
 pub mod span;
+
+mod convert;
 
 pub use bridge::{BridgeOut, Unparsed, bridge_file, bridge_parsed};
 
@@ -24,6 +27,7 @@ pub use mini_ast::{Def, ParsedFile, PragmaArg, SpannedDef};
 pub use span::{FileId, ParseError, Span, Spanned};
 
 pub use parser::parse_file;
+pub use real::{ParseOut, RealParser, parse_def, parse_exp, parse_file_real, parse_pat, parse_typ};
 
 /// Parse many files in parallel (one thread per file, via
 /// [`std::thread::scope`]). Results are in input order. The parser holds
