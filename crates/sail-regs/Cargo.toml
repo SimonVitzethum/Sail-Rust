@@ -1,0 +1,8 @@
+[package]
+name = "sail-regs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "sail_regs"
+path = "src/lib.rs"

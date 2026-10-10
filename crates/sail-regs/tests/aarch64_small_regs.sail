@@ -1,0 +1,4 @@
+// aarch64-small-near fixture: 3 registers (PC/SP 64-bit, PSTATE 32-bit).
+register PC : bits(64) = 0b0000000000000000000000000000000000000000000000000000000000000000
+register SP : bits(64)
+register PSTATE : bits(32) = 0b00000000000000000000000000000000
