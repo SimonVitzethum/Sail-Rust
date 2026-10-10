@@ -697,6 +697,48 @@ fn parse_enum_struct_fields_strict() {
 }
 
 #[test]
+fn parse_type_union_empty_brace_single_tree() {
+    // Lane 104: `C : {}` had two trees — `Id(C, NSet([]))` via
+    // `AtomicTyp` and `AnonRecord(C, [])` via `StructFields? = None`
+    // (Rig limited-run-20261010-193612, `sail.lalrpop:316:5-316:62`).
+    // The anon arm is strict now (Menhir `parser.mly:1136` shape), so
+    // the empty brace parses only as the `NSet` id-arm; non-empty
+    // braces still parse as anon records. Same accepted language.
+    let no_quant = TypQuant { kopts: vec![], constraint: None };
+    assert_eq!(
+        parse_def("union U = { C : {} }").unwrap(),
+        Def::Aux(DefAux::Type(TypeDef::Variant(
+            "U".to_string(),
+            no_quant.clone(),
+            vec![TypeUnion::Id("C".to_string(), Typ::NSet(vec![]))],
+            false
+        )))
+    );
+    assert_eq!(
+        parse_def("newtype N = C : {}").unwrap(),
+        Def::Aux(DefAux::Type(TypeDef::Variant(
+            "N".to_string(),
+            no_quant.clone(),
+            vec![TypeUnion::Id("C".to_string(), Typ::NSet(vec![]))],
+            true
+        )))
+    );
+    assert_eq!(
+        parse_def("union U = { C : { x : int } }").unwrap(),
+        Def::Aux(DefAux::Type(TypeDef::Variant(
+            "U".to_string(),
+            no_quant.clone(),
+            vec![TypeUnion::AnonRecord(
+                "C".to_string(),
+                vec![StructField::Item("x".to_string(), Typ::Id("int".to_string()))]
+            )],
+            false
+        )))
+    );
+    assert!(parse_def("union U = { C : {}, D : int, }").is_ok());
+}
+
+#[test]
 fn parse_index_range_tails() {
     // Lane 98: `@` / `..` are explicit arms (no `?` tail). Same accepted
     // language; `@` stays right-recursive.
