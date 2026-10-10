@@ -92,8 +92,9 @@ Welle-3-Notizen (E3, Test-Moratorium — KEINE Builds, Review-only):
 - Build/Test-Verifikation offen (Test-Rig der Haupt-Session).
 
 E3-Integration (10.10.2026, Integrator — KEINE Builds, nur Merges):
-9 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer), Branches +
-Worktrees geloescht: Lane 62, 63, 64, 65, 66, 67, 69, 70, 58 (selektiv).
+10 Merge-Commits (je --no-ff, -s + Co-authored-by-Trailer), Branches +
+Worktrees geloescht: Lane 62, 63, 64, 65, 66, 67, 69, 70, 58 (selektiv),
+68.
 Uebersprungen + Grund:
 - lane/structs-enums-unions (Lane 30): Branch existiert nicht — nichts zu mergen.
 - lane/41-lang-delta, lane/42-shared-mem, lane/43-scheduler-replay,
@@ -113,7 +114,12 @@ Merge-Notizen:
   [lib]/[dependencies] gedoppelt (invalides TOML, aus Lane-63-Merge
   verschleppt); alle 42 Manifeste per TOML-Parse validiert.
 - lanes/-Notizen 64/65/66/67/70 (uncommitted in Worktrees) nach lanes/
-  uebernommen (62/63/69 kamen per Branch-Commit).
+  uebernommen (62/63/69/68 kamen per Branch-Commit).
+- Lane 68 (Basis 2f2b0da, nach den 9 Merges faellig): Voll-Merge haette die
+  frischen Lanes zurueckgesetzt — faktisch aber konfliktfrei, da nur
+  sail-ty/env.rs beidseitig angefasst (serde-Derives Lane 65 + Arc+CoW-Umbau
+  Lane 68 automatisch vereint); exakt die 9 Lane-68-Dateien im Merge
+  (Interner-Arc inkl. serde rc-Feature, subst_cow, entry-API/Clone-Diaet).
 - Checks je Merge: kein Cargo.lock getrackt, kein unsafe-Token ausser
   forbid-Zeilen, keine Konfliktmarker. Build-Verifikation offen (Rig).
 
