@@ -55,3 +55,17 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = "warn"
 pedantic = "allow"
+
+# Release-/CI-Profile (E3-Folge: speicherschonende Builds auf der
+# Swap-losen Maschine; thin-LTO statt fat, keine Debuginfos).
+[profile.release]
+lto = "thin"
+strip = true
+panic = "unwind"
+
+# Speicherschonende Test-Binaries: erbt release (Opt-Level etc.),
+# aber ohne LTO und ohne Debuginfos.
+[profile.ci]
+inherits = "release"
+lto = false
+debug = false
