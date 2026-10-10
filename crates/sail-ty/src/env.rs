@@ -2,11 +2,12 @@
 //! Type environment: value specs + registers.
 
 use crate::nexp::{MiniTyp, TypQuant};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Global typing environment (immutable snapshots are `Clone`d per worker
 /// thread; no shared interior mutability, so no lock contention).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TypeEnv {
     /// `val` specs: function name -> quantified scheme.
     vals: HashMap<String, TypQuant>,
