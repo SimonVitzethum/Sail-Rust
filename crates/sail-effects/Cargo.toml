@@ -1,0 +1,10 @@
+[package]
+name = "sail-effects"
+version = "0.1.0"
+edition = "2021"
+description = "Callgraph + effect analysis for the pure-Rust Sail compiler (Lane 08)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "sail_effects"
+path = "src/lib.rs"
