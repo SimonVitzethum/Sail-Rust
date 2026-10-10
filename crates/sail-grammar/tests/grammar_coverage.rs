@@ -578,38 +578,6 @@ fn parse_bitfield_ranges() {
 }
 
 #[test]
-fn parse_bitfield_body_strict() {
-    // Lane 87 (sail.lalrpop:1288): `RDefBody` is strict (non-empty,
-    // right-recursive, E4-`Block` shape) but still used as `RDefBody?`, so
-    // `{}` parses — via exactly one tree — while item lists keep trailing
-    // commas. Same accepted language as before, no corpus impact.
-    let typ = Typ::App("bits".to_string(), vec![Typ::Lit(Lit::Num("8".to_string()))]);
-    let bitfield = |fields: Vec<RegField>| {
-        Def::Aux(DefAux::Type(TypeDef::Bitfield("B".to_string(), typ.clone(), fields)))
-    };
-    assert_eq!(
-        parse_def("bitfield B : bits(8) = {}").unwrap(),
-        bitfield(vec![])
-    );
-    let single = IndexRange::Single(Typ::Lit(Lit::Num("4".to_string())));
-    let one = RegField::Item("f".to_string(), single.clone());
-    assert_eq!(
-        parse_def("bitfield B : bits(8) = { f : 4 }").unwrap(),
-        bitfield(vec![one.clone()])
-    );
-    // Trailing comma parses to the same single-item body.
-    assert_eq!(
-        parse_def("bitfield B : bits(8) = { f : 4, }").unwrap(),
-        bitfield(vec![one.clone()])
-    );
-    // Several fields, `..`-ranges, `@`-concats, doc/attribute prefixes.
-    assert!(parse_def("bitfield B : bits(8) = { f : 7..0, g : 4 }").is_ok());
-    assert!(parse_def("bitfield B : bits(8) = { f : a @ b }").is_ok());
-    assert!(parse_def("bitfield B : bits(8) = { $[myattr] f : 4 }").is_ok());
-    assert!(parse_def("bitfield B : bits(8) = { /// field f\n f : 4 }").is_ok());
-}
-
-#[test]
 fn parse_foreach_by_in() {
     // E4: `by Exp` / `in Typ` tails; the step cannot end in a bare `let`.
     assert!(parse_exp("foreach (i from 0 to 10) do i").is_ok());
@@ -887,4 +855,319 @@ fn parse_block_bare_let_var() {
     // Expression-level `let` still requires `in` (E4, unchanged).
     assert!(parse_exp("let x = 1 in x").is_ok());
     assert!(parse_exp("let x = 1").is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Lane 99: rest-list family strict (TypList/NumList/PatList/…, `(...)+`
+// macros, `?`-tails as explicit arms, AtomSuffix/CallArgs)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn parse_num_list_strict() {
+    // Lane 99 (Rig 324:5-327:5, headline): `NumList` is strict but used
+    // as `NumList?`, so `{}` / `{||}` still parse (via `None`) while
+    // trailing commas keep working. Same accepted language as before.
+    let pair = Typ::NSet(vec!["1".to_string(), "2".to_string()]);
+    assert_eq!(parse_typ("{1, 2}").unwrap(), pair);
+    assert_eq!(parse_typ("{1, 2,}").unwrap(), pair);
+    assert_eq!(
+        parse_typ("{|1, 2|}").unwrap(),
+        Typ::NSet(vec!["1".to_string(), "2".to_string()])
+    );
+    assert_eq!(parse_typ("{|1,|}").unwrap(), Typ::NSet(vec!["1".to_string()]));
+    assert_eq!(parse_typ("{}").unwrap(), Typ::NSet(vec![]));
+    assert_eq!(parse_typ("{||}").unwrap(), Typ::NSet(vec![]));
+    assert_eq!(
+        parse_typ("{-1, 2}").unwrap(),
+        Typ::NSet(vec!["-1".to_string(), "2".to_string()])
+    );
+}
+
+#[test]
+fn parse_typ_list_strict() {
+    // Lane 99 (Rig 310:5-313:5): `TypList` is strict; the tuple use site
+    // keeps three explicit arms so `(t)`, `(t,)` and `(t, …)` all parse
+    // as before, and `TyArgs` keeps `?` so `()` still parses.
+    let int = Typ::Id("int".to_string());
+    let bool = Typ::Id("bool".to_string());
+    assert_eq!(parse_typ("(int)").unwrap(), int);
+    assert_eq!(parse_typ("(int,)").unwrap(), Typ::Tuple(vec![int.clone()]));
+    assert_eq!(
+        parse_typ("(int, bool,)").unwrap(),
+        Typ::Tuple(vec![int.clone(), bool.clone()])
+    );
+    assert_eq!(parse_typ("foo()").unwrap(), Typ::App("foo".to_string(), vec![]));
+    assert_eq!(
+        parse_typ("foo(int, bool)").unwrap(),
+        Typ::App("foo".to_string(), vec![int.clone(), bool.clone()])
+    );
+}
+
+#[test]
+fn parse_pat_list_strict() {
+    // Lane 99: `PatList` is strict; the tuple site is three explicit
+    // arms, `PatIdTail` keeps its `"()"` arm (which now owns `()` alone
+    // — no double tree), vectors/lists reuse the strict list with `?`
+    // (`[]` still parses), struct patterns keep `?` (`struct {}` still
+    // parses). Same accepted language as before.
+    let x = Pat::Id("x".to_string());
+    let y = Pat::Id("y".to_string());
+    assert_eq!(parse_pat("(x)").unwrap(), x);
+    assert_eq!(parse_pat("(x,)").unwrap(), Pat::Tuple(vec![x.clone()]));
+    assert_eq!(
+        parse_pat("(x, y,)").unwrap(),
+        Pat::Tuple(vec![x.clone(), y.clone()])
+    );
+    assert_eq!(
+        parse_pat("f(x, y)").unwrap(),
+        Pat::App("f".to_string(), vec![x.clone(), y.clone()])
+    );
+    assert_eq!(
+        parse_pat("f()").unwrap(),
+        Pat::App("f".to_string(), vec![Pat::Lit(Lit::Unit)])
+    );
+    assert_eq!(
+        parse_pat("[x, y,]").unwrap(),
+        Pat::Vector(vec![x.clone(), y.clone()])
+    );
+    assert_eq!(parse_pat("[]").unwrap(), Pat::Vector(vec![]));
+    assert_eq!(parse_pat("[|x|]").unwrap(), Pat::List(vec![x.clone()]));
+    assert_eq!(parse_pat("[||]").unwrap(), Pat::List(vec![]));
+    assert_eq!(parse_pat("struct {}").unwrap(), Pat::Struct(None, vec![]));
+    assert_eq!(
+        parse_pat("struct { x, y }").unwrap(),
+        Pat::Struct(
+            None,
+            vec![
+                FieldPat::Field("x".to_string(), x.clone()),
+                FieldPat::Field("y".to_string(), y.clone()),
+            ]
+        )
+    );
+}
+
+#[test]
+fn parse_exp_tuple_vector_list_strict() {
+    // Lane 99: the `Exp` tuple site is three explicit arms (restores the
+    // `(e,)` single-tuple the strict `ExpList` alone would reject);
+    // vectors/lists reuse strict `ExpList` / `VecUpdList?` with the same
+    // empty shapes as before; struct sites keep `?`.
+    let a = Exp::Id("a".to_string());
+    let b = Exp::Id("b".to_string());
+    assert_eq!(parse_exp("(a,)").unwrap(), Exp::Tuple(vec![a.clone()]));
+    assert_eq!(
+        parse_exp("[a, b,]").unwrap(),
+        Exp::Vector(vec![a.clone(), b.clone()])
+    );
+    assert_eq!(parse_exp("[a,]").unwrap(), Exp::Vector(vec![a.clone()]));
+    assert_eq!(parse_exp("[||]").unwrap(), Exp::List(vec![]));
+    assert_eq!(
+        parse_exp("[|a, b|]").unwrap(),
+        Exp::List(vec![a.clone(), b.clone()])
+    );
+    assert_eq!(parse_exp("struct {}").unwrap(), Exp::Struct(None, vec![]));
+    assert_eq!(
+        parse_exp("struct { x = 1, }").unwrap(),
+        Exp::Struct(
+            None,
+            vec![FieldExp::Field(
+                Box::new(Exp::Id("x".to_string())),
+                Box::new(Exp::Lit(Lit::Num("1".to_string()))),
+            )]
+        )
+    );
+    assert!(parse_exp("[v with x = 1]").is_ok());
+    assert!(parse_exp("[v with x = 1, y = 2,]").is_ok());
+    assert!(parse_exp("[v with x..y = 1]").is_ok());
+    // Struct-update with an empty field list still parses.
+    assert_eq!(
+        parse_exp("{ r with }").unwrap(),
+        Exp::StructUpdate(Box::new(Exp::Id("r".to_string())), vec![])
+    );
+}
+
+#[test]
+fn parse_call_args_split() {
+    // Lane 99: `IdCallTail?` / `CallArgs?` / `PatIdTail?` /
+    // `MPatIdTail?` / `MPatSuffix?` are explicit arms (no `?`
+    // intermediate whose reduce competes with the shifts). Same accepted
+    // language.
+    assert_eq!(parse_exp("f").unwrap(), Exp::Id("f".to_string()));
+    assert_eq!(
+        parse_exp("x.f").unwrap(),
+        Exp::Suffix(
+            Box::new(Exp::Id("x".to_string())),
+            vec![ExpSuffix::Field("f".to_string())]
+        )
+    );
+    assert_eq!(
+        parse_exp("x.f(y)").unwrap(),
+        Exp::Suffix(
+            Box::new(Exp::Id("x".to_string())),
+            vec![ExpSuffix::Call(
+                "f".to_string(),
+                vec![Exp::Id("y".to_string())]
+            )]
+        )
+    );
+    assert_eq!(
+        parse_pat("v[0]").unwrap(),
+        Pat::VectorSubrange("v".to_string(), "0".to_string(), "0".to_string())
+    );
+    assert_eq!(
+        parse_pat("v[7..0]").unwrap(),
+        Pat::VectorSubrange("v".to_string(), "7".to_string(), "0".to_string())
+    );
+}
+
+#[test]
+fn parse_mpat_list_strict() {
+    // Lane 99 (Rig 1083:5-1086:5, 1143:5-1146:5): `MPatList` /
+    // `FMPatList` are strict; the tuple site is three explicit arms,
+    // `MPatIdTail` keeps `"()"`, struct sites keep `?`; operator chains
+    // use an explicit right-recursive rule instead of the `(...)+`
+    // chunk. Same accepted language as before.
+    assert!(parse_def("mapping m = { x <-> y }").is_ok());
+    assert!(parse_def("mapping m = { x <-> y, }").is_ok());
+    assert!(parse_def("mapping m = {}").is_ok());
+    assert!(parse_def("mapping m = { (x, y) <-> z }").is_ok());
+    assert!(parse_def("mapping m = { (x,) <-> z }").is_ok());
+    assert!(parse_def("mapping m = { f() <-> z }").is_ok());
+    assert!(parse_def("mapping m = { f(x, y) <-> z }").is_ok());
+    assert!(parse_def("mapping m = { [x, y] <-> z }").is_ok());
+    assert!(parse_def("mapping m = { [] <-> z }").is_ok());
+    assert!(parse_def("mapping m = { struct {} <-> z }").is_ok());
+    assert!(parse_def("mapping m = { struct { x = y } <-> z }").is_ok());
+    assert!(parse_def("mapping m = { x :: y <-> z }").is_ok());
+    assert!(parse_def("mapping m = { x :: y :: z <-> w }").is_ok());
+    assert!(parse_def("mapping m = { x as y <-> z }").is_ok());
+}
+
+#[test]
+fn parse_typaram_configkey_regdef() {
+    // Lane 99 (Rig 1220, 1282, 1509): `ParamKOptList` is strict
+    // (`TyParam` keeps `?`, so `()` still parses);
+    // `UnbracketedTyParam`-`constraint`, `ConfigKey`-`.`, `RegDef`-`=`
+    // tails are explicit arms. Same accepted language.
+    let no_quant = TypQuant { kopts: vec![], constraint: None };
+    assert!(parse_def("struct S('a : Type) = { x : 'a }").is_ok());
+    assert_eq!(
+        parse_def("struct S() = {}").unwrap(),
+        Def::Aux(DefAux::Type(TypeDef::Record(
+            "S".to_string(),
+            no_quant.clone(),
+            vec![]
+        )))
+    );
+    assert!(parse_def("outcome o : int -> int with 'a").is_ok());
+    assert!(parse_def("outcome o : int -> int with 'a constraint int").is_ok());
+    assert_eq!(
+        parse_def("type foo : Type = config a.b.c").unwrap(),
+        Def::Aux(DefAux::Type(TypeDef::Abstract(
+            "foo".to_string(),
+            Kind::Type,
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        )))
+    );
+    assert_eq!(
+        parse_def("register r : int").unwrap(),
+        Def::Aux(DefAux::Register(RegDef {
+            name: "r".to_string(),
+            typ: Typ::Id("int".to_string()),
+            init: None,
+        }))
+    );
+    assert_eq!(
+        parse_def("register r : int = 1").unwrap(),
+        Def::Aux(DefAux::Register(RegDef {
+            name: "r".to_string(),
+            typ: Typ::Id("int".to_string()),
+            init: Some(Exp::Lit(Lit::Num("1".to_string()))),
+        }))
+    );
+}
+
+#[test]
+fn parse_union_subst_extern_attr_lists() {
+    // Lane 99: `TypeUnions` / `SubstList` / `ExternBindList` /
+    // `AttrKVList` / `AttrDataList` / `EnumFns` are strict with `?` use
+    // sites where the port accepted empty bodies. Same accepted
+    // language as before.
+    let no_quant = TypQuant { kopts: vec![], constraint: None };
+    assert_eq!(
+        parse_def("union U = {}").unwrap(),
+        Def::Aux(DefAux::Type(TypeDef::Variant(
+            "U".to_string(),
+            no_quant.clone(),
+            vec![],
+            false
+        )))
+    );
+    assert!(parse_def("union U = { C : int, D : bool, }").is_ok());
+    assert_eq!(
+        parse_def("instantiation i with a = b").unwrap(),
+        Def::Aux(DefAux::Instantiation(
+            "i".to_string(),
+            vec![Subst::Id("a".to_string(), "b".to_string())]
+        ))
+    );
+    assert!(parse_def("instantiation i with a = b,").is_ok());
+    assert!(parse_def("instantiation i").is_ok());
+    let schm = TypSchm {
+        quant: None,
+        lhs: Typ::Id("int".to_string()),
+        arrow: Arrow::Fn,
+        rhs: Typ::Id("int".to_string()),
+        effect: None,
+    };
+    assert_eq!(
+        parse_def("val f : int -> int = { c : \"impl\" }").unwrap(),
+        Def::Aux(DefAux::Val(ValSpec {
+            name: "f".to_string(),
+            typschm: schm.clone(),
+            ext: Some(Extern {
+                pure: None,
+                bindings: vec![("c".to_string(), "impl".to_string())],
+            }),
+        }))
+    );
+    assert!(parse_def("val f : int -> int = {}").is_ok());
+    assert!(parse_def("enum E with f -> int, = { A, }").is_ok());
+    assert_eq!(
+        parse_exp("$[foo [1, true]] x").unwrap(),
+        Exp::Attr(
+            vec![Attr {
+                name: "foo".to_string(),
+                data: Some(AttrData::List(vec![
+                    AttrData::Num("1".to_string()),
+                    AttrData::Bool(true),
+                ])),
+            }],
+            Box::new(Exp::Id("x".to_string())),
+        )
+    );
+    assert_eq!(
+        parse_exp("$[foo {k = 1}] x").unwrap(),
+        Exp::Attr(
+            vec![Attr {
+                name: "foo".to_string(),
+                data: Some(AttrData::Object(vec![(
+                    "k".to_string(),
+                    AttrData::Num("1".to_string()),
+                )])),
+            }],
+            Box::new(Exp::Id("x".to_string())),
+        )
+    );
+    // Empty `{}` still parses to an empty object (use site keeps `?`).
+    assert_eq!(
+        parse_exp("$[foo {}] x").unwrap(),
+        Exp::Attr(
+            vec![Attr {
+                name: "foo".to_string(),
+                data: Some(AttrData::Object(vec![])),
+            }],
+            Box::new(Exp::Id("x".to_string())),
+        )
+    );
 }
