@@ -9,5 +9,9 @@ license = "MIT OR Apache-2.0"
 name = "sail_prelude"
 path = "src/lib.rs"
 
+[dev-dependencies]
+sail-parse = { path = "../sail-parse" }
+sail-resolve = { path = "../sail-resolve" }
+
 [lints]
 workspace = true

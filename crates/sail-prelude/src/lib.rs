@@ -84,6 +84,8 @@ pub fn empty_model() -> &'static str {
     EMPTY_MODEL_SKELETON
 }
 
+pub mod corpus;
+
 #[cfg(test)]
 mod tests {
     use super::*;
