@@ -1,0 +1,12 @@
+[package]
+name = "sail-arena"
+version = "0.1.0"
+edition = "2021"
+description = "Speicher-Tuning-Layer ueber sail-ast-GenArena (Lane 37): shard-groessenabhaengiges Sizing, Drop-Policy, Peak-Reports. Reines Safe-Rust, keine eigenen Arenen."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+sail-ast = { version = "0.1.0", path = "../sail-ast" }
+
+[lints]
+workspace = true
