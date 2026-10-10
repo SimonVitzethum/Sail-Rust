@@ -51,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo test --workspace --all-targets
+      - run: cargo test --profile ci --workspace --all-targets
 
   # Lane 49, E2-Gate (blockierend): Generat muss sorry-frei sein.
   e2-sorry-gate:

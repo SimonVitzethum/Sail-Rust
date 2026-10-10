@@ -25,7 +25,7 @@ Die Form muss `<Zahl>[M|G]` sein (z.B. `20G`, `512M`), sonst bricht
 ./scripts/tmux-test.sh -s sail-test -w checks -m 10G -- ./scripts/check.sh
 ```
 
-`--profile ci` ist im Workspace definiert (`[profile.ci]`, erbt von `dev`);
+`--profile ci` ist im Workspace definiert (`[profile.ci]`, erbt von `release`);
 damit laufen CI-nahe Einstellungen lokal reproduzierbar. Solange einzelne
 Lanes kein eigenes Profil brauchen, bleibt `ci` der einzige Custom-Name.
 
