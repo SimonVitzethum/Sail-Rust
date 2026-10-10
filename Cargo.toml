@@ -21,6 +21,7 @@ members = [
     "crates/sail-mapping",
     "crates/sail-patterns",
     "crates/sail-bitvec",
+    "crates/sail-int",
 ]
 resolver = "2"
 
