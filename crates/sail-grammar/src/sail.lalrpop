@@ -989,18 +989,32 @@ VecUpdList: Vec<VectorUpdate> = {
 // attributes & documentation
 // ---------------------------------------------------------------------------
 
-// `attributes`.
+// `attributes`: E4-explicit (Lane 102) — the old `<d:AttrData?>` tail
+// expanded to `RawAttr AttrData AttrsTail` / `RawAttr AttrsTail`
+// intermediates whose empty-reduce competed with the `RawAttr` shift
+// (Rig 1529:5-1529:29, reduce-`RDefBody` vs shift on every `RIdDef`
+// starter). Same combinations as before; accepted language unchanged.
 Attrs: Vec<Attr> = {
-    <a:RawAttr> <d:AttrData?> <t:AttrsTail> => {
-        let mut v = vec![Attr { name: a, data: d }];
+    <a:RawAttr> <d:AttrData> <t:AttrsTail> => {
+        let mut v = vec![Attr { name: a, data: Some(d) }];
+        v.extend(t);
+        v
+    },
+    <a:RawAttr> <t:AttrsTail> => {
+        let mut v = vec![Attr { name: a, data: None }];
         v.extend(t);
         v
     },
 }
 
 AttrsTail: Vec<Attr> = {
-    "," <i:RawId> <d:AttrData?> <t:AttrsTail> => {
-        let mut v = vec![Attr { name: i, data: d }];
+    "," <i:RawId> <d:AttrData> <t:AttrsTail> => {
+        let mut v = vec![Attr { name: i, data: Some(d) }];
+        v.extend(t);
+        v
+    },
+    "," <i:RawId> <t:AttrsTail> => {
+        let mut v = vec![Attr { name: i, data: None }];
         v.extend(t);
         v
     },
@@ -1371,12 +1385,16 @@ AbstractInst: Vec<String> = {
     "=" "config" <ks:ConfigKey> => ks,
 }
 
+// `config` key chain: E4-explicit (Lane 102) — left-recursive, so after
+// `RawId` on `"."` only the reduce to `ConfigKey` applies (the old
+// right-recursive `RawId "." ConfigKey` arm let the reduce compete with
+// the `"."` shift: Rig 1375:5-1375:24). Same keys in the same order;
+// accepted language unchanged.
 ConfigKey: Vec<String> = {
     <k:RawId> => vec![k],
-    <k:RawId> "." <ks:ConfigKey> => {
-        let mut v = vec![k];
-        v.extend(ks);
-        v
+    <mut ks:ConfigKey> "." <k:RawId> => {
+        ks.push(k);
+        ks
     },
 }
 
