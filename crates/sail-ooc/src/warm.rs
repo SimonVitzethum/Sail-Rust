@@ -21,11 +21,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::ContentId;
+use sail_cache::TMP_PREFIX;
+// Lane-127-Namenswahrheit: Tmp-Praefix kanonisch aus `sail-cache`
+// (dort als `TMP_PREFIX` dokumentiert); kein zweites Literal.
 
 /// Dateiendung warmer Blobs.
 pub const WARM_BLOB_EXT: &str = "blob";
-/// Praefix temporaerer Schreibdateien (nie sichtbarer Endzustand).
-const TMP_PREFIX: &str = ".tmp-";
+// Tmp-Praefix: `TMP_PREFIX` (Import oben, Wahrheit in `sail-cache`).
 
 /// Fehler des Warm-Layers (eigener Typ statt `io::ErrorKind`-Abhaengigkeit;
 /// MSRV-sicher, keine jungen `ErrorKind`-Varianten).
@@ -423,6 +425,14 @@ mod tests {
         warm.evict(&c);
         let got = warm.get(&a).expect("reload").expect("datei bleibt");
         assert_eq!(got.as_ref(), b"aaaa");
+    }
+
+    #[test]
+    fn tmp_prefix_teilt_diskcache_namenwahrheit() {
+        // Lane 127: kein zweites Literal — der Import oben ist die
+        // kanonische `sail_cache::TMP_PREFIX`-Konstante.
+        assert_eq!(TMP_PREFIX, sail_cache::TMP_PREFIX);
+        assert_eq!(TMP_PREFIX, ".tmp-");
     }
 
     #[test]
