@@ -81,7 +81,8 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
 
     /// `infer(e)`: synthesize a type for `e`.
     pub fn infer(&self, exp: &MiniExp, env: &TypeEnv, span: Span) -> TypeResult<MiniTyp> {
-        self.infer_fuel(exp, env, span, &mut self.limits.max_steps)
+        let mut fuel = self.limits.max_steps;
+        self.infer_fuel(exp, env, span, &mut fuel)
     }
 
     /// `check(e <= t)`: verify `e` against a known type, discharging any
@@ -93,7 +94,8 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
         env: &TypeEnv,
         span: Span,
     ) -> TypeResult<()> {
-        self.check_fuel(exp, expected, env, span, &mut self.limits.max_steps)
+        let mut fuel = self.limits.max_steps;
+        self.check_fuel(exp, expected, env, span, &mut fuel)
     }
 
     /// Check a quantified scheme: kinds are well-formed, bound vars cover
@@ -293,7 +295,8 @@ impl<'s, S: Solver> BidirectionalChecker<'s, S> {
         expected: &MiniTyp,
         span: Span,
     ) -> TypeResult<Vec<(String, MiniTyp)>> {
-        self.check_pat_fuel(pat, expected, span, &mut self.limits.max_steps)
+        let mut fuel = self.limits.max_steps;
+        self.check_pat_fuel(pat, expected, span, &mut fuel)
     }
 
     // -- internals -------------------------------------------------------
