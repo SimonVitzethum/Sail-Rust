@@ -12,3 +12,6 @@ path = "src/main.rs"
 [lib]
 name = "sail_oracle"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

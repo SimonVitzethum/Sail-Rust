@@ -8,3 +8,6 @@ license = "MIT OR Apache-2.0"
 [lib]
 name = "sail_resolve"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

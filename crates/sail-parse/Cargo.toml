@@ -8,3 +8,6 @@ license = "BSD-2-Clause"
 [lib]
 name = "sail_parse"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

@@ -7,3 +7,6 @@ license = "MIT OR Apache-2.0"
 [lib]
 name = "sail_lower"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

@@ -6,3 +6,6 @@ description = "Pure NExp/nconstraint algebra for the sail-rs compiler: simplific
 
 [dev-dependencies]
 proptest = "1"
+
+[lints]
+workspace = true

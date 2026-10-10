@@ -13,5 +13,22 @@ members = [
     "crates/sail-lake",
     "crates/sail-oracle",
     "crates/sail-perf",
+    "crates/sail-shard",
+    "crates/sail-cli",
 ]
 resolver = "2"
+
+[workspace.package]
+edition = "2021"
+# MSRV-Pin (Lane 15): minimal unterstuetzte Rust-Version.
+# CI prueft mit genau dieser Toolchain (`MSRV`-Job in ci.yml).
+rust-version = "1.75.0"
+license = "MIT OR Apache-2.0"
+version = "0.0.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "allow"

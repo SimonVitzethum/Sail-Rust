@@ -14,3 +14,6 @@ z3 = ["dep:z3"]
 z3 = { version = "0.12", optional = true }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

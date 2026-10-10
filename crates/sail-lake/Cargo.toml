@@ -6,3 +6,6 @@ description = "Lake project generator for the Sail Lean backend (port of start_l
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+
+[lints]
+workspace = true
