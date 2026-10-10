@@ -117,6 +117,13 @@ impl Facts {
 
     /// Record `lo >= hi` (or `lo > hi` for strict) when one side is a
     /// variable and the other a constant.
+    ///
+    /// Strict bounds bump by one with saturation (`i128::MAX + 1`
+    /// sticks at `MAX`). The saturated bound is always *weaker* than
+    /// the true (unrepresentable, Zarith) one, so at most precision is
+    /// lost towards `Unknown` — a claimed bound is never stronger than
+    /// the assumption (over `i128` envs the assumption is then
+    /// contradictory, hence vacuously sound).
     fn add_cmp(&mut self, lo: &NExp, hi: &NExp, strict: bool) {
         let bump = i128::from(strict);
         match (lo, hi) {
@@ -225,9 +232,27 @@ fn sign(e: &NExp, facts: &Facts) -> Sign {
             Sign::Unknown => Sign::Unknown,
         },
         NExp::Sum(a, b) => add_sign(sign(a, facts), sign(b, facts)),
+        // `a - a` is `0` in every model of a defined `a` (ring axiom,
+        // like `0 * x` below; the SMT backend agrees: `F - F = 0` is
+        // valid over total `Int`). Kept in sync with the `provably_zero`
+        // contract, unlike the removed `a - a -> 0` *rewrite*.
+        NExp::Minus(a, b) if a == b => Sign::Zero,
         NExp::Minus(a, b) => add_sign(sign(a, facts), negate(sign(b, facts))),
         NExp::Times(a, b) => mul_sign(sign(a, facts), sign(b, facts), a, b, facts),
-        NExp::Exp(_) => Sign::Pos,
+        // `2^x` is positive only with a backed non-negative exponent
+        // (Lane 124): an open `x` may be negative, where `2^x` does not
+        // even denote — the SMT backend maps it to a fresh (possibly
+        // non-positive) constant, and OCaml's Lean backend proves
+        // `x >= 0` with the solver before answering `Nat`. A constant
+        // `c >= 0` always backs (Zarith truth, at any magnitude); a
+        // non-constant `x` needs `provably_nneg_in(x, facts)`.
+        NExp::Exp(x) => {
+            if provably_nneg_in(x, facts) {
+                Sign::Pos
+            } else {
+                Sign::Unknown
+            }
+        }
         NExp::App(f, args) => match (f.as_str(), args.as_slice()) {
             ("abs", [_]) => Sign::Nneg,
             ("div", [a, _]) => {
@@ -417,8 +442,16 @@ mod tests {
         assert!(!provably_pos(&v(n)));
         assert!(!provably_zero(&v(n)));
         assert!(!provably_nonzero(&v(n)));
-        // `2^x` is always positive; `abs` is always non-negative.
-        assert!(provably_pos(&NExp::Exp(Box::new(v(n)))));
+        // `2^c` with a constant `c >= 0` is positive; an open exponent
+        // is `Unknown` (Lane 124: unbacked `Exp`-positivity is gone —
+        // a negative exponent does not even denote).
+        assert!(provably_pos(&NExp::Exp(Box::new(c(3)))));
+        assert!(!provably_pos(&NExp::Exp(Box::new(v(n)))));
+        assert!(!provably_nneg(&NExp::Exp(Box::new(v(n)))));
+        // ... unless the exponent is backed by context.
+        let f = Facts::new().with_lower(n, 0);
+        assert!(provably_pos_in(&NExp::Exp(Box::new(v(n))), &f));
+        // `abs` is always non-negative.
         assert!(provably_nneg(&NExp::abs(v(n))));
         assert!(!provably_pos(&NExp::abs(v(n))));
         // Sums/products of non-negative constants.
@@ -426,6 +459,9 @@ mod tests {
         assert!(provably_pos(&e));
         let z = NExp::Times(Box::new(c(0)), Box::new(v(n)));
         assert!(provably_zero(&z));
+        // Self-difference is zero (SMT agrees: `F - F = 0` is valid).
+        let d = NExp::Minus(Box::new(v(n)), Box::new(v(n)));
+        assert!(provably_zero(&d));
     }
 
     #[test]

@@ -19,6 +19,14 @@
 //! `*_to_ast` are total. All synthesized nodes carry
 //! `NodeId::DUMMY`/`Span::DUMMY`; names are interned through the caller's
 //! interner.
+//!
+//! `i128` range note (Zarith-Verlust): Sail integers are arbitrary
+//! precision (`Zarith` in OCaml), but [`NExp::Constant`] holds an
+//! `i128`. Literals outside the `i128` range (and `Set` members) fail
+//! to lift (`None`); callers must treat that as "open/unknown", never
+//! as a proven fact. Inside the range every fold is exact (`checked_*`,
+//! unfolded on overflow), and the Z3 backend maps even edge literals
+//! exactly (Horner basis `2^32`).
 
 use sail_ast::{
     Constraint as AstConstraint, ConstraintKind, Interner, Kind as AstKind, KOpt as AstKOpt,

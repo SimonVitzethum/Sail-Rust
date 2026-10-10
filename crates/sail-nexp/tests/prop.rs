@@ -13,8 +13,8 @@
 use proptest::prelude::*;
 use sail_ast::{Interner as _, SimpleInterner};
 use sail_nexp::{
-    normalize, provably_nneg, provably_nonzero, provably_zero, simplify, Facts, Kid, NConstraint,
-    NExp,
+    normalize, provably_nneg, provably_nonzero, provably_zero, simplify, simplify_constraint,
+    Facts, Kid, NConstraint, NExp, TypArg,
 };
 use std::collections::BTreeMap;
 
@@ -82,6 +82,22 @@ proptest! {
     }
 
     #[test]
+    fn simplify_preserves_eval_with_unbound_vars(e in nexp(3)) {
+        // Lane 124: exakte Erhaltung auch unter partiellen Envs (`None`
+        // bleibt `None`) — faengt `0 * x -> 0`, `a - a -> 0`,
+        // `x % 1 -> 0`, `abs(2^x) -> 2^x`.
+        let empty: BTreeMap<Kid, i128> = BTreeMap::new();
+        prop_assert_eq!(simplify(&e).eval(&empty), e.eval(&empty));
+    }
+
+    #[test]
+    fn normalize_preserves_eval_with_unbound_vars(e in nexp(3)) {
+        // Wie oben, fuer die Fixpunkt-Normalform (nur Umordnung zusaetzlich).
+        let empty: BTreeMap<Kid, i128> = BTreeMap::new();
+        prop_assert_eq!(normalize(&e).eval(&empty), e.eval(&empty));
+    }
+
+    #[test]
     fn normalize_preserves_eval(e in nexp(3), env in small_env()) {
         prop_assert_eq!(normalize(&e).eval(&env), e.eval(&env));
     }
@@ -144,5 +160,39 @@ proptest! {
             c.eval(&env)
         );
         let _ = Facts::new();
+    }
+}
+
+#[test]
+fn constraint_simplify_preserves_eval_with_unbound_vars() {
+    // Lane 124 (E3: Code, nicht ausfuehren): offene Variablen bleiben
+    // `None` — kein `x >= x -> True`, kein `[] -> False` fuer offenes
+    // `n`, keine gemischten Sorten.
+    let (n, m) = kids();
+    let v = |k: Kid| NExp::Var(k);
+    let cases: Vec<NConstraint> = vec![
+        NConstraint::Ge(Box::new(v(n)), Box::new(v(n))),
+        NConstraint::Lt(Box::new(v(n)), Box::new(v(n))),
+        NConstraint::Set(Box::new(v(n)), vec![]),
+        NConstraint::Equal(
+            Box::new(TypArg::NExp(v(n))),
+            Box::new(TypArg::Bool(Box::new(NConstraint::True))),
+        ),
+        NConstraint::NotEqual(
+            Box::new(TypArg::NExp(v(n))),
+            Box::new(TypArg::Bool(Box::new(NConstraint::True))),
+        ),
+        NConstraint::And(
+            Box::new(NConstraint::Ge(Box::new(v(n)), Box::new(NExp::Constant(0)))),
+            Box::new(NConstraint::Lt(Box::new(v(m)), Box::new(NExp::Constant(0)))),
+        ),
+    ];
+    let empty: BTreeMap<Kid, i128> = BTreeMap::new();
+    for cc in &cases {
+        assert_eq!(
+            simplify_constraint(cc).eval(&empty),
+            cc.eval(&empty),
+            "eval changed for {cc:?}"
+        );
     }
 }

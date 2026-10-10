@@ -28,45 +28,90 @@ fn from_nconstraint_maps_leaves_to_stable_atoms() {
     let mut ix = SimpleInterner::new();
     let n = ix.intern("n");
     let b = ix.intern("b");
-    assert_eq!(Constraint::from_nconstraint(&NConstraint::True), Constraint::True);
-    assert_eq!(Constraint::from_nconstraint(&NConstraint::False), Constraint::False);
     assert_eq!(
-        Constraint::from_nconstraint(&ge(n, 0)),
-        Constraint::atom("(>= (var 0) (const 0))")
+        Constraint::from_nconstraint(&NConstraint::True, &ix),
+        Constraint::True
     );
     assert_eq!(
-        Constraint::from_nconstraint(&NConstraint::Equal(
-            Box::new(TypArg::NExp(v(n))),
-            Box::new(TypArg::NExp(c(2)))
-        )),
-        Constraint::atom("(= (var 0) (const 2))")
+        Constraint::from_nconstraint(&NConstraint::False, &ix),
+        Constraint::False
     );
     assert_eq!(
-        Constraint::from_nconstraint(&NConstraint::NotEqual(
-            Box::new(TypArg::NExp(v(n))),
-            Box::new(TypArg::NExp(c(2)))
-        )),
-        Constraint::atom("(!= (var 0) (const 2))")
+        Constraint::from_nconstraint(&ge(n, 0), &ix),
+        Constraint::atom("(>= (var n) (const 0))")
     );
     assert_eq!(
-        Constraint::from_nconstraint(&NConstraint::Set(Box::new(v(n)), vec![3, 1, 3, 1])),
-        Constraint::atom("(in (var 0) 1 3)")
+        Constraint::from_nconstraint(
+            &NConstraint::Equal(Box::new(TypArg::NExp(v(n))), Box::new(TypArg::NExp(c(2)))),
+            &ix
+        ),
+        Constraint::atom("(= (var n) (const 2))")
     );
     assert_eq!(
-        Constraint::from_nconstraint(&NConstraint::App(
-            "ok".to_string(),
-            vec![TypArg::NExp(v(n))]
-        )),
-        Constraint::atom("(pred ok (var 0))")
+        Constraint::from_nconstraint(
+            &NConstraint::NotEqual(
+                Box::new(TypArg::NExp(v(n))),
+                Box::new(TypArg::NExp(c(2)))
+            ),
+            &ix
+        ),
+        Constraint::atom("(!= (var n) (const 2))")
     );
     assert_eq!(
-        Constraint::from_nconstraint(&NConstraint::Var(b)),
-        Constraint::atom("(bvar 1)")
+        Constraint::from_nconstraint(
+            &NConstraint::Set(Box::new(v(n)), vec![3, 1, 3, 1]),
+            &ix
+        ),
+        Constraint::atom("(in (var n) 1 3)")
     );
     assert_eq!(
-        Constraint::from_nconstraint(&NConstraint::Id("p".to_string())),
+        Constraint::from_nconstraint(
+            &NConstraint::App("ok".to_string(), vec![TypArg::NExp(v(n))]),
+            &ix
+        ),
+        Constraint::atom("(pred ok (var n))")
+    );
+    assert_eq!(
+        Constraint::from_nconstraint(&NConstraint::Var(b), &ix),
+        Constraint::atom("(bvar b)")
+    );
+    assert_eq!(
+        Constraint::from_nconstraint(&NConstraint::Id("p".to_string()), &ix),
         Constraint::atom("(bid p)")
     );
+}
+
+#[test]
+fn keys_use_names_and_separate_id_var_namespaces() {
+    // Lane 124: gleiche Schreibweise als `Id` vs. `Var` gibt
+    // verschiedene Keys (keine Id/Var-Verwechslung); gleiche Namen aus
+    // verschieden befuellten Tabellen geben gleiche Keys.
+    let mut ix = SimpleInterner::new();
+    let f = ix.intern("f");
+    let id_key = Constraint::from_nconstraint(
+        &NConstraint::Ge(Box::new(NExp::Id("f".to_string())), Box::new(c(0))),
+        &ix,
+    )
+    .cache_key();
+    let var_key = Constraint::from_nconstraint(
+        &NConstraint::Ge(Box::new(v(f)), Box::new(c(0))),
+        &ix,
+    )
+    .cache_key();
+    assert_eq!(id_key, "(atom (>= (id f) (const 0)))");
+    assert_eq!(var_key, "(atom (>= (var f) (const 0)))");
+    assert_ne!(id_key, var_key);
+    // Gleiche Formel, andere Tabelle (andere `Symbol`-Ids): gleicher Key.
+    let mut other = SimpleInterner::new();
+    other.intern("other");
+    let g = other.intern("f");
+    assert_ne!(f, g);
+    let var_key2 = Constraint::from_nconstraint(
+        &NConstraint::Ge(Box::new(v(g)), Box::new(c(0))),
+        &other,
+    )
+    .cache_key();
+    assert_eq!(var_key, var_key2);
 }
 
 #[test]
@@ -80,20 +125,20 @@ fn from_nconstraint_is_canonical_for_ac_operands() {
     let ab = NConstraint::And(Box::new(ge(n, 0)), Box::new(lt(m, 0)));
     let ba = NConstraint::And(Box::new(lt(m, 0)), Box::new(ge(n, 0)));
     assert_eq!(
-        Constraint::from_nconstraint(&ab).cache_key(),
-        Constraint::from_nconstraint(&ba).cache_key()
+        Constraint::from_nconstraint(&ab, &ix).cache_key(),
+        Constraint::from_nconstraint(&ba, &ix).cache_key()
     );
     let s1 = NExp::Sum(Box::new(v(b)), Box::new(v(a)));
     let s2 = NExp::Sum(Box::new(v(a)), Box::new(v(b)));
     let c1 = NConstraint::Ge(Box::new(s1), Box::new(c(0)));
     let c2 = NConstraint::Ge(Box::new(s2), Box::new(c(0)));
     assert_eq!(
-        Constraint::from_nconstraint(&c1).cache_key(),
-        Constraint::from_nconstraint(&c2).cache_key()
+        Constraint::from_nconstraint(&c1, &ix).cache_key(),
+        Constraint::from_nconstraint(&c2, &ix).cache_key()
     );
     // Struktur bleibt erhalten (kein Atom-Brei).
     let nested = NConstraint::Not(Box::new(ab));
-    match Constraint::from_nconstraint(&nested) {
+    match Constraint::from_nconstraint(&nested, &ix) {
         Constraint::Not(_) => {}
         other => panic!("expected Not, got {other:?}"),
     }
@@ -124,12 +169,12 @@ fn from_nconstraint_covers_all_nexp_forms() {
     ];
     for e in &forms {
         let key =
-            Constraint::from_nconstraint(&NConstraint::Ge(Box::new(e.clone()), Box::new(c(0))))
+            Constraint::from_nconstraint(&NConstraint::Ge(Box::new(e.clone()), Box::new(c(0))), &ix)
                 .cache_key();
         assert!(!key.is_empty(), "empty key for {e:?}");
         // Deterministisch: zweimal derselbe Key.
         let again =
-            Constraint::from_nconstraint(&NConstraint::Ge(Box::new(e.clone()), Box::new(c(0))))
+            Constraint::from_nconstraint(&NConstraint::Ge(Box::new(e.clone()), Box::new(c(0))), &ix)
                 .cache_key();
         assert_eq!(key, again);
     }
@@ -158,7 +203,7 @@ fn bounded_lru_is_mandatory() {
     let ka = ix.intern("a");
     let kb = ix.intern("b");
     let kc = ix.intern("c");
-    let q = |k: Kid| SolverQuery::new(Constraint::from_nconstraint(&ge(k, 0)));
+    let q = |k: Kid| SolverQuery::new(Constraint::from_nconstraint(&ge(k, 0), &ix));
     assert_eq!(solver.prove(&q(ka)), SolverVerdict::Unknown);
     assert_eq!(solver.prove(&q(ka)), SolverVerdict::Unknown); // hit
     assert_eq!(solver.prove(&q(kb)), SolverVerdict::Unknown);
@@ -167,7 +212,7 @@ fn bounded_lru_is_mandatory() {
     assert_eq!(s.len, 2);
     assert_eq!((s.hits, s.misses), (1, 3));
     // Memo greift auch fuer strukturierte NConstraint-Queries.
-    let valid = SolverQuery::new(Constraint::from_nconstraint(&NConstraint::True));
+    let valid = SolverQuery::new(Constraint::from_nconstraint(&NConstraint::True, &ix));
     assert_eq!(solver.prove(&valid), SolverVerdict::Valid);
     assert_eq!(solver.prove(&valid), SolverVerdict::Valid);
     assert_eq!(solver.stats().hits, 2);
