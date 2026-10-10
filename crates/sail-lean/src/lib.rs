@@ -47,11 +47,12 @@
 //! Anything outside the supported subset is a hard [`Error::Unsupported`]
 //! carrying a [`Span`]. There is deliberately **no** silent `sorry` fallback.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
 pub mod conv;
+pub mod pats;
 
 /// Source position for hard errors: the canonical `sail-ast` span
 /// (Lane 61 unification of MIGRATION.md #28; previously a line/col-only
@@ -91,7 +92,9 @@ impl From<fmt::Error> for Error {
 pub enum Nexp {
     /// Numeric constant, e.g. `8`.
     Const(i128),
-    /// Size variable, e.g. `n`.
+    /// Kind variable (`Nexp_var`, e.g. `'n`): prints with the OCaml
+    /// `k_` prefix (`doc_kid`). Callers mapping `Nexp_id` here must pass
+    /// the already-plain id text — the prefix applies uniformly.
     Var(String),
     /// `a + b`.
     Sum(Box<Nexp>, Box<Nexp>),
@@ -122,7 +125,8 @@ pub enum Typ {
     Tuple(Vec<Typ>),
     /// `(Vector elem n)`.
     Vector(Box<Typ>, Box<Nexp>),
-    /// Type variable / kid, e.g. `'n`.
+    /// Kind variable (`Typ_var`, e.g. `'n`): prints with the OCaml `k_`
+    /// prefix (`doc_kid`).
     Var(String),
     /// Named type application, e.g. `mytype a b`.
     Named {
@@ -205,7 +209,11 @@ pub struct FunSig {
     pub span: Span,
 }
 
-/// Printer options (mirrors `-lean-line-width`, `noncomputable/partial`).
+/// Printer options (mirrors `-lean-line-width`, `noncomputable/partial`,
+/// plus the OCaml global context fragments `pretty_print_lean.ml` needs
+/// for identifiers: `ctor_renames` (`compute_ctor_renames`), the enum
+/// member set (`.` prefix in patterns), `defined_functions` +
+/// `out_name_camel` (shadowing prefix in type positions)).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
     /// Soft line-width hint (currently informational; printer emits
@@ -215,6 +223,18 @@ pub struct Options {
     pub noncomputable: BTreeSet<String>,
     /// Functions emitted with a `partial` prefix.
     pub partial: BTreeSet<String>,
+    /// Union-constructor renames (`compute_ctor_renames`,
+    /// `pretty_print_lean.ml#1673-1686`): constructor name → owning
+    /// type-name prefix. A renamed ctor prints as `Pref.Ctor`.
+    pub ctor_renames: BTreeMap<String, String>,
+    /// Enum member ids: patterns over them print with a leading `.`
+    /// (`pretty_print_lean.ml#538`).
+    pub enum_members: BTreeSet<String>,
+    /// Function/type names visible as shadowing globals
+    /// (`defined_functions`, `pretty_print_lean.ml#129-133`).
+    pub defined_functions: BTreeSet<String>,
+    /// Module prefix for the shadowing rule (`out_name_camel`).
+    pub out_name_camel: String,
 }
 
 impl Default for Options {
@@ -223,6 +243,10 @@ impl Default for Options {
             line_width: 100,
             noncomputable: BTreeSet::new(),
             partial: BTreeSet::new(),
+            ctor_renames: BTreeMap::new(),
+            enum_members: BTreeSet::new(),
+            defined_functions: BTreeSet::new(),
+            out_name_camel: String::new(),
         }
     }
 }
@@ -304,7 +328,7 @@ impl LeanPrinter {
                 Self::print_nexp_inner(out, n)?;
                 out.write_str(")")?;
             }
-            Typ::Var(v) => out.write_str(v)?,
+            Typ::Var(v) => out.write_str(&print_kid_name(v))?,
             Typ::Named { name, args, span } => {
                 if name.is_empty() {
                     return Err(Error::Unsupported {
@@ -400,16 +424,9 @@ impl LeanPrinter {
 
     fn print_nexp_atom<W: fmt::Write>(out: &mut W, n: &Nexp) -> Result<(), Error> {
         match n {
-            Nexp::Const(i) => {
-                if *i < 0 {
-                    write!(out, "({i})")?;
-                } else {
-                    write!(out, "{i}")?;
-                }
-                Ok(())
-            }
+            Nexp::Const(i) => print_big_int(out, *i),
             Nexp::Var(v) => {
-                out.write_str(v)?;
+                out.write_str(&print_kid_name(v))?;
                 Ok(())
             }
             Nexp::Sum(..) | Nexp::Minus(..) | Nexp::Times(..) | Nexp::Neg(..) | Nexp::Pow2(..) => {
@@ -421,43 +438,60 @@ impl LeanPrinter {
         }
     }
 
-    /// Print a literal, streaming. Mirrors `doc_lit` in the OCaml backend:
+    /// Print a literal, streaming. Mirrors `doc_lit` in the OCaml backend
+    /// (`pretty_print_lean.ml#397-415`):
     /// empty hex/bin → `BitVec.nil`, single bits → `0`/`1` (with `#w`
-    /// suffix when a width is known), otherwise `0x…`/`0b…` + `#w`.
+    /// suffix when a width is known and `width` is set), otherwise
+    /// `0x…`/`0b…` + `#w`.
+    ///
+    /// `width` mirrors the OCaml `~width` flag: expressions print with
+    /// `width:true` (`E_lit`, #861), patterns with `width:false`
+    /// (`P_lit`, #525), so pattern literals never carry a `#w` suffix.
+    /// Strings escape only `"` (`lean_escape_string`, #395).
     pub fn print_lit<W: fmt::Write>(&self, out: &mut W, lit: &Lit) -> Result<(), Error> {
+        self.print_lit_with_width(out, lit, true)
+    }
+
+    /// [`Self::print_lit`] with an explicit OCaml `~width` flag.
+    pub fn print_lit_with_width<W: fmt::Write>(
+        &self,
+        out: &mut W,
+        lit: &Lit,
+        width: bool,
+    ) -> Result<(), Error> {
         match lit {
             Lit::Unit => out.write_str("()")?,
             Lit::True => out.write_str("true")?,
             Lit::False => out.write_str("false")?,
-            Lit::Num(i) => {
-                if *i < 0 {
-                    write!(out, "({i})")?;
-                } else {
-                    write!(out, "{i}")?;
-                }
-            }
-            Lit::Hex { digits, width } => {
+            Lit::Num(i) => print_big_int(out, *i)?,
+            Lit::Hex { digits, width: w } => {
                 if digits.is_empty() {
                     out.write_str("BitVec.nil")?;
                 } else {
                     write!(out, "0x{}", digits.to_uppercase())?;
-                    if let Some(w) = width {
-                        write!(out, "#{w}")?;
+                    if width {
+                        if let Some(w) = w {
+                            write!(out, "#{w}")?;
+                        }
                     }
                 }
             }
-            Lit::Bin { bits, width } => {
+            Lit::Bin { bits, width: w } => {
                 if bits.is_empty() {
                     out.write_str("BitVec.nil")?;
                 } else if bits.len() == 1 {
                     out.write_str(bits.as_str())?;
-                    if let Some(w) = width {
-                        write!(out, "#{w}")?;
+                    if width {
+                        if let Some(w) = w {
+                            write!(out, "#{w}")?;
+                        }
                     }
                 } else {
                     write!(out, "0b{bits}")?;
-                    if let Some(w) = width {
-                        write!(out, "#{w}")?;
+                    if width {
+                        if let Some(w) = w {
+                            write!(out, "#{w}")?;
+                        }
                     }
                 }
             }
@@ -466,8 +500,6 @@ impl LeanPrinter {
                 for c in s.chars() {
                     match c {
                         '"' => out.write_str("\\\"")?,
-                        '\\' => out.write_str("\\\\")?,
-                        '\n' => out.write_str("\\n")?,
                         c => out.write_char(c)?,
                     }
                 }
@@ -542,6 +574,49 @@ impl LeanPrinter {
                 out.write_str("Id ")?;
                 self.print_typ(out, ascribed)?;
             }
+        }
+        Ok(())
+    }
+
+    /// Port of OCaml `doc_id_ctor` (`pretty_print_lean.ml#117-126`).
+    /// With `ren_ctor`, union constructors listed in
+    /// [`Options::ctor_renames`] print qualified as `Pref.Ctor`
+    /// (`rename_ctor`, #109-115; [`Options::ctor_renames`] mirrors
+    /// `compute_ctor_renames`, #1673-1686). Without it, the name prints
+    /// sanitized. (OCaml `And_bool`/`Or_bool`/`Operator` spellings have
+    /// no counterpart in this crate's plain-`String` ids; documented gap.)
+    pub fn print_id_ctor<W: fmt::Write>(
+        &self,
+        out: &mut W,
+        name: &str,
+        ren_ctor: bool,
+    ) -> Result<(), Error> {
+        if ren_ctor {
+            if let Some(pref) = self.opts.ctor_renames.get(name) {
+                write!(out, "{}.{}", sanitize_ident(pref), sanitize_ident(name))?;
+                return Ok(());
+            }
+        }
+        out.write_str(&sanitize_ident(name))?;
+        Ok(())
+    }
+
+    /// Port of OCaml `doc_id_typ_ctor` (`pretty_print_lean.ml#128-134`):
+    /// names shadowed by [`Options::defined_functions`] gain an
+    /// `Out.` prefix ([`Options::out_name_camel]). The
+    /// `Env.lookup_id`-bound half of OCaml's `is_shadowed` has no type
+    /// environment in this crate and is approximated by the
+    /// `defined_functions` set alone (documented gap).
+    pub fn print_id_typ_ctor<W: fmt::Write>(
+        &self,
+        out: &mut W,
+        name: &str,
+    ) -> Result<(), Error> {
+        let fixed = sanitize_ident(name);
+        if !self.opts.out_name_camel.is_empty() && self.opts.defined_functions.contains(name) {
+            write!(out, "{}.{}", self.opts.out_name_camel, fixed)?;
+        } else {
+            out.write_str(&fixed)?;
         }
         Ok(())
     }
@@ -723,13 +798,29 @@ impl LeanPrinter {
     }
 }
 
-/// Lean-identifier sanitizer: keywords and illegal characters are suffixed
-/// or replaced so output always parses.
+/// Lean-identifier sanitizer: port of OCaml `fix_id`
+/// (`pretty_print_lean.ml#98-107`), extended so output always parses.
+///
+/// OCaml rules kept verbatim: `_lean_wildcard` → `_`, `?` →
+/// `questionMark`, `main` → `sail_main`, `#` → `_`, and
+/// `rec|def|at|alias|break|meta|class` gain a trailing `'`. On top, the
+/// Lean keywords this crate already guarded keep their trailing `'`,
+/// and empty / digit-leading names gain a leading `_`.
 fn sanitize_ident(name: &str) -> String {
+    if name == "_lean_wildcard" {
+        return "_".to_string();
+    }
+    if name == "?" {
+        return "questionMark".to_string();
+    }
+    if name == "main" {
+        return "sail_main".to_string();
+    }
     const KEYWORDS: &[&str] = &[
         "def", "match", "where", "with", "if", "then", "else", "for", "in", "do", "let", "mut",
         "return", "import", "open", "namespace", "section", "end", "structure", "inductive",
-        "abbrev", "theorem", "lemma", "example", "sorry", "admit",
+        "abbrev", "theorem", "lemma", "example", "sorry", "admit", "rec", "at", "alias", "break",
+        "meta", "class",
     ];
     let mut out = String::with_capacity(name.len());
     for (i, c) in name.chars().enumerate() {
@@ -746,6 +837,45 @@ fn sanitize_ident(name: &str) -> String {
         out.push('\'');
     }
     out
+}
+
+/// Port of OCaml `fixup_match_id` (`pretty_print_lean.ml#506-510`):
+/// `Some` → `some`, `None` → `none`, `early_return` → `throw` (matching
+/// the Lean standard library); everything else goes through
+/// `fix_id` ([`sanitize_ident`]).
+///
+/// Callers print match/pattern identifiers through this; definition
+/// names use [`sanitize_ident`] directly (OCaml `doc_funcl_init` calls
+/// plain `doc_id_ctor` for the `def` name).
+#[must_use]
+pub fn fixup_match_id(name: &str) -> String {
+    match name {
+        "Some" => "some".to_string(),
+        "None" => "none".to_string(),
+        "early_return" => "throw".to_string(),
+        other => sanitize_ident(other),
+    }
+}
+
+/// Port of OCaml `doc_kid` (`pretty_print_lean.ml#136-139`): strip a
+/// leading `'` (`'n` → `n`), prefix `k_`, sanitize. (The
+/// `kid_id_renames` lookup has no counterpart in this crate yet:
+/// implicit-argument renames stay a documented gap.)
+#[must_use]
+pub fn print_kid_name(raw: &str) -> String {
+    let stripped = raw.strip_prefix('\'').unwrap_or(raw);
+    sanitize_ident(&format!("k_{stripped}"))
+}
+
+/// Port of OCaml `doc_big_int` (`pretty_print_lean.ml#226`): negatives
+/// print parenthesised (`(-7)`), non-negatives plain.
+fn print_big_int<W: fmt::Write>(out: &mut W, i: i128) -> Result<(), Error> {
+    if i < 0 {
+        write!(out, "({i})")?;
+    } else {
+        write!(out, "{i}")?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

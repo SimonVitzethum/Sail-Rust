@@ -10,13 +10,20 @@
 //!   counterpart (div/mod/abs print via extern calls, Lane 25).
 //! - Nullary `Typ_id` names lower through the `doc_typ` core:
 //!   `int/nat/bool/string/unit` become [`Typ::Int`]/`Nat`/`Bool`/
-//!   `String`/`Unit`; any other `Id`/`App` becomes [`Typ::Named`]
+//!   `String`/`Unit`, `bit` becomes [`Typ::Bit`] (`(BitVec 1)`);
+//!   any other `Id`/`App` becomes [`Typ::Named`]
 //!   (full `doc_typ` application mapping stays Lane 10).
+//! - `bits(n)`/`bitvector(n)` become [`Typ::BitVec`]; `vector(n, elem)`
+//!   becomes [`Typ::Vector`] — note the order: Sail spells the length
+//!   FIRST, Lean prints `(Vector elem n)`
+//!   (`pretty_print_lean.ml#302-313`).
 //! - `Typ_tuple` maps when every element maps; `Typ_var` maps to
 //!   [`Typ::Var`]; `Typ_fn`/`Typ_bidir`/`Typ_exist`/`Typ_unknown`
 //!   map to `None`.
 //! - `TypArgKind::{Typ,NExp}` map when their payload maps;
-//!   `Bool` has no printer counterpart (`None`).
+//!   `Bool` args carry no printer meaning and are *dropped* (not
+//!   propagated): `doc_typ_arg … Only_relevant` renders them as empty
+//!   (`pretty_print_lean.ml#290-296, #320-321, #329-330`).
 //!
 //! The printer logic itself is untouched.
 
@@ -63,6 +70,9 @@ pub fn typ_from_ast(t: &AstTyp, it: &impl Interner) -> Option<Typ> {
     match &t.kind {
         TypKind::Id(name) => {
             let text = it.resolve(name.symbol)?;
+            if text == "bit" {
+                return Some(Typ::Bit(text.to_owned()));
+            }
             named_type(text).or(Some(Typ::Named {
                 name: text.to_owned(),
                 args: Vec::new(),
@@ -79,6 +89,24 @@ pub fn typ_from_ast(t: &AstTyp, it: &impl Interner) -> Option<Typ> {
         }
         TypKind::App { name, args } => {
             let text = it.resolve(name.symbol)?;
+            // `bits(n)` / `bitvector(n)` → `(BitVec n)` (#311-313).
+            if (text == "bits" || text == "bitvector") && args.len() == 1 {
+                if let TypArgKind::NExp(n) = &args[0].kind {
+                    return Some(Typ::BitVec(Box::new(nexp_from_ast(n, it)?)));
+                }
+            }
+            // `vector(n, elem)` → `(Vector elem n)`: Sail spells the
+            // length FIRST, Lean prints the element first (#302-304).
+            if text == "vector" && args.len() == 2 {
+                if let (TypArgKind::NExp(n), TypArgKind::Typ(elem)) =
+                    (&args[0].kind, &args[1].kind)
+                {
+                    return Some(Typ::Vector(
+                        Box::new(typ_from_ast(elem, it)?),
+                        Box::new(nexp_from_ast(n, it)?),
+                    ));
+                }
+            }
             if args.is_empty() {
                 return named_type(text).or(Some(Typ::Named {
                     name: text.to_owned(),
@@ -88,6 +116,10 @@ pub fn typ_from_ast(t: &AstTyp, it: &impl Interner) -> Option<Typ> {
             }
             let mut out = Vec::with_capacity(args.len());
             for a in args {
+                // `A_bool` args are dropped, never propagated (#290-296).
+                if matches!(a.kind, TypArgKind::Bool(_)) {
+                    continue;
+                }
                 out.push(typarg_from_ast(a, it)?);
             }
             Some(Typ::Named { name: text.to_owned(), args: out, span: t.span })
