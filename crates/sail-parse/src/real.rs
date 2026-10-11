@@ -41,13 +41,26 @@ pub struct ParseOut<T> {
     pub interner: SimpleInterner,
 }
 
-/// Fragment-Parser mit geteiltem Interner/ID-Raum über viele Aufrufe
-/// (Batch-Aufrufe ohne Neu-Internierung derselben Namen).
+/// Immutable, cheap-to-clone compilation-order environment for independent
+/// definition parsers. Contains signatures and fixities, never AST bodies.
+#[derive(Clone, Debug)]
+pub struct ParserContext {
+    fixities: crate::infix::FixityEnv,
+    constructors: crate::kinds::Constructors,
+}
+
+impl Default for ParserContext {
+    fn default() -> Self {
+        Self { fixities: crate::infix::FixityEnv::sail_defaults(), constructors: Default::default() }
+    }
+}
+
+/// Fragment parser sharing its interner, IDs and declaration context across calls.
 #[derive(Debug)]
 pub struct RealParser {
     ids: IdGen,
     interner: SimpleInterner,
-    fixities: crate::infix::FixityEnv,
+    context: ParserContext,
 }
 
 impl Default for RealParser {
@@ -60,14 +73,19 @@ impl RealParser {
         RealParser {
             ids: IdGen::new(),
             interner: SimpleInterner::new(),
-            fixities: crate::infix::FixityEnv::sail_defaults(),
+            context: ParserContext::default(),
         }
     }
 
     /// Start an independent definition parser with a snapshot of the
-    /// compilation-order fixities. Used by parallel, disk-backed drivers.
-    pub fn with_fixities(fixities: crate::infix::FixityEnv) -> Self {
-        Self { fixities, ..Self::new() }
+    /// compilation-order fixities and constructor signatures.
+    pub fn with_context(context: ParserContext) -> Self {
+        Self { context, ..Self::new() }
+    }
+
+    /// Snapshot after a declaration, preserving the view of earlier workers.
+    pub fn context(&self) -> ParserContext {
+        self.context.clone()
     }
 
     #[must_use]
@@ -84,7 +102,8 @@ impl RealParser {
         Ctx {
             ids: &mut self.ids,
             interner: &mut self.interner,
-            fixities: &mut self.fixities,
+            fixities: &mut self.context.fixities,
+            constructors: &mut self.context.constructors,
             bound_kinds: Default::default(),
         }
     }
@@ -193,7 +212,7 @@ pub fn parse_file_real(path: &str, src: &str) -> Result<BridgeOut, ParseError> {
         if !sd.def.is_shard_marker() {
             let text = &src[sd.span.start as usize..sd.span.end as usize];
             let result = crate::convert::parse_def_src(&mut Ctx {
-                ids: &mut b.ids, interner: &mut b.interner, fixities: &mut b.fixities,
+                ids: &mut b.ids, interner: &mut b.interner, fixities: &mut b.fixities, constructors: &mut b.constructors,
                     bound_kinds: Default::default(),
             }, sd.span, text);
             if let Ok(def) = result {
@@ -218,7 +237,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                 let mut ctx = Ctx {
                     ids: &mut b.ids,
                     interner: &mut b.interner,
-                    fixities: &mut b.fixities,
+                    fixities: &mut b.fixities, constructors: &mut b.constructors,
                     bound_kinds: Default::default(),
                 };
                 crate::convert::conv_let(&mut ctx, span, pat_src, body_src)
@@ -241,7 +260,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                 let mut ctx = Ctx {
                     ids: &mut b.ids,
                     interner: &mut b.interner,
-                    fixities: &mut b.fixities,
+                    fixities: &mut b.fixities, constructors: &mut b.constructors,
                     bound_kinds: Default::default(),
                 };
                 crate::convert::conv_register(&mut ctx, span, name, type_src, init_src)
@@ -260,7 +279,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                 let mut ctx = Ctx {
                     ids: &mut b.ids,
                     interner: &mut b.interner,
-                    fixities: &mut b.fixities,
+                    fixities: &mut b.fixities, constructors: &mut b.constructors,
                     bound_kinds: Default::default(),
                 };
                 crate::convert::conv_constraint_def(&mut ctx, span, src)
@@ -324,7 +343,7 @@ fn lower_def_text(
         let mut ctx = Ctx {
             ids: &mut b.ids,
             interner: &mut b.interner,
-                    fixities: &mut b.fixities,
+                    fixities: &mut b.fixities, constructors: &mut b.constructors,
                     bound_kinds: Default::default(),
         };
         crate::convert::parse_def_src(&mut ctx, span, full)

@@ -394,6 +394,42 @@ fn constructor_arguments_use_bound_kinds_and_inference_respects_shadowing() {
 }
 
 #[test]
+fn declared_constructors_infer_kinds_without_retaining_their_bodies() {
+    let mut parser = RealParser::new();
+    let span = sail_ast::Span::DUMMY;
+    parser.parse_def("type Wrap('a : Type) = list('a)", span).unwrap();
+    parser.parse_def("type Predicate('p : Bool) -> Bool = not('p)", span).unwrap();
+    for (source, expected) in [
+        ("val f : forall 'a. Wrap('a) -> unit", sail_ast::Kind::Type),
+        ("val f : forall 'p. unit -> bool(Predicate('p))", sail_ast::Kind::Bool),
+    ] {
+        let out = parser.parse_def(source, span).unwrap();
+        assert!(matches!(&out.kind, DefKind::Val(spec)
+            if matches!(&spec.typschm.quant[0], sail_ast::QuantItem::Id(kopt) if kopt.kind == expected)), "{out:?}");
+    }
+    assert!(parser.parse_def("val f : forall ('n : Int). Wrap('n) -> unit", span).is_err());
+    assert!(parser.parse_def("val f : Wrap(int, bool) -> unit", span).is_err());
+    parser.parse_def("type COUNT : Int = 4", span).unwrap();
+    parser.parse_def("type ENABLED : Bool = true", span).unwrap();
+    parser.parse_def("struct S = { w : Wrap(int), b : bool(ENABLED), n : bits(COUNT) }", span).unwrap();
+}
+
+#[test]
+fn declaration_context_snapshots_and_failures_do_not_leak_signatures() {
+    let span = sail_ast::Span::DUMMY;
+    let mut parser = RealParser::new();
+    let previous = parser.context();
+    parser.parse_def("type Later('a : Type) = list('a)", span).unwrap();
+    let source = "val f : forall 'a. Later('a) -> unit";
+    assert!(RealParser::with_context(previous).parse_def(source, span).is_err());
+    RealParser::with_context(parser.context()).parse_def(source, span).unwrap();
+    assert!(parser.parse_def("struct Bad('a : Type) = { a : 'a, bad : list(1) }", span).is_err());
+    assert!(parser.parse_def("val f : forall 'a. Bad('a) -> unit", span).is_err());
+    parser.parse_def("outcome o : unit -> unit with 'ctx : Type = { type Local('a : Type) = list('a) }", span).unwrap();
+    assert!(parser.parse_def("val f : forall 'a. Local('a) -> unit", span).is_err());
+}
+
+#[test]
 fn arm_bitfield_concat_keeps_range_order_through_parentheses() {
     let out = parse_def("bitfield PMEVTYPER_EL0_Type : bits(64) = { evtCount : (15..10 @ 9..0) }").unwrap();
     let DefKind::Type(ty) = &out.value.kind else { panic!("{:?}", out.value); };

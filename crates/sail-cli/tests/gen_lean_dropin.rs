@@ -263,6 +263,32 @@ fn includes_macros_attributes_and_fixities_keep_order_across_workers() {
 }
 
 #[test]
+fn declared_constructor_kinds_follow_include_order_in_parallel_frontend() {
+    let dir = temp_dir("ordered-kinds");
+    let input = dir.join("main.sail");
+    std::fs::write(dir.join("types.sail"), "type Wrap('a : Type) = list('a)\n").unwrap();
+    std::fs::write(&input, "$include \"types.sail\"\nval f : forall 'a. Wrap('a) -> unit\n").unwrap();
+    for workers in ["1", "4"] {
+        let out = Command::new(binary())
+            .args(["--just-check", "--no-core", input.to_str().unwrap()])
+            .env_remove("SAIL_RS_DRY_RUN").env_remove("SAIL_RS_LIBDIR")
+            .env("SAIL_RS_THREADS", workers).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(stderr.contains("frontend converted 4 definitions from 2 files"), "{stderr}");
+        assert!(stderr.contains("compilation incomplete"), "{stderr}");
+    }
+    // A later constructor must not retroactively bind an earlier signature.
+    std::fs::write(&input, "val f : forall 'a. Wrap('a) -> unit\n$include \"types.sail\"\n").unwrap();
+    let out = Command::new(binary())
+        .args(["--just-check", "--no-core", input.to_str().unwrap()])
+        .env_remove("SAIL_RS_DRY_RUN").env_remove("SAIL_RS_LIBDIR")
+        .env("SAIL_RS_THREADS", "4").output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot infer kind"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn arm_legacy_trace_include_contains_real_declarations_and_bodies() {
     let dir = temp_dir("legacy-trace");
     let input = dir.join("main.sail");

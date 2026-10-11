@@ -5,17 +5,78 @@
 //! environment, and expression typing remains a later compiler stage.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use crate::infix::{fold_chain_borrowed, FixityEnv, Folded, Side};
+use crate::infix::{FixityEnv, Folded, Side, fold_chain_borrowed};
 use sail_grammar::ast::{self as g, Kind};
 
 pub(crate) type Bindings = BTreeMap<String, Kind>;
+
+/// Only constructor signatures survive between definitions. Cloning an
+/// environment for a worker shares its immutable map; declarations copy on
+/// write so subsequent declarations cannot change an earlier worker's view.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Constructors(Arc<BTreeMap<String, (Vec<Kind>, Kind)>>);
+
+impl Constructors {
+    pub(crate) fn signature(
+        &self,
+        name: &str,
+        arity: usize,
+    ) -> Result<Option<(Vec<Kind>, Kind)>, String> {
+        let signature = self
+            .0
+            .get(name)
+            .cloned()
+            .or_else(|| builtin_signature(name, arity));
+        let Some((mut args, result)) = signature else {
+            return Ok(None);
+        };
+        if args.len() != arity {
+            args.retain(|kind| *kind != Kind::Order);
+        }
+        if args.len() != arity {
+            return Err(format!(
+                "{name} expects {} type arguments, given {arity}",
+                args.len()
+            ));
+        }
+        Ok(Some((args, result)))
+    }
+
+    pub(crate) fn declare(
+        &mut self,
+        name: &str,
+        quant: &g::TypQuant,
+        bindings: &Bindings,
+        result: Kind,
+    ) {
+        let args = quant
+            .kopts
+            .iter()
+            .flat_map(|binder| &binder.kids)
+            .map(|name| bindings[name].clone())
+            .collect();
+        Arc::make_mut(&mut self.0).insert(name.to_owned(), (args, result));
+    }
+}
 
 /// Surface argument sorts, including legacy Order parameters. Conversion
 /// erases Order arguments only after checking their position and shape.
 pub(crate) fn builtin_signature(name: &str, arity: usize) -> Option<(Vec<Kind>, Kind)> {
     use Kind::{Bool, Int, Order, Type};
     let (args, result) = match name {
+        "int" | "bool" if arity == 0 => (vec![], Type),
+        "nat"
+        | "unit"
+        | "string"
+        | "string_literal"
+        | "real"
+        | "float16"
+        | "float32"
+        | "float64"
+        | "float128"
+        | "float_rounding_mode" => (vec![], Type),
         "int" | "atom" | "bits" | "implicit" | "itself" => (vec![Int], Type),
         "bitvector" if arity == 2 => (vec![Int, Order], Type),
         "bitvector" => (vec![Int], Type),
@@ -46,6 +107,7 @@ struct Inference<'a> {
     variables: BTreeMap<String, Option<Kind>>,
     outer: &'a Bindings,
     fixities: &'a FixityEnv,
+    constructors: &'a Constructors,
 }
 
 impl Inference<'_> {
@@ -81,8 +143,11 @@ impl Inference<'_> {
             g::Typ::Var(name) => return self.variable(name, expected),
             g::Typ::Id(name) => match name.as_str() {
                 "true" | "false" => Some(Bool),
-                "int" | "nat" | "bool" | "unit" | "bit" | "string" | "real" => Some(Type),
-                _ => None,
+                "bit" => Some(Type),
+                _ => self
+                    .constructors
+                    .signature(name, 0)?
+                    .map(|(_, result)| result),
             },
             g::Typ::Lit(g::Lit::Num(_) | g::Lit::Zero | g::Lit::One) => Some(Int),
             g::Typ::Lit(g::Lit::True | g::Lit::False) => Some(Bool),
@@ -102,10 +167,7 @@ impl Inference<'_> {
                 Some(Type)
             }
             g::Typ::App(name, args) => {
-                if let Some((kinds, result)) = builtin_signature(name, args.len()) {
-                    if args.len() != kinds.len() {
-                        return Err(format!("incorrect type argument count for {name}"));
-                    }
+                if let Some((kinds, result)) = self.constructors.signature(name, args.len())? {
                     for (arg, kind) in args.iter().zip(&kinds) {
                         self.typ(arg, Some(kind))?;
                     }
@@ -214,6 +276,7 @@ pub(crate) fn infer(
     roots: &[(&g::Typ, Kind)],
     outer: &Bindings,
     fixities: &FixityEnv,
+    constructors: &Constructors,
 ) -> Result<Bindings, String> {
     let mut variables = BTreeMap::new();
     for binder in &quant.kopts {
@@ -230,6 +293,7 @@ pub(crate) fn infer(
         variables,
         outer,
         fixities,
+        constructors,
     };
     // Monotone propagation: a variable acquires a kind or refines Int to Nat.
     // Revisit roots until stable, independent of their source traversal order.
@@ -255,6 +319,7 @@ pub(crate) fn result_kind(
     body: &g::Typ,
     outer: &Bindings,
     fixities: &FixityEnv,
+    constructors: &Constructors,
 ) -> Result<Kind, String> {
     let variables = quant
         .kopts
@@ -270,6 +335,7 @@ pub(crate) fn result_kind(
         variables,
         outer,
         fixities,
+        constructors,
     };
     // An unknown nominal constructor can still denote a Type in a fragment;
     // resolving its declaration belongs to whole-program kind elaboration.

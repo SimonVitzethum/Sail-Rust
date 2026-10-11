@@ -12,9 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use sail_ast::{DefKind, FileId, Node, NodeId, Span};
 use sail_ooc::{ContentId, WarmLayer};
-use sail_parse::infix::{Assoc, FixityEnv};
 use sail_parse::preprocess::Preprocessor;
-use sail_parse::{Def as SurfaceDef, PragmaArg, RealParser};
+use sail_parse::{Def as SurfaceDef, ParserContext, PragmaArg, RealParser};
 use sail_resolve::resolve::Resolver;
 use sail_shard::{Scheduler, SchedulerConfig};
 use serde::{Deserialize, Serialize};
@@ -67,15 +66,16 @@ struct Record {
     span: Span,
     source: String,
     pragma: Option<(String, String)>,
-    fixity: Option<(String, u8, String)>,
+    declaration: bool,
 }
 struct Job {
     record: Record,
-    fixities: FixityEnv,
+    parser: RealParser,
+    parsed: Option<sail_ast::Def>,
 }
 struct Jobs {
     lines: std::io::Lines<BufReader<File>>,
-    fixities: FixityEnv,
+    context: ParserContext,
 }
 impl Iterator for Jobs {
     type Item = Result<Job, CliError>;
@@ -86,26 +86,17 @@ impl Iterator for Jobs {
                 line.map_err(|e| CliError::fatal(format!("cannot read definition spool: {e}")))?;
             let record: Record = serde_json::from_str(&line)
                 .map_err(|e| CliError::fatal(format!("invalid definition spool: {e}")))?;
-            if let Some((assoc, level, name)) = &record.fixity {
-                let assoc = match assoc.as_str() {
-                    "infixl" => Assoc::Left,
-                    "infixr" => Assoc::Right,
-                    "infix" => Assoc::Non,
-                    _ => {
-                        return Err(error(format!(
-                            "{}:{}: invalid fixity",
-                            record.path, record.span
-                        )))
-                    }
-                };
-                self.fixities
-                    .insert(name, assoc, *level)
-                    .map_err(|e| error(e.to_string()))?;
-            }
-            Ok(Job {
-                record,
-                fixities: self.fixities.clone(),
-            })
+            let mut parser = RealParser::with_context(self.context.clone());
+            // Declarations affect subsequent jobs. Convert just these in
+            // source order and reuse their AST in the worker; ordinary bodies
+            // remain parallel and never enter the context.
+            let parsed = if record.declaration {
+                let def = parser.parse_def(&record.source, record.span)
+                    .map_err(|e| error(format!("{}: {e}", record.path)))?;
+                self.context = parser.context();
+                Some(def)
+            } else { None };
+            Ok(Job { record, parser, parsed })
         })())
     }
 }
@@ -246,19 +237,13 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
             }
             _ => None,
         };
-        let fixity = match &def.def {
-            SurfaceDef::Fixity { prec, level, name } => Some((
-                prec.clone(),
-                level.parse::<u8>().map_err(|e| e.to_string())?,
-                name.clone(),
-            )),
-            _ => None,
-        };
+        let declaration = matches!(&def.def,
+            SurfaceDef::Type { .. } | SurfaceDef::Fixity { .. });
         let record = Record {
             path: path.into(),
             span,
             pragma,
-            fixity,
+            declaration,
             source: source
                 .get(span.start as usize..span.end as usize)
                 .ok_or("invalid definition source span")?
@@ -301,7 +286,7 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
             File::open(&manifest_path).map_err(|e| CliError::fatal(e.to_string()))?,
         )
         .lines(),
-        fixities: FixityEnv::sail_defaults(),
+        context: ParserContext::default(),
     };
     let warm = WarmLayer::open(scratch.0.join("ast")).with_max_live_bytes(0);
     let scheduler = Scheduler::new(SchedulerConfig::new(2, workers));
@@ -316,9 +301,9 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
     scheduler.run_streaming(
         jobs,
         |job| {
-            let Job { record, fixities } = job?;
-            let mut parser = RealParser::with_fixities(fixities);
-            let def = if let Some((key, payload)) = record.pragma {
+            let Job { record, mut parser, parsed } = job?;
+            let def = if let Some(def) = parsed { def }
+            else if let Some((key, payload)) = record.pragma {
                 Node::new(NodeId::DUMMY, record.span, DefKind::Pragma { key, payload })
             } else {
                 parser

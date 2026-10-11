@@ -27,6 +27,7 @@ pub(crate) struct Ctx<'a> {
     pub(crate) interner: &'a mut SimpleInterner,
     pub(crate) fixities: &'a mut FixityEnv,
     pub(crate) bound_kinds: crate::kinds::Bindings,
+    pub(crate) constructors: &'a mut crate::kinds::Constructors,
 }
 
 impl Ctx<'_> {
@@ -101,7 +102,11 @@ pub(crate) fn parse_pat_src(c: &mut Ctx, span: Span, src: &str) -> Result<Pat, S
 
 pub(crate) fn parse_def_src(c: &mut Ctx, span: Span, src: &str) -> Result<Def, String> {
     let d = sail_grammar::parse_def(src)?;
-    let kind = conv_def(c, span, &d)?;
+    let saved = c.constructors.clone();
+    let kind = match conv_def(c, span, &d) {
+        Ok(kind) => kind,
+        Err(error) => { *c.constructors = saved; return Err(error); }
+    };
     Ok(c.node(span, kind))
 }
 
@@ -174,7 +179,7 @@ fn conv_kind(k: &g::Kind) -> Result<Kind, String> {
 
 fn conv_quant_items(c: &mut Ctx, span: Span, q: &Option<g::TypQuant>, roots: &[(&g::Typ, g::Kind)]) -> Result<Vec<QuantItem>, String> {
     let Some(q) = q else { return Ok(Vec::new()); };
-    let inferred = crate::kinds::infer(q, roots, &c.bound_kinds, c.fixities)?;
+    let inferred = crate::kinds::infer(q, roots, &c.bound_kinds, c.fixities, c.constructors)?;
     c.bound_kinds.extend(inferred.clone());
     let mut out = Vec::new();
     for kopt in &q.kopts {
@@ -241,7 +246,7 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
         g::Typ::Var(s) => TypKind::Var(c.interner.intern(s)),
         g::Typ::App(f, args) => {
             let mut cargs = Vec::with_capacity(args.len());
-            let kinds = crate::kinds::builtin_signature(f, args.len()).map(|(kinds, _)| kinds);
+            let kinds = c.constructors.signature(f, args.len())?.map(|(kinds, _)| kinds);
             if kinds.as_ref().is_some_and(|kinds| kinds.len() != args.len()) {
                 return Err(format!("incorrect type argument count for {f}"));
             }
@@ -282,7 +287,7 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
         }
         g::Typ::Exist(kopts, cond, body) => {
             let quant = g::TypQuant { kopts: kopts.clone(), constraint: Some(cond.clone()) };
-            let inferred = crate::kinds::infer(&quant, &[(body, g::Kind::Type)], &c.bound_kinds, c.fixities)?;
+            let inferred = crate::kinds::infer(&quant, &[(body, g::Kind::Type)], &c.bound_kinds, c.fixities, c.constructors)?;
             let saved = c.bound_kinds.clone();
             c.bound_kinds.extend(inferred.clone());
             let result: Result<TypKind, String> = (|| {
@@ -346,6 +351,17 @@ fn conv_typarg(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<TypArg, String> {
             _ => { let sym = c.interner.intern(s); TypArgKind::NExp(c.node(span, NExpKind::Var(sym))) }
         },
         g::Typ::Lit(g::Lit::True | g::Lit::False) => TypArgKind::Bool(Box::new(conv_constraint(c, span, t)?)),
+        g::Typ::Id(name) | g::Typ::App(name, _) if c.constructors.signature(name,
+            match t { g::Typ::App(_, args) => args.len(), _ => 0 })?.is_some() => {
+            let arity = match t { g::Typ::App(_, args) => args.len(), _ => 0 };
+            let (_, result) = c.constructors.signature(name, arity)?.expect("known signature");
+            match result {
+                g::Kind::Type => TypArgKind::Typ(conv_typ(c, span, t)?),
+                g::Kind::Int | g::Kind::Nat => TypArgKind::NExp(conv_nexp(c, span, t)?),
+                g::Kind::Bool => TypArgKind::Bool(Box::new(conv_constraint(c, span, t)?)),
+                g::Kind::Order => return Err("Order argument needs a declared constructor signature".into()),
+            }
+        }
         g::Typ::Id(_) | g::Typ::App(..) | g::Typ::Infix(_) | g::Typ::If(..) => {
             match conv_nexp(c, span, t) {
                 Ok(n) => TypArgKind::NExp(n),
@@ -1361,10 +1377,10 @@ fn union_type_roots<'a>(union: &'a g::TypeUnion, roots: &mut Vec<(&'a g::Typ, g:
 }
 
 fn conv_typedef(c: &mut Ctx, span: Span, t: &g::TypeDef) -> Result<TypeDefKind, String> {
-    match t {
+    let converted: Result<TypeDefKind, String> = match t {
         g::TypeDef::Abbrev(name, quant, kind, body) => {
             let name = c.name(span, name);
-            let result_kind = match kind { Some(kind) => kind.clone(), None => crate::kinds::result_kind(quant, body, &c.bound_kinds, c.fixities)? };
+            let result_kind = match kind { Some(kind) => kind.clone(), None => crate::kinds::result_kind(quant, body, &c.bound_kinds, c.fixities, c.constructors)? };
             let quant = conv_quant_items(c, span, &Some(quant.clone()), &[(body, result_kind.clone())])?;
             let arg = match &result_kind {
                 g::Kind::Type => TypArgKind::Typ(conv_typ(c, span, body)?),
@@ -1382,7 +1398,9 @@ fn conv_typedef(c: &mut Ctx, span: Span, t: &g::TypeDef) -> Result<TypeDefKind, 
         g::TypeDef::Record(name, quant, fields) => {
             let mut roots = Vec::new();
             field_type_roots(fields, &mut roots);
-            let quant = conv_quant_items(c, span, &Some(quant.clone()), &roots)?;
+            let lowered_quant = conv_quant_items(c, span, &Some(quant.clone()), &roots)?;
+            c.constructors.declare(name, quant, &c.bound_kinds, g::Kind::Type);
+            let quant = lowered_quant;
             Ok(TypeDefKind::Record { name: c.name(span, name), quant,
                 fields: conv_struct_fields(c, span, fields)?, wf: true })
         }
@@ -1406,7 +1424,9 @@ fn conv_typedef(c: &mut Ctx, span: Span, t: &g::TypeDef) -> Result<TypeDefKind, 
         g::TypeDef::Variant(name, quant, ctors, wf) => {
             let mut roots = Vec::new();
             for ctor in ctors { union_type_roots(ctor, &mut roots); }
-            let quant = conv_quant_items(c, span, &Some(quant.clone()), &roots)?;
+            let lowered_quant = conv_quant_items(c, span, &Some(quant.clone()), &roots)?;
+            c.constructors.declare(name, quant, &c.bound_kinds, g::Kind::Type);
+            let quant = lowered_quant;
             let mut cctors = Vec::with_capacity(ctors.len());
             for u in ctors {
                 cctors.push(conv_type_union(c, span, u)?);
@@ -1429,7 +1449,25 @@ fn conv_typedef(c: &mut Ctx, span: Span, t: &g::TypeDef) -> Result<TypeDefKind, 
                 fields: cfields,
             })
         }
-    }
+    };
+    let converted = converted?;
+    let empty = g::TypQuant { kopts: vec![], constraint: None };
+    let (name, quant, result) = match t {
+        g::TypeDef::Abbrev(name, quant, _, _) => {
+            let TypeDefKind::Abbrev { arg, .. } = &converted else { unreachable!() };
+            let result = match &arg.kind {
+                TypArgKind::Typ(_) => g::Kind::Type,
+                TypArgKind::NExp(_) => g::Kind::Int,
+                TypArgKind::Bool(_) => g::Kind::Bool,
+            };
+            (name, quant, result)
+        }
+        g::TypeDef::Record(name, quant, _) | g::TypeDef::Variant(name, quant, _, _) => (name, quant, g::Kind::Type),
+        g::TypeDef::Abstract(name, kind, _) => (name, &empty, kind.clone()),
+        g::TypeDef::Enum(name, _, _) | g::TypeDef::Bitfield(name, _, _) => (name, &empty, g::Kind::Type),
+    };
+    c.constructors.declare(name, quant, &c.bound_kinds, result);
+    Ok(converted)
 }
 
 fn conv_valspec(c: &mut Ctx, span: Span, v: &g::ValSpec) -> Result<ValSpec, String> {
@@ -1590,6 +1628,7 @@ fn conv_defaux(c: &mut Ctx, span: Span, d: &g::DefAux) -> Result<DefKind, String
             let quant = conv_quant_items(c, span, &spec.param, &[(&spec.typschm.lhs, g::Kind::Type), (&spec.typschm.rhs, g::Kind::Type)])?;
             let typschm = conv_typschm(c, span, &spec.typschm)?;
             let saved_fixities = c.fixities.clone();
+            let saved_constructors = c.constructors.clone();
             let nested = (|| {
                 defs.iter().map(|def| {
                     let kind = conv_def(c, span, def)?;
@@ -1597,6 +1636,7 @@ fn conv_defaux(c: &mut Ctx, span: Span, d: &g::DefAux) -> Result<DefKind, String
                 }).collect::<Result<Vec<_>, String>>()
             })();
             *c.fixities = saved_fixities;
+            *c.constructors = saved_constructors;
             Ok(DefKind::Outcome {
                 defs: nested?,
                 name: c.name(span, &spec.name),
@@ -1703,8 +1743,8 @@ mod symbol_threading_tests {
     use super::*;
     use sail_ast::Interner as _;
 
-    fn ctx<'a>(ids: &'a mut IdGen, interner: &'a mut SimpleInterner, fixities: &'a mut FixityEnv) -> Ctx<'a> {
-        Ctx { ids, interner, fixities, bound_kinds: Default::default() }
+    fn ctx<'a>(ids: &'a mut IdGen, interner: &'a mut SimpleInterner, fixities: &'a mut FixityEnv, constructors: &'a mut crate::kinds::Constructors) -> Ctx<'a> {
+        Ctx { ids, interner, fixities, bound_kinds: Default::default(), constructors }
     }
 
     #[test]
@@ -1723,7 +1763,8 @@ mod symbol_threading_tests {
             (g::Lit::Real("1.5".to_owned()), "1.5"),
         ] {
             let node = {
-                let mut c = ctx(&mut ids, &mut interner, &mut fixities);
+                let mut constructors = crate::kinds::Constructors::default();
+            let mut c = ctx(&mut ids, &mut interner, &mut fixities, &mut constructors);
                 c.lit(span, &lit)
             };
             let sym = match node.kind {
@@ -1742,11 +1783,13 @@ mod symbol_threading_tests {
         let span = Span::DUMMY;
         let lit = g::Lit::Num("7".to_owned());
         let a = {
-            let mut c = ctx(&mut ids, &mut interner, &mut fixities);
+            let mut constructors = crate::kinds::Constructors::default();
+            let mut c = ctx(&mut ids, &mut interner, &mut fixities, &mut constructors);
             c.lit(span, &lit)
         };
         let b = {
-            let mut c = ctx(&mut ids, &mut interner, &mut fixities);
+            let mut constructors = crate::kinds::Constructors::default();
+            let mut c = ctx(&mut ids, &mut interner, &mut fixities, &mut constructors);
             c.lit(span, &lit)
         };
         let sym = |n: &Lit| match n.kind {
@@ -1774,7 +1817,8 @@ mod symbol_threading_tests {
                 effect: None,
             };
             let out = {
-                let mut c = ctx(&mut ids, &mut interner, &mut fixities);
+                let mut constructors = crate::kinds::Constructors::default();
+            let mut c = ctx(&mut ids, &mut interner, &mut fixities, &mut constructors);
                 conv_typschm(&mut c, span, &schm).expect("senkbar")
             };
             assert!(out.quant.is_empty());
@@ -1803,7 +1847,8 @@ mod symbol_threading_tests {
         let span = Span::DUMMY;
         let s = g::Subst::Typ("n".to_owned(), g::Typ::Id("int".to_owned()));
         let out = {
-            let mut c = ctx(&mut ids, &mut interner, &mut fixities);
+            let mut constructors = crate::kinds::Constructors::default();
+            let mut c = ctx(&mut ids, &mut interner, &mut fixities, &mut constructors);
             conv_subst(&mut c, span, &s).expect("senkbar")
         };
         match out {
@@ -1832,7 +1877,8 @@ mod symbol_threading_tests {
             g::Typ::Id("int".to_owned()),
         );
         let out = {
-            let mut c = ctx(&mut ids, &mut interner, &mut fixities);
+            let mut constructors = crate::kinds::Constructors::default();
+            let mut c = ctx(&mut ids, &mut interner, &mut fixities, &mut constructors);
             conv_typedef(&mut c, span, &t).expect("senkbar")
         };
         match out {

@@ -30,7 +30,7 @@ pub use mini_ast::{Def, ParsedFile, PragmaArg, SpannedDef};
 pub use span::{FileId, ParseError, Span, Spanned};
 
 pub use parser::{parse_file, iter_file, Definitions};
-pub use real::{ParseOut, RealParser, parse_def, parse_exp, parse_file_real, parse_pat, parse_typ};
+pub use real::{ParseOut, ParserContext, RealParser, parse_def, parse_exp, parse_file_real, parse_pat, parse_typ};
 
 /// Parse files with a bounded shared worker pool, returning input order.
 /// Input sources and returned ASTs are retained by this collecting API;
