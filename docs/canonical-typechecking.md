@@ -102,6 +102,14 @@ canonical prover's SMT timing/call counters are not yet connected to the CLI
 profiler; its printed zero counters do not imply that no Z3 requests occurred.
 Use phase wall time and the systemd cgroup peak for these measurements.
 
+The next inline-signature step must preserve OCaml's `infer_funtyp` semantics:
+`TAnnotOpt::Some.typ` is the return type. Without a separate `val`, infer the
+argument types from the one clause's typed/literal/tuple patterns, then publish
+the synthesized function signature in source order for later and recursive
+calls. With a separate `val`, reject duplicate inline quantifiers and check the
+inline return type against that signature. Treating the stored annotation as
+an already complete function type would be an incorrect port.
+
 The memory bound is the resident declaration tables plus a bounded number of
 loaded definitions, local scopes and worker temporaries. A single definition
 must still fit RAM; there is no strict per-worker byte quota. Declaration tables
