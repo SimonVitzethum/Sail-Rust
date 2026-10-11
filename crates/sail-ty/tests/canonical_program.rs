@@ -391,15 +391,162 @@ fn proofs_use_only_earlier_global_constraints_and_keep_annotation_scopes() {
         "val f : forall ('n : Int), 'n > 0. Sized('n) -> Sized('n)",
         "function f(x) = (x : Sized('n))",
     ]);
-    let mut program=Program::new();
-    for (position,(def,it)) in defs.iter().enumerate() {
-        let result=program.declare(def,it.clone(),position);
-        if position==2 { assert!(matches!(result.unwrap_err().kind,TypeErrorKind::ConstraintNotProved(_))); }
-        else {result.unwrap();}
+    let mut program = Program::new();
+    for (position, (def, it)) in defs.iter().enumerate() {
+        let result = program.declare(def, it.clone(), position);
+        if position == 2 {
+            assert!(matches!(
+                result.unwrap_err().kind,
+                TypeErrorKind::ConstraintNotProved(_)
+            ));
+        } else {
+            result.unwrap();
+        }
     }
-    program.check_definition(&defs[6].0,defs[6].1.clone(),6).unwrap();
+    program
+        .check_definition(&defs[6].0, defs[6].1.clone(), 6)
+        .unwrap();
     // Source-position views remain valid after the later assumption exists.
-    assert!(program.check_scheme(match &defs[2].0.kind {DefKind::Val(v)=>&v.typschm,_=>panic!()},&defs[2].1,2).is_err());
+    assert!(program
+        .check_scheme(
+            match &defs[2].0.kind {
+                DefKind::Val(v) => &v.typschm,
+                _ => panic!(),
+            },
+            &defs[2].1,
+            2
+        )
+        .is_err());
+}
+
+#[test]
+fn dependent_calls_instantiate_numeric_boolean_and_compound_results() {
+    let defs = parse(&[
+        "val add : forall 'n 'm. (int('n), int('m)) -> int('n + 'm)",
+        "val equal : forall 'n 'm. (int('n), int('m)) -> bool('n == 'm)",
+        "val negate : forall ('p : Bool). bool('p) -> bool(not('p))",
+        "val answer : unit -> int(42)",
+        "function answer() = add(20, 22)",
+        "val nested : unit -> int(43)",
+        "function nested() = add(add(20, 22), 1)",
+        "val is_equal : unit -> bool(true)",
+        "function is_equal() = equal(add(20, 22), 42)",
+        "val negated : unit -> bool(false)",
+        "function negated() = negate(equal(42, 42))",
+        "val rigid : forall 'n. int('n) -> int('n + 1)",
+        "function rigid(x) = add(x, 1)",
+        "val bad : unit -> int(44)",
+        "function bad() = add(20, 22)",
+    ]);
+    let program = declare(&defs);
+    for position in [4, 6, 8, 10, 12] {
+        program
+            .check_definition(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap();
+    }
+    let error = program
+        .check_definition(&defs[14].0, defs[14].1.clone(), 14)
+        .unwrap_err();
+    assert!(
+        matches!(error.kind, TypeErrorKind::ConstraintNotProved(_)),
+        "{error}"
+    );
+}
+
+#[test]
+fn dependent_calls_prove_constraints_and_reject_unrefined_argument_shortcuts() {
+    let defs = parse(&[
+        "val positive : forall 'n, 'n > 0. int('n) -> int('n)",
+        "val same : forall 'n. (int('n), int('n)) -> unit",
+        "val good : forall 'n, 'n > 1. int('n) -> int('n)",
+        "function good(x) = positive(x)",
+        "val wrong : unit -> int(0)",
+        "function wrong() = positive(0)",
+        "val unequal : unit -> unit",
+        "function unequal() = same(1, 2)",
+        "val unrefined : int -> int(1)",
+        "function unrefined(x) = positive(x)",
+    ]);
+    let program = declare(&defs);
+    program
+        .check_definition(&defs[3].0, defs[3].1.clone(), 3)
+        .unwrap();
+    for position in [5, 7] {
+        let error = program
+            .check_definition(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap_err();
+        assert!(
+            matches!(error.kind, TypeErrorKind::ConstraintNotProved(_)),
+            "{error}"
+        );
+    }
+    assert!(program
+        .check_definition(&defs[9].0, defs[9].1.clone(), 9)
+        .is_err());
+}
+
+#[test]
+fn recursive_and_sibling_dependent_calls_keep_each_instantiation_separate() {
+    let defs = parse(&[
+        "val add : forall 'n 'm. (int('n), int('m)) -> int('n + 'm)",
+        "function add(x, y) = add(y, x)",
+        "val sibling : unit -> int(10)",
+        "function sibling() = add(add(1, 2), add(3, 4))",
+        "val wrong_sibling : unit -> int(6)",
+        "function wrong_sibling() = add(add(1, 2), add(3, 4))",
+        "val recursive : forall 'n 'm, 'n > 0 & 'm < 0. (int('n), int('m)) -> int('n)",
+        "function recursive(x, y) = recursive(y, x)",
+    ]);
+    let program = declare(&defs);
+    for position in [1, 3] {
+        program
+            .check_definition(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap();
+    }
+    for position in [5, 7] {
+        let error = program
+            .check_definition(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap_err();
+        assert!(
+            matches!(error.kind, TypeErrorKind::ConstraintNotProved(_)),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn plain_values_open_fresh_witnesses_and_opaque_results_do_not_become_constants() {
+    let defs = parse(&[
+        "val equal : forall 'n 'm. (int('n), int('m)) -> bool('n == 'm)",
+        "val negate : forall ('p : Bool). bool('p) -> bool(not('p))",
+        "val predicate : unit -> bool",
+        "val unknown_int : unit -> int",
+        "val reflexive : int -> bool(true)",
+        "function reflexive(x) = equal(x, x)",
+        "val invert_unknown : unit -> bool",
+        "function invert_unknown() = negate(predicate())",
+        "val distinct : (int, int) -> bool(true)",
+        "function distinct(x, y) = equal(x, y)",
+        "val invented_bool : unit -> bool(true)",
+        "function invented_bool() = negate(predicate())",
+        "val invented_int : unit -> int(1)",
+        "function invented_int() = unknown_int()",
+    ]);
+    let program = declare(&defs);
+    for position in [5, 7] {
+        program
+            .check_definition(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap();
+    }
+    for position in [9, 11, 13] {
+        let error = program
+            .check_definition(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap_err();
+        assert!(
+            matches!(error.kind, TypeErrorKind::ConstraintNotProved(_)),
+            "{error}"
+        );
+    }
 }
 
 #[test]
@@ -471,6 +618,46 @@ fn ten_thousand_let_scopes_check_and_release_without_recursion() {
                     .check_definition(&def, Arc::new(interner), 1)
                     .unwrap(),
                 20_001
+            );
+            sail_ast::storage::drop_definition(def);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn ten_thousand_composed_dependent_results_check_and_release_iteratively() {
+    std::thread::Builder::new()
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let mut defs = parse(&[
+                "val successor : forall 'n. int('n) -> int('n + 1)",
+                "val f : unit -> int",
+                "function f() = 0",
+            ]);
+            let program = declare(&defs);
+            let (mut def, it) = defs.pop().unwrap();
+            let DefKind::Fundef { funcls, .. } = &mut def.kind else {
+                panic!()
+            };
+            let PExpKind::PatExp { body, .. } = &mut funcls[0].arm.kind else {
+                panic!()
+            };
+            let mut interner = it.as_ref().clone();
+            let successor = Name::dummy(interner.intern("successor"));
+            for _ in 0..10_000 {
+                let previous = std::mem::replace(body, Node::dummy(ExpKind::Undef));
+                *body = Node::dummy(ExpKind::App {
+                    func: successor.clone(),
+                    args: vec![previous],
+                });
+            }
+            assert_eq!(
+                program
+                    .check_definition(&def, Arc::new(interner), 2)
+                    .unwrap(),
+                10_001
             );
             sail_ast::storage::drop_definition(def);
         })

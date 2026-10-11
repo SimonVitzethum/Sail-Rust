@@ -27,8 +27,10 @@ impl Drop for Process {
 }
 impl Process {
     fn start() -> std::io::Result<Self> {
-        let mut child = Command::new("z3")
-            .args(["-in", "-smt2"])
+        Self::spawn(Command::new("z3").args(["-in", "-smt2"]))
+    }
+    fn spawn(command: &mut Command) -> std::io::Result<Self> {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -159,6 +161,15 @@ impl Solver for SmtLibSolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wall_deadline_kills_and_reaps_a_process_that_never_reads_or_replies() {
+        let started = std::time::Instant::now();
+        let mut process = Process::spawn(Command::new("sleep").arg("60")).unwrap();
+        let error = process.prove("(assert false)\n", 1).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        drop(process);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
     #[test]
     fn persistent_process_resets_each_query_and_rejects_parse_errors() {
         let mut process =

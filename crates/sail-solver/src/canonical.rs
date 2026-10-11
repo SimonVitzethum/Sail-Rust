@@ -9,6 +9,18 @@ use std::fmt::Write;
 pub struct Context<'a> {
     pub interner: &'a SimpleInterner,
     pub variables: &'a BTreeMap<String, u64>,
+    pub bindings: Option<&'a dyn Bindings>,
+}
+/// Borrowed substitutions may refer to different declaration interners. The
+/// emitter follows them on its work stack, without copying numeric ASTs.
+pub trait Bindings {
+    fn resolve(&self, symbol: Symbol) -> Option<Argument<'_>>;
+    fn rigid(&self, name: &str) -> Option<(usize, Kind)>;
+}
+#[derive(Clone, Copy)]
+pub struct Argument<'a> {
+    pub argument: &'a TypArg,
+    pub context: Context<'a>,
 }
 #[derive(Clone, Copy)]
 pub struct View<'a> {
@@ -53,12 +65,44 @@ impl CanonicalQuery {
             substitution,
         )?;
         emitter.output.push_str("))\n");
+        Ok(emitter.finish())
+    }
+
+    pub fn equality(
+        assumptions: &[View<'_>],
+        left: Argument<'_>,
+        right: Argument<'_>,
+    ) -> Result<Self, String> {
+        if std::mem::discriminant(&left.argument.kind)
+            != std::mem::discriminant(&right.argument.kind)
+        {
+            return Err("mixed proof equality sorts".into());
+        }
+        let mut emitter = Emitter {
+            declarations: BTreeMap::new(),
+            output: String::new(),
+        };
+        for a in assumptions {
+            emitter.output.push_str("(assert ");
+            emitter.emit(Task::Constraint(a.constraint, a.context, false), None)?;
+            emitter.output.push_str(")\n");
+        }
+        emitter.output.push_str("(assert (not (= ");
+        emitter.emit(Task::Arg(left.argument, left.context, false), None)?;
+        emitter.output.push(' ');
+        emitter.emit(Task::Arg(right.argument, right.context, false), None)?;
+        emitter.output.push_str(")))\n");
+        Ok(emitter.finish())
+    }
+}
+impl Emitter {
+    fn finish(self) -> CanonicalQuery {
         let mut script = String::new();
-        for (name, sort) in emitter.declarations {
+        for (name, sort) in self.declarations {
             writeln!(script, "(declare-const {name} {sort})").unwrap();
         }
-        script.push_str(&emitter.output);
-        Ok(Self { script })
+        script.push_str(&self.output);
+        CanonicalQuery { script }
     }
 }
 enum Task<'a> {
@@ -92,7 +136,17 @@ impl Emitter {
         sort: &'static str,
     ) -> Result<(), String> {
         let text = name(context.interner, symbol)?;
-        let key = if variable {
+        let key = if variable && context.bindings.is_some() {
+            let (scope, kind) = context
+                .bindings
+                .unwrap()
+                .rigid(text)
+                .ok_or_else(|| format!("unbound rigid proof variable {text}"))?;
+            if !matches!((kind, sort), (Kind::Int, "Int") | (Kind::Bool, "Bool")) {
+                return Err("rigid proof variable sort mismatch".into());
+            }
+            encoded(&format!("scope_{scope:x}_"), text)
+        } else if variable {
             format!(
                 "v_{}",
                 context
@@ -149,6 +203,13 @@ impl Emitter {
                                 return Err("non-integer proof substitution".into());
                             }
                             work.push(Task::Arg(arg, target, false));
+                        } else if let Some(bound) =
+                            context.bindings.and_then(|b| b.resolve(*symbol))
+                        {
+                            if !matches!(bound.argument.kind, TypArgKind::NExp(_)) {
+                                return Err("non-integer borrowed substitution".into());
+                            }
+                            work.push(Task::Arg(bound.argument, bound.context, false));
                         } else {
                             self.identifier(context, *symbol, true, "Int")?;
                         }
@@ -218,6 +279,13 @@ impl Emitter {
                                 return Err("non-Boolean proof substitution".into());
                             }
                             work.push(Task::Arg(arg, target, false));
+                        } else if let Some(bound) =
+                            context.bindings.and_then(|b| b.resolve(*symbol))
+                        {
+                            if !matches!(bound.argument.kind, TypArgKind::Bool(_)) {
+                                return Err("non-Boolean borrowed substitution".into());
+                            }
+                            work.push(Task::Arg(bound.argument, bound.context, false));
                         } else {
                             self.identifier(context, *symbol, true, "Bool")?;
                         }
@@ -336,6 +404,7 @@ mod tests {
                         context: Context {
                             interner: &it,
                             variables: &variables,
+                            bindings: None,
                         },
                     },
                     None,
@@ -372,7 +441,8 @@ mod tests {
                 constraint: &c,
                 context: Context {
                     interner: &it,
-                    variables: &variables
+                    variables: &variables,
+                    bindings: None,
                 }
             },
             None

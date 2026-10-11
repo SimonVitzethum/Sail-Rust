@@ -135,11 +135,19 @@ rigid scope identities, scheme/existential/source-position global assumptions,
 and actual Z3 proofs through an iterative SMT-LIB bridge. Persistent subprocesses
 share the compiler cgroup; a bounded memo cache and exclusive solver pool reuse
 the existing solver architecture. Proof timeouts/errors fail closed.
-The run now stops in a `flow.sail` body at missing dependent call instantiation;
-it takes 44.12 s and peaks at 1.3 GiB without swap. The focused solver/typechecker/
-CLI suite passes 196 tests with each binary limited to 128 MiB, followed by a
-16-test canonical gate (71.5 MiB peak) covering global-assumption history and
-annotation scopes. No full ARM body check or Lake build has succeeded.
+Dependent calls now infer directly occurring numeric/Boolean parameters, retain
+compound result types and prove quantifier constraints. Immutable bindings and
+opaque scalar results receive distinct rigid singleton witnesses. Canonical
+views avoid copying numeric trees; cached call instances and iterative
+substitution cleanup handle 10,000 composed dependent calls on a 128 KiB stack.
+The run now passes `flow.sail` bodies and stops in `arith.sail` at inline function
+signature elaboration; it takes 39.75 s and peaks at 1.3 GiB without swap.
+The focused solver/typechecker/CLI suite passes 203 tests with each binary limited
+to 128 MiB, including 21 canonical tests and a stalled-child deadline/reaping
+regression. The updated sixteen-worker out-of-core subset run passes at 128 MiB
+without swap (1.38 s checking, 11.14 s overall). The CLI profiler's SMT counters
+still need wiring to the canonical prover; their zeros are not proof-call counts.
+No full ARM body check or Lake build has succeeded.
 
 Full kind/type elaboration, all expression/mapping conversions, complete
 annotation handling, typed rewrites and executable Lean body emission remain incomplete.

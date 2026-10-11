@@ -124,6 +124,24 @@ impl Program {
     pub fn new() -> Self {
         Self::default()
     }
+    pub(crate) fn prove(&self, query: CanonicalQuery) -> sail_solver::SolverVerdict {
+        let query = SolverQuery::new(sail_solver::Constraint::SmtLib(query)).with_timeout(3000);
+        let cache = self.solvers.cache();
+        cache.lookup(&query).unwrap_or_else(|| {
+            let verdict = self.solvers.checkout().prove(&query);
+            cache.store(&query, verdict);
+            verdict
+        })
+    }
+    pub(crate) fn constraints(
+        &self,
+        position: usize,
+    ) -> impl Iterator<Item = (&Constraint, &SimpleInterner)> {
+        self.constraints
+            .iter()
+            .filter(move |b| b.position <= position)
+            .map(|b| (b.value.0.as_ref(), b.value.1.as_ref()))
+    }
 
     /// Check one loaded definition against its immutable source-position view.
     /// This method owns no function body and can run on bounded worker pools.
@@ -558,6 +576,7 @@ impl<'a> WellFormed<'a> {
         let context = Context {
             interner: self.it,
             variables: &self.proof_vars,
+            bindings: None,
         };
         let substitution = Substitution {
             arguments: proof
@@ -583,6 +602,7 @@ impl<'a> WellFormed<'a> {
                 context: Context {
                     interner: a.interner,
                     variables: &a.variables,
+                    bindings: None,
                 },
             })
             .collect();
@@ -596,6 +616,7 @@ impl<'a> WellFormed<'a> {
                     context: Context {
                         interner: &b.value.1,
                         variables: &empty,
+                        bindings: None,
                     },
                 }),
         );
@@ -610,6 +631,7 @@ impl<'a> WellFormed<'a> {
                     context: Context {
                         interner: &proof.interner,
                         variables: &empty,
+                        bindings: None,
                     },
                 },
                 Some(&substitution),
@@ -618,13 +640,7 @@ impl<'a> WellFormed<'a> {
                 span: name.span,
                 kind: TypeErrorKind::Unsupported(reason),
             })?;
-            let query = SolverQuery::new(sail_solver::Constraint::SmtLib(query)).with_timeout(3000);
-            let cache = self.program.solvers.cache();
-            let verdict = cache.lookup(&query).unwrap_or_else(|| {
-                let verdict = self.program.solvers.checkout().prove(&query);
-                cache.store(&query, verdict);
-                verdict
-            });
+            let verdict = self.program.prove(query);
             if !verdict.is_valid() {
                 return Err(TypeError::constraint_not_proved(
                     name.span,

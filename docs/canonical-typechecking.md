@@ -34,6 +34,20 @@ provide assumptions. Existential shadowing creates fresh proof identities and
 restores the previous assumptions on exit. Annotation interners retain the
 function's binder identities. Unknown obligations are errors.
 
+Dependent calls now infer directly occurring Int/Bool parameters, retain
+compound result refinements and prove repeated-argument equalities and
+quantifier constraints. Scalar substitutions are borrowed views into canonical
+types with their own interners/scopes; sibling and recursive calls have separate
+instantiations. Shared call instances and synthesis caches avoid repeatedly
+expanding nested results. Releasing substitution chains is iterative. A test
+checks 10,000 composed `int('n) -> int('n + 1)` calls on a 128 KiB stack.
+
+Plain `int`/`bool` bindings and expression results open fresh rigid singleton
+witnesses. Reusing one immutable binding retains its witness; unrelated values
+and opaque function results have distinct witnesses. This permits reflexive
+equality and calls such as `not_bool(eq_bool(x, y))` without inventing a constant
+value. Mutation and control-flow refinement still need their own elaboration.
+
 The solver bridge emits flat, validated SMT-LIB with an explicit work stack;
 decimal constants retain arbitrary precision. It reuses the existing exclusive
 solver pool and bounded 128-entry memo cache. Each active solver owns a persistent
@@ -44,8 +58,8 @@ processes inherit the compiler's systemd memory and swap limits. Z3 must be on
 PATH. Powers, general numeric/constraint applications and type-valued equality
 currently require further elaboration and fail explicitly at this bridge.
 
-Unknown expression rules, dependent call solving, general refinement proofs,
-synonym expansion,
+Unknown expression rules, arithmetic inference of nontrivial call parameters,
+general refinement subsumption, inline function annotations, synonym expansion,
 mappings and scattered definitions fail explicitly. This is a partial checker:
 it does not yet produce the complete typed AST required by the rewrite and Lean
 backend passes. Successful checking of the supported subset still ends with
@@ -72,13 +86,21 @@ compilation as ARM or Lean success.
 
 The latest full ARM gate passes the declaration phase, including the constructor
 conditions of `Mem_read_request` and `Mem_write_request`. It now stops in a
-`flow.sail` function body at dependent call instantiation. The run takes 44.12 s,
+`arith.sail` function body at inline signature elaboration, after the `flow.sail`
+bodies pass. The run takes 39.75 s,
 peaks at 1.3 GiB under the 16 GiB/no-swap limit and still exits 1 before Lean/Lake.
-The focused solver/typechecker/CLI suite has 196 passing tests under 128 MiB per
-binary. A further 16-test canonical gate includes source-position global
-assumptions and cross-interner annotations (71.5 MiB peak). The solver bridge also
+The focused solver/typechecker/CLI suite has 203 passing tests under 128 MiB per
+binary, including 21 canonical tests. It covers source-position global
+assumptions, cross-interner annotations and recursive/sibling call separation.
+The solver bridge also
 handles 10,000 nested numeric nodes on a 128 KiB stack and rejects an SMT-injection
 literal. These remain partial compiler results.
+
+The updated sixteen-worker out-of-core subset gate still checks all 1,052,672
+expressions under 128 MiB without swap (1.38 s checking, 11.14 s overall). The
+canonical prover's SMT timing/call counters are not yet connected to the CLI
+profiler; its printed zero counters do not imply that no Z3 requests occurred.
+Use phase wall time and the systemd cgroup peak for these measurements.
 
 The memory bound is the resident declaration tables plus a bounded number of
 loaded definitions, local scopes and worker temporaries. A single definition
