@@ -1,0 +1,265 @@
+negative-00.sail REJECTED
+Running as unit: run-p430720-i459198.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-00.sail[0m:8.47-52:
+8[96m |[0mfunction wrong_init() -> int = { var x : int = false; x }
+ [91m |[0m                                               [91m^---^[0m
+ [91m |[0m Type mismatch between int('ex3#) and bool(false)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 65ms
+             CPU time consumed: 47ms
+                   Memory peak: 12.6M (swap: 0B)
+
+negative-01.sail REJECTED
+Running as unit: run-p430725-i459203.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-01.sail[0m:8.55-60:
+8[96m |[0mfunction wrong_write() -> int = { var x : int = 0; x = false; x }
+ [91m |[0m                                                       [91m^---^[0m
+ [91m |[0m Type mismatch between int('ex5#) and bool(false)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 58ms
+             CPU time consumed: 48ms
+                   Memory peak: 12.2M (swap: 0B)
+
+negative-02.sail REJECTED
+Running as unit: run-p430730-i459204.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-02.sail[0m:8.52-53:
+8[96m |[0mfunction constant_write() -> int = { var x = 0; x = 1; x }
+ [91m |[0m                                                    [91m^[0m
+ [91m |[0m int(1) is not a subtype of int(0)
+ [91m |[0m as false could not be proven
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 58ms
+             CPU time consumed: 47ms
+                   Memory peak: 12.2M (swap: 0B)
+
+negative-03.sail REJECTED
+Running as unit: run-p430735-i412384.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-03.sail[0m:8.49-50:
+8[96m |[0mfunction immutable_write() -> int = { let x = 0; x = 0; x }
+ [91m |[0m                                                 [91m^[0m
+ [91m |[0m Cannot modify immutable let-bound constant or enumeration constructor x
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 66ms
+             CPU time consumed: 49ms
+                   Memory peak: 12.5M (swap: 0B)
+
+negative-04.sail REJECTED
+Running as unit: run-p430740-i408547.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-04.sail[0m:8.46-53:
+8[96m |[0mfunction shadow_local(x : int) -> int = { var x : int = 0; x }
+ [91m |[0m                                              [91m^-----^[0m
+ [91m |[0m Cannot modify immutable let-bound constant or enumeration constructor x
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 58ms
+             CPU time consumed: 49ms
+                   Memory peak: 11.7M (swap: 0B)
+
+negative-05.sail REJECTED
+Running as unit: run-p430745-i443607.service
+[93mWarning[0m: Redundant type annotation on assignment to x
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-05.sail[0m:8.58-65:
+8[96m |[0mfunction shadow_mutable() -> int = { var x : int = 0; var x : int = 1; x }
+ [91m |[0m                                                          [91m^-----^[0m
+ [91m |[0m Type is already known
+
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-05.sail[0m:8.58-65:
+8[96m |[0mfunction shadow_mutable() -> int = { var x : int = 0; var x : int = 1; x }
+ [91m |[0m                                                          [91m^-----^[0m
+ [91m |[0m var expression can only be used to declare new variables, not update them
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 60ms
+             CPU time consumed: 47ms
+                   Memory peak: 12.3M (swap: 0B)
+
+negative-06.sail REJECTED
+Running as unit: run-p430750-i424441.service
+[93mWarning[0m: Redundant type annotation on assignment to R
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-06.sail[0m:8.42-49:
+8[96m |[0mfunction shadow_register() -> int = { var R : int = 0; R }
+ [91m |[0m                                          [91m^-----^[0m
+ [91m |[0m Type is already known
+
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-06.sail[0m:8.42-49:
+8[96m |[0mfunction shadow_register() -> int = { var R : int = 0; R }
+ [91m |[0m                                          [91m^-----^[0m
+ [91m |[0m var expression can only be used to declare new variables, not update them
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 58ms
+             CPU time consumed: 49ms
+                   Memory peak: 12.3M (swap: 0B)
+
+negative-07.sail REJECTED
+Running as unit: run-p430755-i417036.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-07.sail[0m:8.36-47:
+8[96m |[0mfunction missing_target() -> unit = missing = 0
+ [91m |[0m                                    [91m^---------^[0m
+ [91m |[0m Variable declaration with unclear (or no) scope. Use an explicit var statement instead, or place in a block
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 63ms
+             CPU time consumed: 49ms
+                   Memory peak: 12.4M (swap: 0B)
+
+negative-08.sail REJECTED
+Running as unit: run-p430760-i412390.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-08.sail[0m:8.40-45:
+8[96m |[0mfunction wrong_register() -> unit = R = false
+ [91m |[0m                                        [91m^---^[0m
+ [91m |[0m Type mismatch between int('ex3#) and bool(false)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 59ms
+             CPU time consumed: 51ms
+                   Memory peak: 12.1M (swap: 0B)
+
+negative-09.sail REJECTED
+Running as unit: run-p430765-i475219.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-09.sail[0m:8.83-88:
+8[96m |[0mfunction tuple_write() -> unit = { var (x, y) = (opaque_int(), true); (x, y) = (1, false) }
+ [91m |[0m                                                                                   [91m^---^[0m
+ [91m |[0m Failed to prove constraint: ((not(false) | true) & not(true)), as it simplifies directly to false
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 62ms
+             CPU time consumed: 49ms
+                   Memory peak: 12.5M (swap: 0B)
+
+negative-10.sail REJECTED
+Running as unit: run-p430770-i451397.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-10.sail[0m:8.56-72:
+8[96m |[0mfunction bad_bounds() -> unit = foreach (i from 0 to 3) bounded_index(i)
+ [91m |[0m                                                        [91m^--------------^[0m
+ [91m |[0m Could not resolve quantifiers for bounded_index
+ [91m |[0m [94m*[0m (0 <= 'loop_i & 'loop_i <= 2)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 87ms
+             CPU time consumed: 106ms
+                   Memory peak: 31.1M (swap: 0B)
+
+negative-11.sail REJECTED
+Running as unit: run-p430779-i451402.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-11.sail[0m:8.64-80:
+8[96m |[0mfunction bad_descending() -> unit = foreach (i from 3 downto 0) bounded_index(i)
+ [91m |[0m                                                                [91m^--------------^[0m
+ [91m |[0m Could not resolve quantifiers for bounded_index
+ [91m |[0m [94m*[0m (0 <= 'loop_i & 'loop_i <= 2)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 57ms
+             CPU time consumed: 49ms
+                   Memory peak: 12.8M (swap: 0B)
+
+negative-12.sail REJECTED
+Running as unit: run-p430785-i451406.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-12.sail[0m:8.62-63:
+8[96m |[0mfunction write_iterator() -> unit = foreach (i from 0 to 2) { i = 1 }
+ [91m |[0m                                                              [91m^[0m
+ [91m |[0m Cannot modify immutable let-bound constant or enumeration constructor i
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 60ms
+             CPU time consumed: 49ms
+                   Memory peak: 12.2M (swap: 0B)
+
+negative-13.sail REJECTED
+Running as unit: run-p430790-i451410.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-13.sail[0m:8.78-79:
+8[96m |[0mfunction bound_escape() -> unit = { foreach (i from 0 to 2) (); bounded_index(i) }
+ [91m |[0m                                                                              [91m^[0m [91mchecking function argument has type int('n)[0m
+ [91m |[0m Identifier i is unbound
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 61ms
+             CPU time consumed: 50ms
+                   Memory peak: 12.2M (swap: 0B)
+
+negative-14.sail REJECTED
+Running as unit: run-p430795-i412391.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-14.sail[0m:8.38-68:
+8[96m |[0mfunction wrong_bound_type() -> unit = foreach (i from false to 2) ()
+ [91m |[0m                                      [91m^----------------------------^[0m
+ [91m |[0m Ranges in foreach overlap
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 60ms
+             CPU time consumed: 46ms
+                   Memory peak: 12.2M (swap: 0B)
+
+negative-15.sail REJECTED
+Running as unit: run-p430800-i443614.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-15.sail[0m:8.61-62:
+8[96m |[0mfunction wrong_body_type() -> unit = foreach (i from 0 to 2) 1
+ [91m |[0m                                                             [91m^[0m
+ [91m |[0m int(1) is not a subtype of unit
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 69ms
+             CPU time consumed: 52ms
+                   Memory peak: 12.3M (swap: 0B)
+
+negative-16.sail REJECTED
+Running as unit: run-p430806-i408549.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-16.sail[0m:8.43-44:
+8[96m |[0mfunction wrong_condition() -> unit = while 0 do ()
+ [91m |[0m                                           [91m^[0m
+ [91m |[0m Type mismatch between bool('ex1#) and int(0)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 56ms
+             CPU time consumed: 50ms
+                   Memory peak: 12.4M (swap: 0B)
+
+negative-17.sail REJECTED
+Running as unit: run-p430811-i443618.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-17.sail[0m:8.46-62:
+8[96m |[0mfunction until_fact(x : int) -> unit = repeat at_least_zero(x) until ge_zero(x)
+ [91m |[0m                                              [91m^--------------^[0m
+ [91m |[0m Could not resolve quantifiers for at_least_zero
+ [91m |[0m [94m*[0m '_#x >= 0
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 94ms
+             CPU time consumed: 111ms
+                   Memory peak: 30.9M (swap: 0B)
+
+negative-18.sail REJECTED
+Running as unit: run-p430819-i471149.service
+[93mType error[0m:
+[96m/home/simon/Dokumente/Sail/sail-rs/target/mutable-reference/negative-18.sail[0m:8.78-90:
+8[96m |[0mfunction stale_fact() -> unit = { var x : bool = true; if x then { x = false; only_true(x) } else () }
+ [91m |[0m                                                                              [91m^----------^[0m
+ [91m |[0m Could not resolve quantifiers for only_true
+ [91m |[0m [94m*[0m 'ex2#
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 86ms
+             CPU time consumed: 106ms
+                   Memory peak: 30.3M (swap: 0B)
+
+unexpected accepts: []

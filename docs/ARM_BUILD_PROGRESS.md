@@ -1,5 +1,10 @@
 # ARM build objective
 
+> Aktueller Fortsetzungsstand: [WORK_STATE.md](WORK_STATE.md). Seit dem letzten
+> gepushten Vektorstand sind Mutable-/Loop- und Block-Scope-Fixes im Worktree.
+> Der neueste 128-MiB-Fokustest scheitert durch OOM; er ist nicht grün.
+> Die nachfolgenden ARM-Messungen stammen noch vom Stand vor diesen Änderungen.
+
 The acceptance target is a complete ARM Sail build with the Rust compiler under
 `systemd MemoryMax=16G MemorySwapMax=0`. A maximum of `28G` is an accepted fallback.
 The confirmed reference is ARMv9.4-A, targeting Lean with a successful

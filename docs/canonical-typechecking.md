@@ -1,5 +1,10 @@
 # Canonical, disk-backed typechecking
 
+> Aktueller Fortsetzungsstand: [WORK_STATE.md](WORK_STATE.md). Seit dem letzten
+> gepushten Vektorstand sind Mutable-/Loop- und Block-Scope-Fixes im Worktree.
+> Der neueste 128-MiB-Fokustest scheitert durch OOM; er ist nicht grün.
+> Die nachfolgenden ARM-Messungen stammen noch vom Stand vor diesen Änderungen.
+
 The ordinary CLI now runs `sail_ty::program::Program` over the canonical
 `sail_ast` definitions. It does not translate bodies into the older miniature
 checker AST. The existing miniature checker remains for its current users;
