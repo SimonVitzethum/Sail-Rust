@@ -83,8 +83,8 @@ systemd limit (1.5 GiB maximum). This validates the gate, not ARM emission.
 
 ## Remaining acceptance work
 
-Latest validation (2026-10-11): the complete workspace has 1,150 passing tests
-under `MemoryMax=4G MemorySwapMax=0` (396.3 MiB cgroup peak). The earlier focused
+Latest validation (2026-10-11): the complete workspace has 1,157 passing tests
+under `MemoryMax=4G MemorySwapMax=0` (395.9 MiB cgroup peak). The earlier focused
 AST/parser/resolver/CLI gate has 226 passing tests with each binary limited to
 128 MiB without swap (110.9 MiB maximum, including six 10,000-level trees on
 a 128 KiB thread stack). Its separately limited build peaks at 533.8 MiB.

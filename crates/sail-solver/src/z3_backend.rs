@@ -146,7 +146,7 @@ fn typarg_eq_bool(a: &TypArg, b: &TypArg) -> Bool {
             Ast::eq(&nconstraint_to_bool(x), &nconstraint_to_bool(y))
         }
         (TypArg::Typ(x), TypArg::Typ(y)) if x == y => Bool::from_bool(true),
-        (TypArg::Typ(_, _), TypArg::Typ(_, _)) => Bool::fresh_const("sail_nconstraint_typarg_eq"),
+        (TypArg::Typ(_), TypArg::Typ(_)) => Bool::fresh_const("sail_nconstraint_typarg_eq"),
         _ => Bool::fresh_const("sail_nconstraint_typarg_eq_mixed"),
     }
 }
