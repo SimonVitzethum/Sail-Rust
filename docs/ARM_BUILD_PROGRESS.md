@@ -43,6 +43,13 @@ is not a complete build. Lean acceptance must include compiling generated code.
   definition wrappers retain structured attributes, docs and private visibility.
   Unannotated JSON remains compatible. Field/clause annotations and propagation
   through all later compiler passes still need completion.
+- Expression lowering and expression-infix tree assembly now use explicit
+  postorder work stacks. Converted children move once into their parent;
+  folded temporary trees are freed iteratively. This removes the worker-stack
+  overflow on ARM `ImpDefBool` without increasing thread stack sizes. The real
+  22-source ARM frontend now reaches global name resolution; this is still not
+  a typed compilation or Lean build. Other recursive type/pattern/serialization
+  paths remain to be audited.
 - All 59 standard-library files are embedded, including nested concurrency and
   float libraries. A separately documented, unmodified Sail 0.17.1 `trace.sail`
   supplies the legacy ARM include; its license and source hash are retained.

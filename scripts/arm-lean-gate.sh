@@ -36,7 +36,7 @@ printf 'ARM gate: model=%s memory=%s sources=%s output=%s\n' \
     "$MODEL" "$MEMORY" "${#SOURCES[@]}" "$OUT"
 systemd-run --user --wait --pipe --collect \
     -p "MemoryMax=$MEMORY" -p MemorySwapMax=0 -p "WorkingDirectory=$MODEL" \
-    "$TASK_ROOT/target/ci/sail-rs" -dprofile -verbose 1 -memo_z3 \
+    "$TASK_ROOT/target/ci/sail-rs" -dprofile -verbose "${SAIL_ARM_VERBOSE:-1}" -memo_z3 \
     -lean -lean-force-output -lean_output_dir "$OUT/lean" -o armv9 \
     -undefined_gen -lean-noncomputable -lean-line-width 100000 \
     -lean-import-file lean/ArmExtras.lean "${SOURCES[@]}" \

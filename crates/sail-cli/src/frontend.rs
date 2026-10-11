@@ -76,6 +76,7 @@ struct Job {
 struct Jobs {
     lines: std::io::Lines<BufReader<File>>,
     context: ParserContext,
+    trace: bool,
 }
 impl Iterator for Jobs {
     type Item = Result<Job, CliError>;
@@ -91,6 +92,7 @@ impl Iterator for Jobs {
             // source order and reuse their AST in the worker; ordinary bodies
             // remain parallel and never enter the context.
             let parsed = if record.declaration {
+                if self.trace { eprintln!("sail-rs: declare {}:{}", record.path, record.span); }
                 let def = parser.parse_def(&record.source, record.span)
                     .map_err(|e| error(format!("{}: {e}", record.path)))?;
                 self.context = parser.context();
@@ -287,6 +289,7 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
         )
         .lines(),
         context: ParserContext::default(),
+        trace: opts.verbose >= 2,
     };
     let warm = WarmLayer::open(scratch.0.join("ast")).with_max_live_bytes(0);
     let scheduler = Scheduler::new(SchedulerConfig::new(2, workers));
@@ -306,11 +309,13 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
             else if let Some((key, payload)) = record.pragma {
                 Node::new(NodeId::DUMMY, record.span, DefKind::Pragma { key, payload })
             } else {
+                if opts.verbose >= 2 { eprintln!("sail-rs: convert {}:{}", record.path, record.span); }
                 parser
                     .parse_def(&record.source, record.span)
                     .map_err(|e| error(format!("{}: {e}", record.path)))?
             };
             let interner = parser.into_interner();
+            if opts.verbose >= 2 { eprintln!("sail-rs: spool {}:{}", record.path, record.span); }
             let bytes = serde_json::to_vec(&(&def, &interner))
                 .map_err(|e| CliError::fatal(e.to_string()))?;
             let id = ContentId::of_domain_parts("sail-rs/core-ast-v1", &[&bytes]);

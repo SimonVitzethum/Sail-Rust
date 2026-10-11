@@ -783,13 +783,14 @@ fn conv_mpat(c: &mut Ctx, span: Span, p: &g::MPat) -> Result<Pat, String> {
 /// `to_ast_assign` distinguishes a complete application from an l-value.
 /// Infix parsing can wrap the application in a one-operand chain. Calls
 /// inside fields or vector accesses remain invalid assignment targets.
-fn assignment_call(exp: &g::Exp) -> Option<&g::Exp> {
-    match exp {
-        g::Exp::App(..) => Some(exp),
-        g::Exp::Infix(chain) if chain.prefixes.is_empty() && chain.tail.is_empty() =>
-            assignment_call(&chain.head),
-        g::Exp::Suffix(_, suffixes) if matches!(suffixes.last(), Some(g::ExpSuffix::Call(..))) => Some(exp),
-        _ => None,
+fn assignment_call(mut exp: &g::Exp) -> Option<&g::Exp> {
+    loop {
+        match exp {
+            g::Exp::App(..) => return Some(exp),
+            g::Exp::Infix(chain) if chain.prefixes.is_empty() && chain.tail.is_empty() => exp = &chain.head,
+            g::Exp::Suffix(_, suffixes) if matches!(suffixes.last(), Some(g::ExpSuffix::Call(..))) => return Some(exp),
+            _ => return None,
+        }
     }
 }
 
@@ -865,7 +866,7 @@ fn folded_lexp(c: &mut Ctx, span: Span, tree: &Folded<&g::Exp>) -> Result<LExp, 
     Ok(c.node(span, kind))
 }
 
-fn conv_fexp_field(c: &mut Ctx, span: Span, f: &g::FieldExp) -> Result<FExp, String> {
+fn conv_fexp_field(c: &mut Ctx, span: Span, f: &g::FieldExp, ready: &mut ExpResults) -> Result<FExp, String> {
     match f {
         // Annahme: erstes Element ist der Feld-Designator (Id), zweites
         // der Wert (siehe ADAPTER.md).
@@ -877,7 +878,7 @@ fn conv_fexp_field(c: &mut Ctx, span: Span, f: &g::FieldExp) -> Result<FExp, Str
                 id: c.ids.fresh(),
                 span,
                 field: c.name(span, n),
-                value: conv_exp(c, span, value)?,
+                value: take_exp(ready, value)?,
             })
         }
         // Punning `f` = `{ f = f }` (Desugar, dokumentiert).
@@ -896,20 +897,21 @@ fn conv_fexp_field(c: &mut Ctx, span: Span, f: &g::FieldExp) -> Result<FExp, Str
     }
 }
 
-fn conv_patexp(c: &mut Ctx, span: Span, p: &g::PatExp) -> Result<PExp, String> {
+fn conv_patexp(c: &mut Ctx, span: Span, mut p: &g::PatExp, mut ready: Option<&mut ExpResults>) -> Result<PExp, String> {
+    while let g::PatExp::Attr(_, inner) = p { p = inner; }
     let kind = match p {
         // Annahme: Tupel-Reihenfolge ist (Muster, Rumpf) bzw.
         // (Muster, Guard, Rumpf) (siehe ADAPTER.md).
         g::PatExp::Exp(q, body) => PExpKind::PatExp {
             pat: conv_pat(c, span, q)?,
-            body: conv_exp(c, span, body)?,
+            body: match &mut ready { Some(ready) => take_exp(ready, body)?, None => conv_exp(c, span, body)? },
         },
         g::PatExp::When(q, guard, body) => PExpKind::PatWhen {
             pat: conv_pat(c, span, q)?,
-            guard: conv_exp(c, span, guard)?,
-            body: conv_exp(c, span, body)?,
+            guard: match &mut ready { Some(ready) => take_exp(ready, guard)?, None => conv_exp(c, span, guard)? },
+            body: match &mut ready { Some(ready) => take_exp(ready, body)?, None => conv_exp(c, span, body)? },
         },
-        g::PatExp::Attr(_, inner) => return conv_patexp(c, span, inner),
+        g::PatExp::Attr(..) => unreachable!(),
     };
     Ok(PExp {
         id: c.ids.fresh(),
@@ -919,42 +921,177 @@ fn conv_patexp(c: &mut Ctx, span: Span, p: &g::PatExp) -> Result<PExp, String> {
 }
 
 fn folded_exp(c: &mut Ctx, span: Span, tree: &Folded<&g::Exp>) -> Result<Exp, String> {
-    let kind = match tree {
-        Folded::Leaf(exp) => return conv_exp(c, span, exp),
-        Folded::Prefix { op, arg } => ExpKind::App {
-            func: c.name(span, op), args: vec![folded_exp(c, span, arg)?],
-        },
-        Folded::Infix { op, lhs, rhs } => {
-            let lhs = folded_exp(c, span, lhs)?;
-            let rhs = folded_exp(c, span, rhs)?;
-            match op.as_str() {
-                "@" => ExpKind::VectorAppend(Box::new(lhs), Box::new(rhs)),
-                "::" => ExpKind::Cons(Box::new(lhs), Box::new(rhs)),
-                _ => ExpKind::App { func: c.name(span, op), args: vec![lhs, rhs] },
-            }
-        }
-    };
-    Ok(c.node(span, kind))
+    folded_exp_ready(c, span, tree, None)
 }
 
-fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
+fn folded_exp_ready(c: &mut Ctx, span: Span, tree: &Folded<&g::Exp>, mut ready: Option<&mut ExpResults>) -> Result<Exp, String> {
+    let mut pending = vec![(tree, false)];
+    let mut values = Vec::new();
+    while let Some((tree, finish)) = pending.pop() {
+        if !finish {
+            match tree {
+                Folded::Leaf(exp) => values.push(match &mut ready {
+                    Some(ready) => take_exp(ready, exp)?, None => conv_exp(c, span, exp)?,
+                }),
+                Folded::Prefix { arg, .. } => {
+                    pending.push((tree, true)); pending.push((arg, false));
+                }
+                Folded::Infix { lhs, rhs, .. } => {
+                    pending.push((tree, true)); pending.push((rhs, false)); pending.push((lhs, false));
+                }
+            }
+        } else {
+            let kind = match tree {
+                Folded::Prefix { op, .. } => ExpKind::App {
+                    func: c.name(span, op), args: vec![values.pop().expect("prefix operand")],
+                },
+                Folded::Infix { op, .. } => {
+                    let rhs = values.pop().expect("right operand");
+                    let lhs = values.pop().expect("left operand");
+                    match op.as_str() {
+                        "@" => ExpKind::VectorAppend(Box::new(lhs), Box::new(rhs)),
+                        "::" => ExpKind::Cons(Box::new(lhs), Box::new(rhs)),
+                        _ => ExpKind::App { func: c.name(span, op), args: vec![lhs, rhs] },
+                    }
+                }
+                Folded::Leaf(_) => unreachable!(),
+            };
+            values.push(c.node(span, kind));
+        }
+    }
+    Ok(values.pop().expect("nonempty infix expression"))
+}
+
+fn drop_folded<T>(tree: Folded<T>) {
+    let mut pending = vec![tree];
+    while let Some(tree) = pending.pop() {
+        match tree {
+            Folded::Leaf(_) => {}
+            Folded::Prefix { arg, .. } => pending.push(*arg),
+            Folded::Infix { lhs, rhs, .. } => { pending.push(*lhs); pending.push(*rhs); }
+        }
+    }
+}
+
+// Node addresses are local lookup keys only, never persisted or iterated for
+// output order. Each expression child is moved exactly once into its parent.
+type ExpResults = std::collections::HashMap<*const g::Exp, Exp>;
+
+fn take_exp(ready: &mut ExpResults, exp: &g::Exp) -> Result<Exp, String> {
+    ready.remove(&(exp as *const g::Exp))
+        .ok_or_else(|| "internal error: missing postorder expression child".into())
+}
+
+/// Enumerate only expression children consumed by finish_exp. Assignment
+/// targets are handled as l-values, except whole setter applications.
+fn expression_children<'a>(exp: &'a g::Exp, children: &mut Vec<&'a g::Exp>) {
+    use g::Exp as E;
+    match exp {
+        E::Id(_) | E::Ref(_) | E::Lit(_) | E::Undef | E::Config(_)
+        | E::Sizeof(_) | E::Constraint(_) => {}
+        E::Exit(x) | E::Return(x) | E::Throw(x) | E::InternalReturn(x)
+        | E::InternalAssume(_, x) | E::Attr(_, x) => children.push(x),
+        E::Assert(x, y) | E::Let(_, x, y) | E::InternalPlet(_, x, y)
+        | E::Var(_, x, y) => { children.push(x); children.push(y); }
+        E::Assign(x, y) => {
+            if let Some(call) = assignment_call(x) { children.push(call); }
+            children.push(y);
+        }
+        E::If(x, y, z) => { children.push(x); children.push(y); children.push(z); }
+        E::App(_, items) | E::Block(items) | E::Vector(items) | E::List(items)
+        | E::Tuple(items) => children.extend(items),
+        E::Infix(chain) => {
+            children.push(&chain.head);
+            children.extend(chain.tail.iter().map(|(_, _, rhs)| rhs));
+        }
+        E::Suffix(head, suffixes) => {
+            children.push(head);
+            for suffix in suffixes {
+                match suffix {
+                    g::ExpSuffix::Field(_) | g::ExpSuffix::TypAnnot(_) => {}
+                    g::ExpSuffix::Index(x) => children.push(x),
+                    g::ExpSuffix::Subrange(x, y) | g::ExpSuffix::Slice(x, y) => {
+                        children.push(x); children.push(y);
+                    }
+                    g::ExpSuffix::Call(_, args) => children.extend(args),
+                }
+            }
+        }
+        E::Match(x, arms) | E::Try(x, arms) => {
+            children.push(x);
+            for arm in arms {
+                let mut arm = arm;
+                while let g::PatExp::Attr(_, inner) = arm { arm = inner; }
+                match arm {
+                    g::PatExp::Exp(_, body) => children.push(body),
+                    g::PatExp::When(_, guard, body) => { children.push(guard); children.push(body); }
+                    g::PatExp::Attr(..) => unreachable!(),
+                }
+            }
+        }
+        E::For(head, body) => {
+            if let Some(step) = &head.step { children.push(step); }
+            children.push(&head.from); children.push(&head.to); children.push(body);
+        }
+        E::Loop(_, measure, condition, body) => {
+            if let g::Measure::Some(x) = measure { children.push(x); }
+            children.push(condition); children.push(body);
+        }
+        E::Struct(_, fields) | E::StructUpdate(_, fields) => {
+            if let E::StructUpdate(x, _) = exp { children.push(x); }
+            for field in fields {
+                if let g::FieldExp::Field(_, value) = field { children.push(value); }
+            }
+        }
+        E::VectorUpdate(head, updates) => {
+            children.push(head);
+            for update in updates {
+                match update {
+                    g::VectorUpdate::Single(index, value) => { children.push(index); children.push(value); }
+                    g::VectorUpdate::Range(lo, hi, value) => { children.push(lo); children.push(hi); children.push(value); }
+                }
+            }
+        }
+    }
+}
+
+fn conv_exp(c: &mut Ctx, span: Span, root: &g::Exp) -> Result<Exp, String> {
+    let mut pending = vec![(root, false)];
+    let mut ready = ExpResults::new();
+    let mut children = Vec::new();
+    while let Some((exp, finish)) = pending.pop() {
+        if finish {
+            let converted = finish_exp(c, span, exp, &mut ready)?;
+            ready.insert(exp as *const g::Exp, converted);
+        } else {
+            pending.push((exp, true));
+            expression_children(exp, &mut children);
+            pending.extend(children.drain(..).rev().map(|child| (child, false)));
+        }
+    }
+    let result = take_exp(&mut ready, root)?;
+    debug_assert!(ready.is_empty(), "postorder conversion left unused children");
+    Ok(result)
+}
+
+fn finish_exp(c: &mut Ctx, span: Span, e: &g::Exp, ready: &mut ExpResults) -> Result<Exp, String> {
     let kind = match e {
         g::Exp::Id(s) => ExpKind::Id(c.name(span, s)),
         g::Exp::Ref(s) => ExpKind::Ref(c.name(span, s)),
         g::Exp::Lit(l) => ExpKind::Lit(c.lit(span, l)),
         g::Exp::Undef => ExpKind::Undef,
         g::Exp::Config(k) => ExpKind::Config(vec![k.clone()]),
-        g::Exp::Exit(x) => ExpKind::Exit(Box::new(conv_exp(c, span, x)?)),
+        g::Exp::Exit(x) => ExpKind::Exit(Box::new(take_exp(ready, x)?)),
         g::Exp::Sizeof(t) => ExpKind::Sizeof(conv_nexp(c, span, t)?),
         g::Exp::Constraint(t) => ExpKind::Constraint(conv_constraint(c, span, t)?),
         g::Exp::Assert(x, y) => ExpKind::Assert {
-            cond: Box::new(conv_exp(c, span, x)?),
-            msg: Box::new(conv_exp(c, span, y)?),
+            cond: Box::new(take_exp(ready, x)?),
+            msg: Box::new(take_exp(ready, y)?),
         },
         g::Exp::App(f, args) => {
             let mut cargs = Vec::with_capacity(args.len());
             for a in args {
-                cargs.push(conv_exp(c, span, a)?);
+                cargs.push(take_exp(ready, a)?);
             }
             ExpKind::App {
                 func: c.name(span, f),
@@ -962,7 +1099,7 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
             }
         }
         g::Exp::Suffix(head, sufs) => {
-            let mut acc = conv_exp(c, span, head)?;
+            let mut acc = take_exp(ready, head)?;
             for suf in sufs {
                 let next = match suf {
                     g::ExpSuffix::Field(f) => ExpKind::Field {
@@ -975,16 +1112,16 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
                     },
                     g::ExpSuffix::Index(index) => ExpKind::App {
                         func: c.name(span, "vector_access#"),
-                        args: vec![acc, conv_exp(c, span, index)?],
+                        args: vec![acc, take_exp(ready, index)?],
                     },
                     g::ExpSuffix::Subrange(lo, hi) | g::ExpSuffix::Slice(lo, hi) => ExpKind::App {
                         func: c.name(span, if matches!(suf, g::ExpSuffix::Slice(..)) { "slice" } else { "vector_subrange#" }),
-                        args: vec![acc, conv_exp(c, span, lo)?, conv_exp(c, span, hi)?],
+                        args: vec![acc, take_exp(ready, lo)?, take_exp(ready, hi)?],
                     },
                     g::ExpSuffix::Call(name, args) => {
                         let mut actual = Vec::with_capacity(args.len() + 1);
                         actual.push(acc);
-                        for arg in args { actual.push(conv_exp(c, span, arg)?); }
+                        for arg in args { actual.push(take_exp(ready, arg)?); }
                         ExpKind::App { func: c.name(span, &format!("_mod_{name}")), args: actual }
                     }
                 };
@@ -994,7 +1131,7 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
         }
         g::Exp::Assign(x, y) => {
             if let Some(call) = assignment_call(x) {
-                let application = conv_exp(c, span, call)?;
+                let application = take_exp(ready, call)?;
                 let ExpKind::App { func, mut args } = application.kind else {
                     return Err("setter target must be a function application".into());
                 };
@@ -1008,7 +1145,7 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
                         _ => args.push(only),
                     }
                 }
-                args.push(conv_exp(c, span, y)?);
+                args.push(take_exp(ready, y)?);
                 let mut setter = c.node(span, ExpKind::App { func, args });
                 setter.annotation_mut().attributes.push(sail_ast::Attribute {
                     name: "setter".into(), data: None,
@@ -1017,50 +1154,50 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
             }
             ExpKind::Assign {
                 lexp: Box::new(exp_to_lexp(c, span, x)?),
-                value: Box::new(conv_exp(c, span, y)?),
+                value: Box::new(take_exp(ready, y)?),
             }
         },
         g::Exp::Let(q, x, y) => ExpKind::Let {
             pat: conv_pat(c, span, q)?,
-            bind: Box::new(conv_exp(c, span, x)?),
-            body: Box::new(conv_exp(c, span, y)?),
+            bind: Box::new(take_exp(ready, x)?),
+            body: Box::new(take_exp(ready, y)?),
         },
         g::Exp::Var(x, y, z) => ExpKind::Var {
             lexp: Box::new(exp_to_lexp(c, span, x)?),
-            init: Box::new(conv_exp(c, span, y)?),
-            body: Box::new(conv_exp(c, span, z)?),
+            init: Box::new(take_exp(ready, y)?),
+            body: Box::new(take_exp(ready, z)?),
         },
         g::Exp::Block(es) => {
             let mut ces = Vec::with_capacity(es.len());
             for x in es {
-                ces.push(conv_exp(c, span, x)?);
+                ces.push(take_exp(ready, x)?);
             }
             ExpKind::Block(ces)
         }
-        g::Exp::Return(x) => ExpKind::Return(Box::new(conv_exp(c, span, x)?)),
-        g::Exp::Throw(x) => ExpKind::Throw(Box::new(conv_exp(c, span, x)?)),
+        g::Exp::Return(x) => ExpKind::Return(Box::new(take_exp(ready, x)?)),
+        g::Exp::Throw(x) => ExpKind::Throw(Box::new(take_exp(ready, x)?)),
         g::Exp::If(x, y, z) => ExpKind::If {
-            cond: Box::new(conv_exp(c, span, x)?),
-            then_branch: Box::new(conv_exp(c, span, y)?),
-            else_branch: Box::new(conv_exp(c, span, z)?),
+            cond: Box::new(take_exp(ready, x)?),
+            then_branch: Box::new(take_exp(ready, y)?),
+            else_branch: Box::new(take_exp(ready, z)?),
         },
         g::Exp::Match(x, arms) => {
             let mut carms = Vec::with_capacity(arms.len());
             for a in arms {
-                carms.push(conv_patexp(c, span, a)?);
+                carms.push(conv_patexp(c, span, a, Some(ready))?);
             }
             ExpKind::Match {
-                scrutinee: Box::new(conv_exp(c, span, x)?),
+                scrutinee: Box::new(take_exp(ready, x)?),
                 arms: carms,
             }
         }
         g::Exp::Try(x, arms) => {
             let mut carms = Vec::with_capacity(arms.len());
             for a in arms {
-                carms.push(conv_patexp(c, span, a)?);
+                carms.push(conv_patexp(c, span, a, Some(ready))?);
             }
             ExpKind::Try {
-                exp: Box::new(conv_exp(c, span, x)?),
+                exp: Box::new(take_exp(ready, x)?),
                 arms: carms,
             }
         }
@@ -1072,7 +1209,7 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
                     let lit = c.node(span, LitKind::Num(one));
                     c.node(span, ExpKind::Lit(lit))
                 }
-                Some(s) => conv_exp(c, span, s)?,
+                Some(s) => take_exp(ready, s)?,
             };
             let order = match &head.order {
                 // The surface `to`/`downto` determines the implicit order.
@@ -1083,11 +1220,11 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
             };
             ExpKind::For {
                 var: c.name(span, &head.var),
-                from: Box::new(conv_exp(c, span, &head.from)?),
-                to: Box::new(conv_exp(c, span, &head.to)?),
+                from: Box::new(take_exp(ready, &head.from)?),
+                to: Box::new(take_exp(ready, &head.to)?),
                 step: Box::new(step),
                 order,
-                body: Box::new(conv_exp(c, span, body)?),
+                body: Box::new(take_exp(ready, body)?),
             }
         }
         g::Exp::Loop(lk, m, cond, body) => ExpKind::Loop {
@@ -1097,14 +1234,16 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
             },
             measure: match m {
                 g::Measure::None => None,
-                g::Measure::Some(x) => Some(Box::new(conv_exp(c, span, x)?)),
+                g::Measure::Some(x) => Some(Box::new(take_exp(ready, x)?)),
             },
-            cond: Box::new(conv_exp(c, span, cond)?),
-            body: Box::new(conv_exp(c, span, body)?),
+            cond: Box::new(take_exp(ready, cond)?),
+            body: Box::new(take_exp(ready, body)?),
         },
         g::Exp::Infix(chain) => {
             let folded = fold_chain_borrowed(chain, Side::Exp, c.fixities)?;
-            return folded_exp(c, span, &folded);
+            let result = folded_exp_ready(c, span, &folded, Some(ready));
+            drop_folded(folded);
+            return result;
         }
         g::Exp::Struct(name, fields) => {
             let name = match name {
@@ -1113,35 +1252,35 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
             };
             let mut cfields = Vec::with_capacity(fields.len());
             for f in fields {
-                cfields.push(conv_fexp_field(c, span, f)?);
+                cfields.push(conv_fexp_field(c, span, f, ready)?);
             }
             ExpKind::Struct { name, fields: cfields }
         }
         g::Exp::StructUpdate(x, fields) => {
             let mut cfields = Vec::with_capacity(fields.len());
             for f in fields {
-                cfields.push(conv_fexp_field(c, span, f)?);
+                cfields.push(conv_fexp_field(c, span, f, ready)?);
             }
             ExpKind::StructUpdate {
-                record: Box::new(conv_exp(c, span, x)?),
+                record: Box::new(take_exp(ready, x)?),
                 fields: cfields,
             }
         }
         g::Exp::Vector(es) => {
             let mut ces = Vec::with_capacity(es.len());
             for x in es {
-                ces.push(conv_exp(c, span, x)?);
+                ces.push(take_exp(ready, x)?);
             }
             ExpKind::Vector(ces)
         }
         g::Exp::VectorUpdate(head, updates) => {
-            let mut acc = conv_exp(c, span, head)?;
+            let mut acc = take_exp(ready, head)?;
             for update in updates {
                 let (name, args) = match update {
                     g::VectorUpdate::Single(index, value) => ("vector_update#",
-                        vec![acc, conv_exp(c, span, index)?, conv_exp(c, span, value)?]),
+                        vec![acc, take_exp(ready, index)?, take_exp(ready, value)?]),
                     g::VectorUpdate::Range(lo, hi, value) => ("vector_update_subrange#",
-                        vec![acc, conv_exp(c, span, lo)?, conv_exp(c, span, hi)?, conv_exp(c, span, value)?]),
+                        vec![acc, take_exp(ready, lo)?, take_exp(ready, hi)?, take_exp(ready, value)?]),
                 };
                 let func = c.name(span, name);
                 acc = c.node(span, ExpKind::App { func, args });
@@ -1151,30 +1290,30 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
         g::Exp::List(es) => {
             let mut ces = Vec::with_capacity(es.len());
             for x in es {
-                ces.push(conv_exp(c, span, x)?);
+                ces.push(take_exp(ready, x)?);
             }
             ExpKind::List(ces)
         }
         g::Exp::Tuple(es) => {
             let mut ces = Vec::with_capacity(es.len());
             for x in es {
-                ces.push(conv_exp(c, span, x)?);
+                ces.push(take_exp(ready, x)?);
             }
             ExpKind::Tuple(ces)
         }
         g::Exp::InternalPlet(q, x, y) => ExpKind::InternalPlet {
             pat: conv_pat(c, span, q)?,
-            bind: Box::new(conv_exp(c, span, x)?),
-            body: Box::new(conv_exp(c, span, y)?),
+            bind: Box::new(take_exp(ready, x)?),
+            body: Box::new(take_exp(ready, y)?),
         },
-        g::Exp::InternalReturn(x) => ExpKind::InternalReturn(Box::new(conv_exp(c, span, x)?)),
+        g::Exp::InternalReturn(x) => ExpKind::InternalReturn(Box::new(take_exp(ready, x)?)),
         g::Exp::InternalAssume(t, x) => ExpKind::InternalAssume {
             constraint: conv_constraint(c, span, t)?,
-            exp: Box::new(conv_exp(c, span, x)?),
+            exp: Box::new(take_exp(ready, x)?),
         },
-        // Attribute haben im Core keinen Ausdruck-Slot → Hülle entfällt.
+        // Retain source attributes on the converted child.
         g::Exp::Attr(attrs, x) => {
-            let mut exp = conv_exp(c, span, x)?;
+            let mut exp = take_exp(ready, x)?;
             exp.annotation_mut().attributes.splice(0..0, attributes(attrs));
             return Ok(exp);
         },
@@ -1271,7 +1410,7 @@ fn conv_mapcl(c: &mut Ctx, span: Span, m: &g::MapCl) -> Result<Mapcl, String> {
             };
             MapclKind::Bidir { forwards: side(fwd)?, backwards: side(bwd)? }
         }
-        g::MapCl::Forwards(p) => MapclKind::Forwards(conv_patexp(c, span, p)?),
+        g::MapCl::Forwards(p) => MapclKind::Forwards(conv_patexp(c, span, p, None)?),
         g::MapCl::ForwardsDeprecated(mp, body) => {
             let (pat, guard) = conv_mpexp_parts(c, span, mp)?;
             let body = conv_exp(c, span, body)?;
@@ -1284,7 +1423,7 @@ fn conv_mapcl(c: &mut Ctx, span: Span, m: &g::MapCl) -> Result<Mapcl, String> {
                 },
             })
         }
-        g::MapCl::Backwards(p) => MapclKind::Backwards(conv_patexp(c, span, p)?),
+        g::MapCl::Backwards(p) => MapclKind::Backwards(conv_patexp(c, span, p, None)?),
         g::MapCl::When(inner, guard) => {
             let guard = conv_exp(c, span, guard)?;
             let inner = conv_mapcl(c, span, inner)?;

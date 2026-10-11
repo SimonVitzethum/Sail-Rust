@@ -394,6 +394,20 @@ fn constructor_arguments_use_bound_kinds_and_inference_respects_shadowing() {
 }
 
 #[test]
+fn large_arm_impdef_converts_on_the_default_thread_stack() {
+    // Unmodified ARMv9.4 ImpDefBool with its original license. The recursive
+    // converter overflowed Rust's default 2 MiB worker stack on this body.
+    let source = fixture("arm-impdef-bool.sail");
+    let start = source.find("function ImpDefBool").unwrap();
+    let mut parser = RealParser::new();
+    parser.parse_def("infixl 4 ++", sail_ast::Span::DUMMY).unwrap();
+    let out = parser.parse_def(&source[start..], sail_ast::Span::DUMMY).unwrap();
+    assert!(matches!(&out.kind, DefKind::Fundef { funcls, .. } if funcls.len() == 1));
+    let encoded = serde_json::to_vec(&out).unwrap();
+    assert!(encoded.len() > source.len());
+}
+
+#[test]
 fn setter_assignments_append_rhs_once_and_keep_ocaml_argument_shapes() {
     for (source, name, arity) in [
         ("_R(n) = compute()", "_R", 2),

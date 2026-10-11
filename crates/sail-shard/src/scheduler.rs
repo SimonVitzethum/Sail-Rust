@@ -115,17 +115,17 @@ impl Scheduler {
         let f = Arc::new(f);
         thread::scope(|s| {
             // Worker: ziehen Jobs, bis der Kanal geschlossen ist.
-            for _ in 0..workers {
+            for worker in 0..workers {
                 let rx = work_rx.clone();
                 let tx = res_tx.clone();
                 let f = Arc::clone(&f);
-                s.spawn(move || {
+                thread::Builder::new().name(format!("sail-worker-{worker}")).spawn_scoped(s, move || {
                     for (i, item) in rx {
                         let out = f(item);
                         // Send-Fehler nur, wenn der Empfaenger weg ist (Panic-Pfad).
                         let _ = tx.send((i, out));
                     }
-                });
+                }).expect("cannot spawn scheduler worker");
             }
             drop(res_tx);
             drop(work_rx);
@@ -135,11 +135,11 @@ impl Scheduler {
             // Ergebnisse konsumiert. Produzieren und Konsumieren laufen also
             // nebenlaeufig; zusammen mit dem unbegrenzten Ergebniskanal kann
             // nichts verklemmen.
-            s.spawn(move || {
+            thread::Builder::new().name("sail-ingress".into()).spawn_scoped(s, move || {
                 for (i, item) in items.into_iter().enumerate() {
                     work_tx.send((i, item)).expect("worker alive");
                 }
-            });
+            }).expect("cannot spawn scheduler ingress");
 
             // Konsument: exakt n Ergebnisse einsammeln.
             let mut out = Vec::with_capacity(n);
@@ -204,10 +204,10 @@ impl Scheduler {
                 credit_tx.send(()).expect("credit receiver alive");
             }
             let f = &f;
-            for _ in 0..workers {
+            for worker in 0..workers {
                 let rx = work_rx.clone();
                 let tx = res_tx.clone();
-                scope.spawn(move || {
+                thread::Builder::new().name(format!("sail-worker-{worker}")).spawn_scoped(scope, move || {
                     for (order, item) in rx {
                         let result = catch_unwind(AssertUnwindSafe(|| f(item)));
                         let failed = result.is_err();
@@ -215,11 +215,11 @@ impl Scheduler {
                             break;
                         }
                     }
-                });
+                }).expect("cannot spawn scheduler worker");
             }
             drop(work_rx);
             drop(res_tx);
-            scope.spawn(move || {
+            thread::Builder::new().name("sail-ingress".into()).spawn_scoped(scope, move || {
                 let mut items = items.enumerate();
                 // Acquire BEFORE next(): lazy loading must also fit the window.
                 while credit_rx.recv().is_ok() {
@@ -228,7 +228,7 @@ impl Scheduler {
                         break;
                     }
                 }
-            });
+            }).expect("cannot spawn scheduler ingress");
 
             let mut next = 0;
             let mut pending = BTreeMap::new();
