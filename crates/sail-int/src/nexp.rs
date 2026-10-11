@@ -113,7 +113,8 @@ pub fn provably_nneg_in(e: &NExp, facts: &Facts) -> bool {
                 || (provably_nonpos_in(a, facts) && provably_nonpos_in(b, facts))
         }
         NExp::Neg(a) => provably_nonpos_in(a, facts),
-        NExp::Abs(_) | NExp::Pow2(_) => true,
+        NExp::Abs(_) => true,
+        NExp::Pow2(exponent) => provably_nneg_in(exponent, facts),
         NExp::Div(a, b) => provably_nneg_in(a, facts) && provably_pos_in(b, facts),
         // Remainder sign is backend-specific; stay conservative.
         NExp::Mod(_, _) => false,
@@ -145,7 +146,7 @@ pub fn provably_pos_in(e: &NExp, facts: &Facts) -> bool {
                 || (provably_nneg_in(a, facts) && provably_pos_in(b, facts))
         }
         NExp::Abs(a) => provably_pos_in(a, facts) || provably_neg_in(a, facts),
-        NExp::Pow2(_) => true,
+        NExp::Pow2(exponent) => provably_nneg_in(exponent, facts),
         _ => false,
     }
 }
@@ -185,7 +186,9 @@ mod tests {
     #[test]
     fn shapes() {
         assert!(provably_nneg(&NExp::abs(NExp::var("n"))));
-        assert!(provably_nneg(&NExp::Pow2(Box::new(NExp::var("n")))));
+        assert!(!provably_nneg(&NExp::Pow2(Box::new(NExp::var("n")))));
+        assert!(provably_nneg(&NExp::Pow2(Box::new(NExp::Constant(4)))));
+        assert!(!provably_nneg(&NExp::Pow2(Box::new(NExp::Constant(-1)))));
         assert!(provably_nneg(&NExp::negated(NExp::Constant(-3))));
         assert!(!provably_nneg(&NExp::negated(NExp::Constant(3))));
         assert!(!provably_nneg(&NExp::Sub(

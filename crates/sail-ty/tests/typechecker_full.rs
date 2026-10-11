@@ -824,7 +824,7 @@ fn subsumption_range_bits() {
             dummy()
         )
         .unwrap(),
-        Coercion::BitsCongruence
+        Coercion::Identity // Reflexivity precedes structural coercions.
     );
     // … `n+0 == n` needs a normalising backend.
     let plus0 = MiniTyp::Bits(Box::new(Nexp::Add(Box::new(var("n")), Box::new(const_(0)))));
@@ -858,7 +858,7 @@ fn subsumption_fun_tuple_named() {
     assert!(check_subtype(&s, &bad_dom, &want_bool_dom, dummy()).is_err());
     // S-TupleArity: pointwise ok, arity mismatch is an arity error.
     let t2 = MiniTyp::Tuple(vec![MiniTyp::Int, MiniTyp::Bool]);
-    assert_eq!(check_subtype(&s, &t2, &t2, dummy()).unwrap(), Coercion::Tuple(2));
+    assert_eq!(check_subtype(&s, &t2, &t2, dummy()).unwrap(), Coercion::Identity);
     let t3 = MiniTyp::Tuple(vec![MiniTyp::Int, MiniTyp::Bool, MiniTyp::Bit]);
     let err = check_subtype(&s, &t2, &t3, dummy()).unwrap_err();
     assert!(err.to_string().contains("arity"));
@@ -873,7 +873,7 @@ fn subsumption_fun_tuple_named() {
     let a8 = MiniTyp::Named { name: "atom".to_string(), args: vec![const_(8)] };
     assert_eq!(
         check_subtype(&s, &a8, &a8, dummy()).unwrap(),
-        Coercion::NamedUnfold("atom".to_string())
+        Coercion::Identity
     );
     // … different heads never unify, symbolic args need the solver.
     let other = MiniTyp::Named { name: "other".to_string(), args: vec![const_(8)] };

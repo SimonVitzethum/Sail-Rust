@@ -46,7 +46,7 @@ fn closed_shapes_agree() {
         (
             IntExp::Pow2(Box::new(IntExp::var("n"))),
             NExp::Exp(Box::new(NExp::Var(n))),
-            "Nat",
+            "Int",
         ),
         (
             IntExp::negated(IntExp::Constant(1)),

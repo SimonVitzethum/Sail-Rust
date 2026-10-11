@@ -24,6 +24,27 @@ use std::borrow::Cow;
 
 use crate::expr::{NConstraint, NExp, NTyp, TypArg};
 
+// Borrowing a descendant is still a rewrite (`x + 0` borrows `x`). Only
+// borrowing the original child permits reuse of the parent. Pointer identity
+// makes this check constant-time, preserving the no-clone fast path.
+fn unchanged<T: Clone>(original: &T, result: &Cow<'_, T>) -> bool {
+    matches!(result, Cow::Borrowed(value) if std::ptr::eq(original, *value))
+}
+
+fn unchanged_exp_pair(original: &NExp, a: &Cow<'_, NExp>, b: &Cow<'_, NExp>) -> bool {
+    match original {
+        NExp::Sum(x, y) | NExp::Minus(x, y) | NExp::Times(x, y) => unchanged(x.as_ref(), a) && unchanged(y.as_ref(), b),
+        _ => unreachable!("binary numeric expression"),
+    }
+}
+
+fn unchanged_constraint_pair(original: &NConstraint, a: &Cow<'_, NConstraint>, b: &Cow<'_, NConstraint>) -> bool {
+    match original {
+        NConstraint::And(x, y) | NConstraint::Or(x, y) => unchanged(x.as_ref(), a) && unchanged(y.as_ref(), b),
+        _ => unreachable!("binary constraint"),
+    }
+}
+
 /// One rewrite pass over an [`NExp`].
 pub fn simplify(e: &NExp) -> NExp {
     simplify_cow(e).into_owned()
@@ -43,7 +64,7 @@ pub fn simplify_cow(e: &NExp) -> Cow<'_, NExp> {
         NExp::Id(_) | NExp::Var(_) | NExp::Constant(_) => Cow::Borrowed(e),
         NExp::App(f, args) => {
             let simp: Vec<Cow<'_, NExp>> = args.iter().map(simplify_cow).collect();
-            if simp.iter().all(|c| matches!(c, Cow::Borrowed(_))) && !app_folds(f, args) {
+            if args.iter().zip(&simp).all(|(original, result)| unchanged(original, result)) && !app_folds(f, args) {
                 Cow::Borrowed(e)
             } else {
                 Cow::Owned(simplify_app(
@@ -55,9 +76,9 @@ pub fn simplify_cow(e: &NExp) -> Cow<'_, NExp> {
         NExp::If(c, t, b) => {
             let (cc, tc, bc) =
                 (simplify_constraint_cow(c), simplify_cow(t), simplify_cow(b));
-            let all_borrowed = matches!(cc, Cow::Borrowed(_))
-                && matches!(tc, Cow::Borrowed(_))
-                && matches!(bc, Cow::Borrowed(_));
+            let all_borrowed = unchanged(c.as_ref(), &cc)
+                && unchanged(t.as_ref(), &tc)
+                && unchanged(b.as_ref(), &bc);
             if all_borrowed {
                 // Children untouched: only the `True`/`False` rules can
                 // still fire (checked on refs, no allocation). There is
@@ -158,7 +179,7 @@ fn sum_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a, N
             | (_, NExp::Neg(_))
             | (NExp::Neg(_), _)
     );
-    let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
+    let unchanged = unchanged_exp_pair(orig, &a, &b);
     if take_b {
         return b;
     }
@@ -216,7 +237,7 @@ fn minus_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a,
         _ if is_zero(a.as_ref()) => true,
         _ => false,
     };
-    let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
+    let unchanged = unchanged_exp_pair(orig, &a, &b);
     if take_a {
         return a;
     }
@@ -264,7 +285,7 @@ fn times_join<'a>(orig: &'a NExp, a: Cow<'a, NExp>, b: Cow<'a, NExp>) -> Cow<'a,
             | (_, NExp::Constant(-1))
             | (NExp::Neg(_), NExp::Neg(_))
     );
-    let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
+    let unchanged = unchanged_exp_pair(orig, &a, &b);
     if take_b {
         return b;
     }
@@ -301,6 +322,8 @@ fn neg_owned(x: NExp) -> NExp {
 /// box. Folds that need owned values materialize this node only (one
 /// clone); the old code rebuilt the whole spine instead.
 fn neg_join<'a>(orig: &'a NExp, x: Cow<'a, NExp>) -> Cow<'a, NExp> {
+    let NExp::Neg(child) = orig else { unreachable!() };
+    let x = if unchanged(child.as_ref(), &x) { x } else { Cow::Owned(x.into_owned()) };
     match x {
         Cow::Borrowed(xr) => match xr {
             NExp::Neg(y) => Cow::Borrowed(y),
@@ -319,6 +342,8 @@ fn neg_join<'a>(orig: &'a NExp, x: Cow<'a, NExp>) -> Cow<'a, NExp> {
 
 /// Join an already-simplified `exp` child (see [`sum_join`]).
 fn exp_join<'a>(orig: &'a NExp, x: Cow<'a, NExp>) -> Cow<'a, NExp> {
+    let NExp::Exp(child) = orig else { unreachable!() };
+    let x = if unchanged(child.as_ref(), &x) { x } else { Cow::Owned(x.into_owned()) };
     match x {
         Cow::Borrowed(xr) => match xr {
             NExp::Constant(0) => Cow::Owned(NExp::Constant(1)),
@@ -493,7 +518,7 @@ pub fn simplify_constraint_cow(c: &NConstraint) -> Cow<'_, NConstraint> {
             // `constraint_simp` folds `NC_set` only against constants,
             // and with an undefined member it would turn `None` into
             // `Some(false)`.
-            if matches!(rn, Cow::Borrowed(_)) && is_sorted_dedup(vs) {
+            if unchanged(n.as_ref(), &rn) && is_sorted_dedup(vs) {
                 // Unchanged child and an already-canonical set: also spares
                 // the `vs.clone()` the old pass did unconditionally.
                 Cow::Borrowed(c)
@@ -507,7 +532,7 @@ pub fn simplify_constraint_cow(c: &NConstraint) -> Cow<'_, NConstraint> {
         NConstraint::App(f, args) => {
             // Uninterpreted: only simplify the arguments, never fold.
             let simp: Vec<Cow<'_, TypArg>> = args.iter().map(simplify_typarg_cow).collect();
-            if simp.iter().all(|x| matches!(x, Cow::Borrowed(_))) {
+            if args.iter().zip(&simp).all(|(original, result)| unchanged(original, result)) {
                 Cow::Borrowed(c)
             } else {
                 Cow::Owned(NConstraint::App(
@@ -532,7 +557,8 @@ pub fn simplify_constraint_cow(c: &NConstraint) -> Cow<'_, NConstraint> {
                     NConstraint::False => Cow::Owned(NConstraint::True),
                     // `!!y -> y` borrows the inner node.
                     NConstraint::Not(y) => Cow::Borrowed(y),
-                    _ => Cow::Borrowed(c),
+                    _ if std::ptr::eq(x.as_ref(), xr) => Cow::Borrowed(c),
+                    _ => Cow::Owned(NConstraint::Not(Box::new(xr.clone()))),
                 },
                 Cow::Owned(xo) => Cow::Owned(match xo {
                     NConstraint::True => NConstraint::False,
@@ -589,7 +615,11 @@ fn eq_join<'a>(
         // Mixed sorts stay open (see above).
         _ => None,
     };
-    let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
+    let (x, y) = match orig {
+        NConstraint::Equal(x, y) | NConstraint::NotEqual(x, y) => (x, y),
+        _ => unreachable!(),
+    };
+    let unchanged = unchanged(x.as_ref(), &a) && unchanged(y.as_ref(), &b);
     if provably_same {
         return Cow::Owned(if is_equal {
             NConstraint::True
@@ -627,7 +657,7 @@ pub fn simplify_typarg_cow(a: &TypArg) -> Cow<'_, TypArg> {
     match a {
         TypArg::NExp(e) => {
             let r = simplify_cow(e);
-            if matches!(r, Cow::Borrowed(_)) {
+            if unchanged(e, &r) {
                 Cow::Borrowed(a)
             } else {
                 Cow::Owned(TypArg::NExp(r.into_owned()))
@@ -635,7 +665,7 @@ pub fn simplify_typarg_cow(a: &TypArg) -> Cow<'_, TypArg> {
         }
         TypArg::Bool(c) => {
             let r = simplify_constraint_cow(c);
-            if matches!(r, Cow::Borrowed(_)) {
+            if unchanged(c.as_ref(), &r) {
                 Cow::Borrowed(a)
             } else {
                 Cow::Owned(TypArg::Bool(Box::new(r.into_owned())))
@@ -643,7 +673,7 @@ pub fn simplify_typarg_cow(a: &TypArg) -> Cow<'_, TypArg> {
         }
         TypArg::Typ(t) => {
             let r = simplify_typ_cow(t);
-            if matches!(r, Cow::Borrowed(_)) {
+            if unchanged(t, &r) {
                 Cow::Borrowed(a)
             } else {
                 Cow::Owned(TypArg::Typ(r.into_owned()))
@@ -665,8 +695,8 @@ fn simplify_typ_cow(t: &NTyp) -> Cow<'_, NTyp> {
         NTyp::Fn(args, ret) => {
             let simp: Vec<Cow<'_, NTyp>> = args.iter().map(simplify_typ_cow).collect();
             let rret = simplify_typ_cow(ret);
-            if simp.iter().all(|x| matches!(x, Cow::Borrowed(_)))
-                && matches!(rret, Cow::Borrowed(_))
+            if args.iter().zip(&simp).all(|(original, result)| unchanged(original, result))
+                && unchanged(ret.as_ref(), &rret)
             {
                 Cow::Borrowed(t)
             } else {
@@ -678,7 +708,7 @@ fn simplify_typ_cow(t: &NTyp) -> Cow<'_, NTyp> {
         }
         NTyp::Bidir(a, b) => {
             let (ra, rb) = (simplify_typ_cow(a), simplify_typ_cow(b));
-            if matches!(ra, Cow::Borrowed(_)) && matches!(rb, Cow::Borrowed(_)) {
+            if unchanged(a.as_ref(), &ra) && unchanged(b.as_ref(), &rb) {
                 Cow::Borrowed(t)
             } else {
                 Cow::Owned(NTyp::Bidir(
@@ -689,7 +719,7 @@ fn simplify_typ_cow(t: &NTyp) -> Cow<'_, NTyp> {
         }
         NTyp::Tuple(ts) => {
             let simp: Vec<Cow<'_, NTyp>> = ts.iter().map(simplify_typ_cow).collect();
-            if simp.iter().all(|x| matches!(x, Cow::Borrowed(_))) {
+            if ts.iter().zip(&simp).all(|(original, result)| unchanged(original, result)) {
                 Cow::Borrowed(t)
             } else {
                 Cow::Owned(NTyp::Tuple(simp.into_iter().map(Cow::into_owned).collect()))
@@ -698,7 +728,7 @@ fn simplify_typ_cow(t: &NTyp) -> Cow<'_, NTyp> {
         NTyp::App(f, args) => {
             let simp: Vec<Cow<'_, TypArg>> =
                 args.iter().map(simplify_typarg_cow).collect();
-            if simp.iter().all(|x| matches!(x, Cow::Borrowed(_))) {
+            if args.iter().zip(&simp).all(|(original, result)| unchanged(original, result)) {
                 Cow::Borrowed(t)
             } else {
                 Cow::Owned(NTyp::App(
@@ -709,7 +739,7 @@ fn simplify_typ_cow(t: &NTyp) -> Cow<'_, NTyp> {
         }
         NTyp::Exist(binders, c, ty) => {
             let (rc, rt) = (simplify_constraint_cow(c), simplify_typ_cow(ty));
-            if matches!(rc, Cow::Borrowed(_)) && matches!(rt, Cow::Borrowed(_)) {
+            if unchanged(c.as_ref(), &rc) && unchanged(ty.as_ref(), &rt) {
                 Cow::Borrowed(t)
             } else {
                 Cow::Owned(NTyp::Exist(
@@ -814,7 +844,7 @@ fn and_join<'a>(
         Pick::A => a,
         Pick::B => b,
         Pick::Rebuild => {
-            if matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_)) {
+            if unchanged_constraint_pair(orig, &a, &b) {
                 Cow::Borrowed(orig)
             } else {
                 Cow::Owned(and_owned(a.into_owned(), b.into_owned()))
@@ -855,7 +885,7 @@ fn or_join<'a>(
         Pick::A => a,
         Pick::B => b,
         Pick::Rebuild => {
-            if matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_)) {
+            if unchanged_constraint_pair(orig, &a, &b) {
                 Cow::Borrowed(orig)
             } else {
                 Cow::Owned(or_owned(a.into_owned(), b.into_owned()))
@@ -882,7 +912,11 @@ fn cmp_join<'a>(
         (Some(x), Some(y)) => Some(decide(x, y)),
         _ => None,
     };
-    let unchanged = matches!(a, Cow::Borrowed(_)) && matches!(b, Cow::Borrowed(_));
+    let (x, y) = match orig {
+        NConstraint::Ge(x, y) | NConstraint::Gt(x, y) | NConstraint::Le(x, y) | NConstraint::Lt(x, y) => (x, y),
+        _ => unreachable!(),
+    };
+    let unchanged = unchanged(x.as_ref(), &a) && unchanged(y.as_ref(), &b);
     if let Some(v) = decided {
         return Cow::Owned(if v {
             NConstraint::True
@@ -1039,7 +1073,7 @@ fn canonical_cow(e: &NExp) -> Cow<'_, NExp> {
         NExp::Times(_, _) => Cow::Owned(canonical_times(e)),
         NExp::Minus(a, b) => {
             let (ra, rb) = (canonical_cow(a), canonical_cow(b));
-            if matches!(ra, Cow::Borrowed(_)) && matches!(rb, Cow::Borrowed(_)) {
+            if unchanged(a.as_ref(), &ra) && unchanged(b.as_ref(), &rb) {
                 Cow::Borrowed(e)
             } else {
                 Cow::Owned(NExp::Minus(Box::new(ra.into_owned()), Box::new(rb.into_owned())))
@@ -1047,7 +1081,7 @@ fn canonical_cow(e: &NExp) -> Cow<'_, NExp> {
         }
         NExp::Neg(x) => {
             let rx = canonical_cow(x);
-            if matches!(rx, Cow::Borrowed(_)) {
+            if unchanged(x.as_ref(), &rx) {
                 Cow::Borrowed(e)
             } else {
                 Cow::Owned(NExp::Neg(Box::new(rx.into_owned())))
@@ -1055,7 +1089,7 @@ fn canonical_cow(e: &NExp) -> Cow<'_, NExp> {
         }
         NExp::Exp(x) => {
             let rx = canonical_cow(x);
-            if matches!(rx, Cow::Borrowed(_)) {
+            if unchanged(x.as_ref(), &rx) {
                 Cow::Borrowed(e)
             } else {
                 Cow::Owned(NExp::Exp(Box::new(rx.into_owned())))
@@ -1064,9 +1098,9 @@ fn canonical_cow(e: &NExp) -> Cow<'_, NExp> {
         NExp::If(c, t, b) => {
             let (rc, rt, rb) =
                 (simplify_constraint_cow(c), canonical_cow(t), canonical_cow(b));
-            if matches!(rc, Cow::Borrowed(_))
-                && matches!(rt, Cow::Borrowed(_))
-                && matches!(rb, Cow::Borrowed(_))
+            if unchanged(c.as_ref(), &rc)
+                && unchanged(t.as_ref(), &rt)
+                && unchanged(b.as_ref(), &rb)
             {
                 Cow::Borrowed(e)
             } else {
@@ -1079,7 +1113,7 @@ fn canonical_cow(e: &NExp) -> Cow<'_, NExp> {
         }
         NExp::App(f, args) => {
             let simp: Vec<Cow<'_, NExp>> = args.iter().map(|t| canonical_cow(t)).collect();
-            if simp.iter().all(|x| matches!(x, Cow::Borrowed(_))) {
+            if args.iter().zip(&simp).all(|(original, result)| unchanged(original, result)) {
                 Cow::Borrowed(e)
             } else {
                 Cow::Owned(NExp::App(
@@ -1379,11 +1413,11 @@ mod tests {
             ),
             (
                 Sum(Box::new(Neg(Box::new(v(n)))), Box::new(Neg(Box::new(c(4))))),
-                Neg(Box::new(Sum(Box::new(v(n)), Box::new(c(4))))),
+                Minus(Box::new(c(-4)), Box::new(v(n))),
             ),
             (
                 Sum(Box::new(v(n)), Box::new(Neg(Box::new(c(1))))),
-                Minus(Box::new(v(n)), Box::new(c(1))),
+                Sum(Box::new(v(n)), Box::new(c(-1))),
             ),
             (
                 Minus(Box::new(Sum(Box::new(v(n)), Box::new(c(5)))), Box::new(c(3))),
@@ -1395,7 +1429,7 @@ mod tests {
             ),
             (
                 Times(Box::new(Neg(Box::new(v(n)))), Box::new(Neg(Box::new(c(2))))),
-                Times(Box::new(v(n)), Box::new(c(2))),
+                Times(Box::new(Neg(Box::new(v(n)))), Box::new(c(-2))),
             ),
             (
                 Neg(Box::new(Minus(Box::new(v(n)), Box::new(c(1))))),
@@ -1413,7 +1447,7 @@ mod tests {
         ));
         assert!(matches!(
             simplify_cow(&Sum(Box::new(v(n)), Box::new(c(0)))),
-            Cow::Owned(_)
+            Cow::Borrowed(_)
         ));
         // Constraint folds with hand-written expectations.
         let ccases: Vec<(NConstraint, NConstraint)> = vec![
@@ -1495,4 +1529,22 @@ mod tests {
         assert_eq!(conc, NConstraint::Var(b));
         assert_eq!(normalize_constraint(&conc), conc);
     }
+    #[test]
+    fn borrowed_descendant_rewrites_are_not_lost_in_parents() {
+        let (n, _, _, _) = kids();
+        let identity = || Sum(Box::new(v(n)), Box::new(c(0)));
+        let inputs = vec![
+            (NExp::App("f".into(), vec![identity()]), NExp::App("f".into(), vec![v(n)])),
+            (Minus(Box::new(identity()), Box::new(c(2))), Minus(Box::new(v(n)), Box::new(c(2)))),
+            (Neg(Box::new(identity())), Neg(Box::new(v(n)))),
+            (NExp::Exp(Box::new(identity())), NExp::Exp(Box::new(v(n)))),
+        ];
+        for (input, expected) in inputs { assert_eq!(simplify(&input), expected); }
+        let constraint = NConstraint::App("p".into(), vec![TypArg::Bool(Box::new(
+            NConstraint::And(Box::new(NConstraint::True), Box::new(NConstraint::False))
+        ))]);
+        assert_eq!(simplify_constraint(&constraint), NConstraint::App("p".into(),
+            vec![TypArg::Bool(Box::new(NConstraint::False))]));
+    }
+
 }

@@ -251,7 +251,7 @@ fn polymorphic_struct_infers_nat_binders() {
          \x20 va : (Option (BitVec k_vasize))\n\
          \x20 pa : k_pa\n\
          \x20 translation : k_ts\n\
-         \x20 size : Int\n\
+         \x20 size : Nat\n\
          \x20 value : (Option (BitVec (8 * k_n)))\n\
          \x20 tag : (Option Bool)\n\
          \x20 deriving BEq, Inhabited, Repr\n"

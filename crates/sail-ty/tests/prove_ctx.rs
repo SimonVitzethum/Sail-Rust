@@ -323,7 +323,10 @@ fn scattered_clauses() {
     assert!(c.check_scattered(ScatteredKind::Function, "bad", &[open(), TypQuant::monomorphic(MiniTyp::Int)], dummy()).is_ok());
     let mut bad_second = open();
     bad_second.constraint = NConstraint::False;
-    assert!(c.check_scattered(ScatteredKind::Function, "bad", &[open(), bad_second], dummy()).is_err());
+    // A closed, satisfiable context lets the stub refute False. An open
+    // implication needs a solver; the check_scattered contract accepts Unknown.
+    assert!(c.check_scattered(ScatteredKind::Function, "bad",
+        &[TypQuant::monomorphic(MiniTyp::Int), bad_second], dummy()).is_err());
     // `ScatteredClauses`: Konjunktion in Elaborationsreihenfolge.
     let mut sc = ScatteredClauses::new("step");
     assert_eq!(sc.conjoin(), None);

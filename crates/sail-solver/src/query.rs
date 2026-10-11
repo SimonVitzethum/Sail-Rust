@@ -279,8 +279,8 @@ mod tests {
         let n = ix.intern("n");
         let b = ix.intern("b");
         // `Not` bleibt strukturiert (kein opakes Atom).
-        match Constraint::from_nconstraint(&NC::Not(Box::new(NC::True)), &ix) {
-            Constraint::Not(x) => assert_eq!(*x, Constraint::True),
+        match Constraint::from_nconstraint(&NC::Not(Box::new(NC::Var(b))), &ix) {
+            Constraint::Not(x) => assert_eq!(*x, Constraint::atom("(bvar b)")),
             other => panic!("expected Not, got {other:?}"),
         }
         // Keys nutzen Namen, nie die rohe Symbol-Id.
