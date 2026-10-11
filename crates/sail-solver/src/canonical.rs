@@ -26,6 +26,9 @@ pub struct Argument<'a> {
 pub struct View<'a> {
     pub constraint: &'a Constraint,
     pub context: Context<'a>,
+    /// Negate a borrowed predicate without cloning its recursive AST. This is
+    /// used for the false branch of a singleton Boolean condition.
+    pub negated: bool,
 }
 pub struct Substitution<'a> {
     pub arguments: BTreeMap<Symbol, &'a TypArg>,
@@ -53,17 +56,11 @@ impl CanonicalQuery {
         };
         for assumption in assumptions {
             emitter.output.push_str("(assert ");
-            emitter.emit(
-                Task::Constraint(assumption.constraint, assumption.context, false),
-                None,
-            )?;
+            emitter.emit_view(*assumption, false, None)?;
             emitter.output.push_str(")\n");
         }
         emitter.output.push_str("(assert (not ");
-        emitter.emit(
-            Task::Constraint(goal.constraint, goal.context, true),
-            substitution,
-        )?;
+        emitter.emit_view(goal, true, substitution)?;
         emitter.output.push_str("))\n");
         Ok(emitter.finish())
     }
@@ -84,7 +81,7 @@ impl CanonicalQuery {
         };
         for a in assumptions {
             emitter.output.push_str("(assert ");
-            emitter.emit(Task::Constraint(a.constraint, a.context, false), None)?;
+            emitter.emit_view(*a, false, None)?;
             emitter.output.push_str(")\n");
         }
         emitter.output.push_str("(assert (not (= ");
@@ -96,6 +93,24 @@ impl CanonicalQuery {
     }
 }
 impl Emitter {
+    fn emit_view<'a>(
+        &mut self,
+        view: View<'a>,
+        substitute: bool,
+        substitution: Option<&Substitution<'a>>,
+    ) -> Result<(), String> {
+        if view.negated {
+            self.output.push_str("(not ");
+        }
+        self.emit(
+            Task::Constraint(view.constraint, view.context, substitute),
+            substitution,
+        )?;
+        if view.negated {
+            self.output.push(')');
+        }
+        Ok(())
+    }
     fn finish(self) -> CanonicalQuery {
         let mut script = String::new();
         for (name, sort) in self.declarations {
@@ -400,6 +415,7 @@ mod tests {
                 let query = CanonicalQuery::implication(
                     &[],
                     View {
+                        negated: false,
                         constraint: &constraint,
                         context: Context {
                             interner: &it,
@@ -438,6 +454,7 @@ mod tests {
         assert!(CanonicalQuery::implication(
             &[],
             View {
+                negated: false,
                 constraint: &c,
                 context: Context {
                     interner: &it,

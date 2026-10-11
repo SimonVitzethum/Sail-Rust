@@ -145,10 +145,15 @@ patterns, including argument-only binder-kind uses. Source-ordered overload
 tables preserve OCaml candidate order and check all arguments, return context
 and dependent obligations. Nested expansion and deep header cleanup use explicit
 work stacks. The run passes `flow.sail`, inline signatures and operator lookup,
-then stops at the nonnegative-shift obligation in `_shl_int_general` because
-conditional branch assumptions are missing. It takes 49.69 s and peaks at
-1.4 GiB without swap. The canonical gate has 27 passing tests under 128 MiB,
-including negative overload cases and 10,000-level inline tuple patterns.
+and proves the nonnegative-shift obligations in `_shl_int_general` using
+separate true/false branch facts. Guards and nested conditions preserve borrowed
+substitutions; facts cannot escape their immutable scope. The next failure is
+`slice_mask` in `vector.sail`, at the integer semantics of `implicit('n)`.
+The run takes 51.80 s and peaks at 1.3 GiB without swap. The current focused
+solver/typechecker/CLI gate has 214 passing tests under 128 MiB per binary
+(75.8 MiB peak), including 30 canonical tests, negative flow/overload cases and
+10,000-level conditional scopes and inline tuple patterns. OCaml accepts the
+positive flow fixture under 256 MiB without swap (130.9 MiB peak).
 The focused solver/typechecker/CLI suite passes 203 tests with each binary limited
 to 128 MiB, including 21 canonical tests and a stalled-child deadline/reaping
 regression. The updated sixteen-worker out-of-core subset run passes at 128 MiB

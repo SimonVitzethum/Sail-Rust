@@ -866,6 +866,7 @@ impl<'a> WellFormed<'a> {
             .assumptions
             .iter()
             .map(|a| View {
+                negated: false,
                 constraint: a.constraint,
                 context: Context {
                     interner: a.interner,
@@ -880,6 +881,7 @@ impl<'a> WellFormed<'a> {
                 .iter()
                 .filter(|b| b.position <= self.position)
                 .map(|b| View {
+                    negated: false,
                     constraint: &b.value.0,
                     context: Context {
                         interner: &b.value.1,
@@ -895,6 +897,7 @@ impl<'a> WellFormed<'a> {
             let query = CanonicalQuery::implication(
                 &assumptions,
                 View {
+                    negated: false,
                     constraint: c,
                     context: Context {
                         interner: &proof.interner,

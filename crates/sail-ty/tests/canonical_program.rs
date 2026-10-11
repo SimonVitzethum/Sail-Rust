@@ -24,6 +24,100 @@ fn declare(defs: &[(Def, Arc<SimpleInterner>)]) -> Program {
     program
 }
 
+const FLOW_DECLARATIONS: &[&str] = &[
+    "val ge : forall 'n 'm. (int('n), int('m)) -> bool('n >= 'm)",
+    "val lt : forall 'n 'm. (int('n), int('m)) -> bool('n < 'm)",
+    "val eq : forall 'n 'm. (int('n), int('m)) -> bool('n == 'm)",
+    "val neg : forall 'n. int('n) -> int(- 'n)",
+    "overload negate = {neg}",
+    "val not_boolean : forall ('p : Bool). bool('p) -> bool(not('p))",
+    "val nonnegative : forall 'n, 'n >= 0. int('n) -> int",
+    "val bounded : forall 'n, 0 <= 'n <= 4. int('n) -> int",
+    "val only_true : forall ('p : Bool), 'p. bool('p) -> unit",
+    "val zero : int(0) -> int",
+];
+
+#[test]
+fn conditional_and_guard_facts_prove_constraints_with_borrowed_call_substitutions() {
+    let mut sources = FLOW_DECLARATIONS.to_vec();
+    sources.extend([
+        "function shift(n : int) -> int = if ge(n, 0) then nonnegative(n) else nonnegative(neg(n))",
+        "function nested(n : int) -> int = if ge(n, 0) then (if lt(n, 5) then bounded(n) else 0) else 0",
+        "function alias(n : int) -> int = if ge(n, 0) then let m = n in nonnegative(m) else 0",
+        "function same(n : int) -> int = if eq(n, 0) then zero(n) else 0",
+        "function boolean(p : bool) -> unit = if p then only_true(p) else only_true(not_boolean(p))",
+        "function checked_condition() -> unit = if (if true then true else false) then () else ()",
+        "val guarded : int -> int",
+        "function guarded(n if ge(n, 0)) = nonnegative(n)",
+        "function impossible() -> int = if false then nonnegative(-1) else 0",
+    ]);
+    let defs = parse(&sources);
+    let program = declare(&defs);
+    for (position, (def, it)) in defs.iter().enumerate() {
+        program.check_definition(def, it.clone(), position).unwrap();
+    }
+}
+
+#[test]
+fn conditional_facts_never_leak_to_siblings_outer_scopes_or_other_clauses() {
+    for source in [
+        "function wrong(n : int) -> int = if ge(n, 0) then nonnegative(n) else nonnegative(n)",
+        "function wrong(n : int, m : int) -> int = if ge(m, 0) then nonnegative(n) else 0",
+        "function wrong(n : int) -> int = { if ge(n, 0) then () else (); nonnegative(n) }",
+        "function wrong(n : int, p : bool) -> int = if p then nonnegative(n) else 0",
+        "function wrong(p : bool) -> int = if ge(p, 0) then 0 else 0",
+        "function wrong(n if ge(n, 0)) = nonnegative(n) and wrong(n) = nonnegative(n)",
+    ] {
+        let mut sources = FLOW_DECLARATIONS.to_vec();
+        sources.extend(["val wrong : int -> int", source]);
+        // Functions with inline annotations need their own argument signature.
+        if source.contains("->") {
+            sources.remove(FLOW_DECLARATIONS.len());
+        }
+        let defs = parse(&sources);
+        let program = declare(&defs);
+        let position = defs.len() - 1;
+        assert!(
+            program
+                .check_definition(&defs[position].0, defs[position].1.clone(), position)
+                .is_err(),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn ten_thousand_conditional_fact_scopes_check_and_release_without_recursion() {
+    std::thread::Builder::new()
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let mut defs = parse(&["function deep() -> unit = ()"]);
+            let (mut def, it) = defs.pop().unwrap();
+            let DefKind::Fundef { funcls, .. } = &mut def.kind else {
+                panic!()
+            };
+            let PExpKind::PatExp { body, .. } = &mut funcls[0].arm.kind else {
+                panic!()
+            };
+            let mut nested = Node::dummy(ExpKind::Lit(Node::dummy(LitKind::Unit)));
+            for _ in 0..10_000 {
+                nested = Node::dummy(ExpKind::If {
+                    cond: Box::new(Node::dummy(ExpKind::Lit(Node::dummy(LitKind::True)))),
+                    then_branch: Box::new(nested),
+                    else_branch: Box::new(Node::dummy(ExpKind::Lit(Node::dummy(LitKind::Unit)))),
+                });
+            }
+            *body = nested;
+            let mut program = Program::new();
+            program.declare(&def, it.clone(), 0).unwrap();
+            assert_eq!(program.check_definition(&def, it, 0).unwrap(), 30_001);
+            sail_ast::storage::drop_definition(def);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn overloads_check_all_arguments_results_and_dependent_constraints() {
     let defs = parse(&[

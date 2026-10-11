@@ -46,7 +46,12 @@ Plain `int`/`bool` bindings and expression results open fresh rigid singleton
 witnesses. Reusing one immutable binding retains its witness; unrelated values
 and opaque function results have distinct witnesses. This permits reflexive
 equality and calls such as `not_bool(eq_bool(x, y))` without inventing a constant
-value. Mutation and control-flow refinement still need their own elaboration.
+value. Conditional and clause-guard predicates now refine dependent proofs.
+The true branch borrows the singleton Boolean constraint with its substitutions;
+the false branch uses its negation without cloning the numeric/Boolean AST.
+Facts follow immutable local scopes and do not escape to siblings, outer scopes
+or other clauses. A condition is checked before its branch facts can be used.
+Mutation and short-circuit effect elaboration still require further rules.
 
 The solver bridge emits flat, validated SMT-LIB with an explicit work stack;
 decimal constants retain arbitrary precision. It reuses the existing exclusive
@@ -100,9 +105,10 @@ compilation as ARM or Lean success.
 
 The latest full ARM gate passes the declaration phase, including the constructor
 conditions of `Mem_read_request` and `Mem_write_request`, inline signatures and
-operator overload resolution. It stops at the dependent nonnegative-shift
-condition in `_shl_int_general`: branch assumptions from `n >= 0` are not yet
-available. The run takes 49.69 s, peaks at 1.4 GiB under the 16 GiB/no-swap limit
+operator overload resolution. Branch proofs now pass both general shift
+functions in `arith.sail`. The next failure is `slice_mask` in `vector.sail`,
+where an `implicit('n)` argument must behave as an integer singleton.
+The run takes 51.80 s, peaks at 1.3 GiB under the 16 GiB/no-swap limit
 and still exits 1 before Lean/Lake.
 The focused solver/typechecker/CLI suite has 203 passing tests under 128 MiB per
 binary, including 21 canonical tests. It covers source-position global
@@ -117,10 +123,15 @@ canonical prover's SMT timing/call counters are not yet connected to the CLI
 profiler; its printed zero counters do not imply that no Z3 requests occurred.
 Use phase wall time and the systemd cgroup peak for these measurements.
 
-The canonical gate now has 27 passing tests under 128 MiB without swap (73.8 MiB
-peak), including positive/negative overload selection, candidate order,
-source-position extensions and cycle rejection. Full conditional flow typing
-is the next ARM requirement; assumptions must be confined to their own branch.
+The solver/typechecker/CLI gate now has 214 passing tests under 128 MiB per
+binary without swap (75.8 MiB peak), including 30 canonical tests. Flow tests
+cover nested numeric bounds, scalar equality, Boolean predicates, alias scopes,
+clause guards, invalid conditions and rejection of leaking branch assumptions.
+10,000 nested conditional fact scopes check and release on a 128 KiB stack.
+The CLI checks a positive and negative dependent overload/branch fixture with
+one and four disk-backed workers. OCaml Sail accepts the positive flow fixture
+under 256 MiB without swap (130.9 MiB peak; an expected exhaustiveness warning
+for its guarded single clause).
 
 The memory bound is the resident declaration tables plus a bounded number of
 loaded definitions, local scopes and worker temporaries. A single definition

@@ -197,6 +197,9 @@ impl Type {
 #[derive(Default)]
 struct Scope {
     locals: BTreeMap<String, (Type, bool)>,
+    /// A predicate is kept as a borrowed view of the condition's canonical
+    /// type, including its call substitutions and rigid witness identities.
+    facts: Vec<(Scalar, bool)>,
     parent: Option<Arc<Scope>>,
 }
 impl Drop for Scope {
@@ -211,6 +214,22 @@ impl Drop for Scope {
     }
 }
 impl Scope {
+    fn branch(self: &Arc<Self>, condition: Option<&Type>, negated: bool) -> Arc<Self> {
+        match condition.filter(|typ| typ.name() == Some("atom_bool")) {
+            Some(condition) => Arc::new(Self {
+                locals: BTreeMap::new(),
+                facts: vec![(
+                    Scalar {
+                        owner: condition.clone(),
+                        index: 0,
+                    },
+                    negated,
+                )],
+                parent: Some(self.clone()),
+            }),
+            None => self.clone(),
+        }
+    }
     fn get(&self, name: &str) -> Option<&(Type, bool)> {
         let mut scope = Some(self);
         while let Some(current) = scope {
@@ -249,6 +268,7 @@ struct Checker<'a> {
     /// are never dereferenced. The loaded AST outlives this checker.
     inferred: HashMap<*const Exp, Type>,
     calls: HashMap<*const Exp, Type>,
+    proof_scope: Arc<Scope>,
 }
 struct Task<'a> {
     exp: &'a Exp,
@@ -272,6 +292,7 @@ pub(crate) fn check(
         context: None,
         inferred: HashMap::new(),
         calls: HashMap::new(),
+        proof_scope: Arc::default(),
     };
     match &def.kind {
         DefKind::Fundef { rec, funcls, .. } => {
@@ -372,6 +393,7 @@ impl Checker<'_> {
             .program
             .constraints(self.position)
             .map(|(constraint, it)| View {
+                negated: false,
                 constraint,
                 context: Context {
                     interner: it,
@@ -384,6 +406,7 @@ impl Checker<'_> {
             assumptions.extend(scope.root.typschm.quant.iter().filter_map(|q| {
                 if let QuantItem::Constraint(c) = q {
                     Some(View {
+                        negated: false,
                         constraint: c,
                         context: scope.proof_context(),
                     })
@@ -391,6 +414,20 @@ impl Checker<'_> {
                     None
                 }
             }));
+        }
+        let mut current = Some(self.proof_scope.as_ref());
+        while let Some(scope) = current {
+            for (scalar, negated) in &scope.facts {
+                let TypArgKind::Bool(constraint) = &scalar.argument().kind else {
+                    unreachable!("Boolean branch fact")
+                };
+                assumptions.push(View {
+                    constraint,
+                    context: scalar.owner.proof_context(),
+                    negated: *negated,
+                });
+            }
+            current = scope.parent.as_deref();
         }
         assumptions
     }
@@ -703,6 +740,7 @@ impl Checker<'_> {
         Ok(())
     }
     fn function(&mut self, funcl: &Funcl) -> TypeResult<()> {
+        self.proof_scope = Arc::default();
         let name = self.name(&funcl.name)?;
         let scheme = self.program.value(name, self.position).cloned()
             .ok_or_else(|| unsupported(funcl.span, format!("cannot infer type of unannotated function '{name}' without a val specification")))?;
@@ -734,10 +772,17 @@ impl Checker<'_> {
         }
         let result = typ.child(Step::Result);
         let scope = Arc::new(scope);
+        self.proof_scope = scope.clone();
+        let body_scope = if let Some(guard) = guard {
+            let condition = self.condition(guard, &scope)?;
+            scope.branch(condition.as_ref(), false)
+        } else {
+            scope.clone()
+        };
         let mut tasks = vec![Task {
             exp: body,
             expected: result.clone(),
-            scope: scope.clone(),
+            scope: body_scope,
             returning: result.clone(),
         }];
         if let Some(guard) = guard {
@@ -749,6 +794,20 @@ impl Checker<'_> {
             });
         }
         self.run(tasks)
+    }
+    fn condition(&mut self, exp: &Exp, scope: &Scope) -> TypeResult<Option<Type>> {
+        match self.infer(exp, scope) {
+            Ok(typ) => {
+                let boolean = self.builtin("bool");
+                self.compatible(&boolean, &typ, exp.span)?;
+                Ok(Some(typ.resolved()))
+            }
+            // Some expressions can be checked against bool before they can be
+            // synthesized. The ordinary task must still check this condition;
+            // it contributes no assumptions until its type can be inferred.
+            Err(error) if matches!(error.kind, TypeErrorKind::Unsupported(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
     fn infer(&mut self, exp: &Exp, scope: &Scope) -> TypeResult<Type> {
         enum Synthesis<'a> {
@@ -1000,6 +1059,7 @@ impl Checker<'_> {
                 let query = CanonicalQuery::implication(
                     &assumptions,
                     View {
+                        negated: false,
                         constraint: c,
                         context: callee.proof_context(),
                     },
@@ -1024,6 +1084,7 @@ impl Checker<'_> {
             returning,
         }) = tasks.pop()
         {
+            self.proof_scope = scope.clone();
             self.expressions += 1;
             let expected = expected.resolved();
             match &exp.kind {
@@ -1041,16 +1102,17 @@ impl Checker<'_> {
                     then_branch,
                     else_branch,
                 } => {
+                    let condition = self.condition(cond, &scope)?;
                     tasks.push(Task {
                         exp: else_branch,
                         expected: expected.clone(),
-                        scope: scope.clone(),
+                        scope: scope.branch(condition.as_ref(), true),
                         returning: returning.clone(),
                     });
                     tasks.push(Task {
                         exp: then_branch,
                         expected,
-                        scope: scope.clone(),
+                        scope: scope.branch(condition.as_ref(), false),
                         returning: returning.clone(),
                     });
                     tasks.push(Task {
@@ -1144,6 +1206,7 @@ impl Checker<'_> {
                     let bound = self.infer(bind, &scope)?;
                     let mut child = Scope {
                         locals: BTreeMap::new(),
+                        facts: Vec::new(),
                         parent: Some(scope.clone()),
                     };
                     self.pattern(pat, bound.clone(), false, &mut child)?;
