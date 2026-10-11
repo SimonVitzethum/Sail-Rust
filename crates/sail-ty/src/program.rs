@@ -43,6 +43,7 @@ struct Constructor {
     args: Vec<Kind>,
     result: Kind,
     proof: Option<Arc<ConstructorProof>>,
+    synonym: Option<Arc<Scheme>>,
 }
 #[derive(Debug)]
 struct ConstructorProof {
@@ -98,6 +99,7 @@ fn constructor(args: &[Kind], result: Kind) -> Constructor {
         args: args.to_vec(),
         result,
         proof: None,
+        synonym: None,
     }
 }
 fn builtin(name: &str) -> Option<Constructor> {
@@ -207,6 +209,10 @@ impl Program {
                     args: quant_args(quant),
                     result,
                     proof: quant.iter().any(|item| matches!(item, QuantItem::Constraint(c) if !matches!(c.kind, ConstraintKind::True))).then(|| Arc::new(ConstructorProof {quant:quant.to_vec(),interner:it.clone()})),
+                    synonym:match &typ.kind {
+                        TypeDefKind::Abbrev {arg:Node {kind:TypArgKind::Typ(typ),..},..}=>Some(Arc::new(Scheme {typschm:TypSchm {quant:quant.to_vec(),typ:typ.clone()},interner:it.clone()})),
+                        _=>None,
+                    },
                 };
                 // OCaml's forbid_recursive_types checks record/union payloads
                 // before inserting their constructor into the environment.
@@ -580,6 +586,12 @@ impl Program {
             .get(name)
             .and_then(|history| at(history, position))
             .map(|value| &value.scheme)
+    }
+    pub(crate) fn type_synonym(&self, name: &str, position: usize) -> Option<&Arc<Scheme>> {
+        self.constructors
+            .get(name)
+            .and_then(|history| at(history, position))
+            .and_then(|constructor| constructor.synonym.as_ref())
     }
     fn overload(&self, name: &str, position: usize) -> Option<&[String]> {
         self.overloads

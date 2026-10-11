@@ -26,8 +26,7 @@ struct Type {
     path: Vec<Step>,
     /// Rigid binder identity survives annotations with a different interner.
     scope: Arc<Scheme>,
-    substitutions: Arc<BTreeMap<Symbol, Type>>,
-    scalars: Arc<ScalarBindings>,
+    substitutions: Arc<Substitutions>,
     /// OCaml's implicit_to_int applies to function arguments, not returns.
     implicit_argument: bool,
 }
@@ -59,7 +58,7 @@ impl Scalar {
                 }
                 _ => break,
             };
-            let Some(bound) = scalar.owner.scalars.map.get(&symbol) else {
+            let Some(bound) = scalar.owner.substitutions.scalars.get(&symbol) else {
                 break;
             };
             scalar = bound.clone();
@@ -74,19 +73,26 @@ impl Scalar {
     }
 }
 #[derive(Default)]
-struct ScalarBindings {
-    map: BTreeMap<Symbol, Scalar>,
+struct Substitutions {
+    types: BTreeMap<Symbol, Type>,
+    scalars: BTreeMap<Symbol, Scalar>,
 }
-impl Drop for ScalarBindings {
+impl Drop for Substitutions {
     fn drop(&mut self) {
         let mut pending = Vec::new();
-        for (_, mut scalar) in std::mem::take(&mut self.map) {
-            pending.push(std::mem::take(&mut scalar.owner.scalars));
+        for (_, mut typ) in std::mem::take(&mut self.types) {
+            pending.push(std::mem::take(&mut typ.substitutions));
+        }
+        for (_, mut scalar) in std::mem::take(&mut self.scalars) {
+            pending.push(std::mem::take(&mut scalar.owner.substitutions));
         }
         while let Some(bindings) = pending.pop() {
             if let Ok(mut bindings) = Arc::try_unwrap(bindings) {
-                for (_, mut scalar) in std::mem::take(&mut bindings.map) {
-                    pending.push(std::mem::take(&mut scalar.owner.scalars));
+                for (_, mut typ) in std::mem::take(&mut bindings.types) {
+                    pending.push(std::mem::take(&mut typ.substitutions));
+                }
+                for (_, mut scalar) in std::mem::take(&mut bindings.scalars) {
+                    pending.push(std::mem::take(&mut scalar.owner.substitutions));
                 }
             }
         }
@@ -95,7 +101,7 @@ impl Drop for ScalarBindings {
 static EMPTY_PROOF_VARS: BTreeMap<String, u64> = BTreeMap::new();
 impl Bindings for Type {
     fn resolve(&self, symbol: Symbol) -> Option<Argument<'_>> {
-        self.scalars.map.get(&symbol).map(Scalar::view)
+        self.substitutions.scalars.get(&symbol).map(Scalar::view)
     }
     fn rigid(&self, name: &str) -> Option<(usize, Kind)> {
         self.scope.typschm.quant.iter().find_map(|q| match q {
@@ -120,7 +126,6 @@ impl Type {
             root,
             path: vec![],
             substitutions: Arc::default(),
-            scalars: Arc::default(),
             implicit_argument: false,
         }
     }
@@ -151,7 +156,7 @@ impl Type {
     fn resolved(&self) -> Self {
         let mut typ = self.clone();
         while let TypKind::Var(symbol) = typ.node().kind {
-            let Some(bound) = typ.substitutions.get(&symbol) else {
+            let Some(bound) = typ.substitutions.types.get(&symbol) else {
                 break;
             };
             typ = bound.clone();
@@ -362,6 +367,68 @@ pub(crate) fn check(
 }
 
 impl Checker<'_> {
+    /// Expand type synonyms using borrowed argument views. Only declarations
+    /// preceding this body are visible. Declaration checking forbids recursive
+    /// synonyms, so each expansion descends a finite type/alias dependency tree.
+    fn resolve(&self, typ: &Type) -> TypeResult<Type> {
+        let mut typ = typ.resolved();
+        while let Some(synonym) = typ
+            .name()
+            .and_then(|name| self.program.type_synonym(name, self.position))
+        {
+            let args = match &typ.node().kind {
+                TypKind::Id(_) => &[][..],
+                TypKind::App { args, .. } => args.as_slice(),
+                _ => unreachable!("named synonym"),
+            };
+            let binders: Vec<_> = synonym
+                .typschm
+                .quant
+                .iter()
+                .filter_map(|q| {
+                    if let QuantItem::Id(k) = q {
+                        Some(k)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if binders.len() != args.len() {
+                return Err(arity(typ.node().span, binders.len(), args.len()));
+            }
+            let mut expanded = Type::root(synonym.clone());
+            expanded.scope = typ.scope.clone();
+            expanded.implicit_argument = typ.implicit_argument;
+            let mut types = BTreeMap::new();
+            let mut scalars = BTreeMap::new();
+            for (index, (binder, arg)) in binders.into_iter().zip(args).enumerate() {
+                match (binder.kind, &arg.kind) {
+                    (Kind::Type, TypArgKind::Typ(_)) => {
+                        types.insert(binder.kid, typ.child(Step::TypeArgument(index)));
+                    }
+                    (Kind::Int, TypArgKind::NExp(_)) | (Kind::Bool, TypArgKind::Bool(_)) => {
+                        scalars.insert(
+                            binder.kid,
+                            Scalar {
+                                owner: typ.clone(),
+                                index,
+                            }
+                            .resolved(),
+                        );
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            typ.node().span,
+                            "type synonym argument kind mismatch",
+                        ))
+                    }
+                }
+            }
+            expanded.substitutions = Arc::new(Substitutions { types, scalars });
+            typ = expanded.resolved();
+        }
+        Ok(typ)
+    }
     /// Open a plain scalar value into a fresh rigid singleton witness. Each
     /// immutable binding or expression occurrence keeps its own witness; two
     /// unrelated integers/booleans never share a numeric type variable.
@@ -448,12 +515,12 @@ impl Checker<'_> {
             && left.owner.path == right.owner.path
             && Arc::ptr_eq(&left.owner.root, &right.owner.root)
             && Arc::ptr_eq(&left.owner.scope, &right.owner.scope)
-            && Arc::ptr_eq(&left.owner.scalars, &right.owner.scalars)
+            && Arc::ptr_eq(&left.owner.substitutions, &right.owner.substitutions)
         {
             return Ok(());
         }
-        if left.owner.scalars.map.is_empty()
-            && right.owner.scalars.map.is_empty()
+        if left.owner.substitutions.scalars.is_empty()
+            && right.owner.substitutions.scalars.is_empty()
             && crate::canonical_eq::argument(
                 left.argument(),
                 right.argument(),
@@ -519,7 +586,7 @@ impl Checker<'_> {
                 return Ok(candidates.into_iter().map(Type::root).collect());
             }
         }
-        Ok(vec![self.id(name, scope)?.resolved()])
+        Ok(vec![self.resolve(&self.id(name, scope)?)?])
     }
     fn select_call(
         &self,
@@ -591,8 +658,8 @@ impl Checker<'_> {
     fn compatible(&self, expected: &Type, found: &Type, span: Span) -> TypeResult<()> {
         let mut pairs = vec![(expected.clone(), found.clone())];
         while let Some((expected, found)) = pairs.pop() {
-            let expected = expected.resolved();
-            let found = found.resolved();
+            let expected = self.resolve(&expected)?;
+            let found = self.resolve(&found)?;
             if matches!(
                 (&expected.node().kind, expected.name(), found.name()),
                 (TypKind::Id(_), Some("int"), Some("atom" | "range" | "nat"))
@@ -677,7 +744,7 @@ impl Checker<'_> {
     ) -> TypeResult<()> {
         let mut work = vec![(pat, typ)];
         while let Some((pat, typ)) = work.pop() {
-            let typ = typ.resolved();
+            let typ = self.resolve(&typ)?;
             match &pat.kind {
                 PatKind::Wild => {}
                 PatKind::Id(name) => {
@@ -807,7 +874,7 @@ impl Checker<'_> {
             Ok(typ) => {
                 let boolean = self.builtin("bool");
                 self.compatible(&boolean, &typ, exp.span)?;
-                Ok(Some(typ.resolved()))
+                Ok(Some(self.resolve(&typ)?))
             }
             // Some expressions can be checked against bool before they can be
             // synthesized. The ordinary task must still check this condition;
@@ -849,7 +916,7 @@ impl Checker<'_> {
                                 return Err(arity(exp.span, formal.len(), args.len()));
                             }
                             if callee.root.typschm.quant.is_empty() {
-                                callee.child(Step::Result).resolved()
+                                self.resolve(&callee.child(Step::Result))?
                             } else {
                                 work.push(Synthesis::Call(exp, vec![callee], args.len()));
                                 work.extend(args.iter().rev().map(Synthesis::Enter));
@@ -863,12 +930,14 @@ impl Checker<'_> {
                             ))
                         }
                     };
+                    let declared = self.resolve(&declared)?;
                     results.push(self.value_type(exp, declared));
                 }
                 Synthesis::Call(exp, candidates, count) => {
                     let actual = results.split_off(results.len() - count);
                     let callee = self.select_call(candidates, &actual, None, exp.span)?;
-                    let result = self.value_type(exp, callee.child(Step::Result).resolved());
+                    let result = self.resolve(&callee.child(Step::Result))?;
+                    let result = self.value_type(exp, result);
                     self.calls.insert(exp as *const Exp, callee);
                     self.inferred.insert(exp as *const Exp, result.clone());
                     results.push(result);
@@ -900,7 +969,6 @@ impl Checker<'_> {
         }
         let mut bindings = BTreeMap::new();
         let mut scalar_bindings: BTreeMap<Symbol, Scalar> = BTreeMap::new();
-        let mut scalar_checks = Vec::new();
         let mut pairs: Vec<_> = actual
             .iter()
             .enumerate()
@@ -910,9 +978,12 @@ impl Checker<'_> {
             pairs.push((callee.child(Step::Result), expected.clone(), true));
         }
         while let Some((formal, actual, result_context)) = pairs.pop() {
-            let actual = actual.resolved();
+            let formal = self.resolve(&formal)?;
+            let actual = self.resolve(&actual)?;
             match &formal.node().kind {
-                TypKind::Var(symbol) if quantified.contains(symbol) => {
+                TypKind::Var(symbol)
+                    if Arc::ptr_eq(&formal.root, &callee.root) && quantified.contains(symbol) =>
+                {
                     if let Some(bound) = bindings.get(symbol) {
                         self.compatible(bound, &actual, span)?;
                     } else {
@@ -972,13 +1043,14 @@ impl Checker<'_> {
                                 let formal_arg = Scalar {
                                     owner: formal.clone(),
                                     index: i,
-                                };
+                                }
+                                .resolved();
                                 let actual_arg = Scalar {
                                     owner: actual.clone(),
                                     index: i,
                                 }
                                 .resolved();
-                                let variable = match &arg.kind {
+                                let variable = match &formal_arg.argument().kind {
                                     TypArgKind::NExp(Node {
                                         kind: NExpKind::Var(k),
                                         ..
@@ -992,17 +1064,12 @@ impl Checker<'_> {
                                     }
                                     _ => None,
                                 };
-                                if let Some((symbol, kind)) =
-                                    variable.filter(|(s, k)| quantified_scalars.get(s) == Some(k))
-                                {
+                                if let Some((symbol, kind)) = variable.filter(|(s, k)| {
+                                    Arc::ptr_eq(&formal_arg.owner.root, &callee.root)
+                                        && quantified_scalars.get(s) == Some(k)
+                                }) {
                                     let _ = kind;
-                                    if let Some(bound) = scalar_bindings.get(&symbol) {
-                                        scalar_checks.push((bound.clone(), actual_arg, false));
-                                    } else {
-                                        scalar_bindings.insert(symbol, actual_arg);
-                                    }
-                                } else {
-                                    scalar_checks.push((formal_arg, actual_arg, true));
+                                    scalar_bindings.entry(symbol).or_insert(actual_arg);
                                 }
                             }
                             _ => return Err(mismatch(span, &formal, &actual)),
@@ -1037,22 +1104,19 @@ impl Checker<'_> {
                 _ => {}
             }
         }
-        callee.substitutions = Arc::new(bindings);
         if quantified_scalars
             .keys()
             .any(|symbol| !scalar_bindings.contains_key(symbol))
         {
             return Err(unsupported(span,"cannot infer dependent call parameter (existential opening or arithmetic solving required)"));
         }
-        callee.scalars = Arc::new(ScalarBindings {
-            map: scalar_bindings,
+        callee.substitutions = Arc::new(Substitutions {
+            types: bindings,
+            scalars: scalar_bindings,
         });
-        for (mut formal, actual, instantiate_formal) in scalar_checks {
-            if instantiate_formal {
-                formal.owner.scalars = callee.scalars.clone();
-            }
-            self.scalar_equal(&formal, &actual, span)?;
-        }
+        // select_call checks every argument and the return after installing
+        // all substitutions. Re-expand aliases there: this composes alias
+        // binders with fresh call binders without mutating borrowed contexts.
         let scope = self.context.as_ref().map(|s| Type::root(s.clone()));
         let assumptions = self.proof_assumptions(&scope);
         for q in &callee.root.typschm.quant {
@@ -1087,14 +1151,14 @@ impl Checker<'_> {
         {
             self.proof_scope = scope.clone();
             self.expressions += 1;
-            let expected = expected.resolved();
+            let expected = self.resolve(&expected)?;
             match &exp.kind {
                 ExpKind::Lit(lit) => {
                     let actual = self.literal(lit)?;
                     self.compatible(&expected, &actual, exp.span)?;
                 }
                 ExpKind::Id(name) => {
-                    let actual = self.id(name, &scope)?;
+                    let actual = self.resolve(&self.id(name, &scope)?)?;
                     let actual = self.value_type(exp, actual);
                     self.compatible(&expected, &actual, exp.span)?;
                 }
@@ -1144,7 +1208,8 @@ impl Checker<'_> {
                 }
                 ExpKind::Typ { typ, exp: child } => {
                     let annotated = self.annotation(typ)?;
-                    let value = self.value_type(exp, annotated.clone());
+                    let value = self.resolve(&annotated)?;
+                    let value = self.value_type(exp, value);
                     self.compatible(&expected, &value, exp.span)?;
                     tasks.push(Task {
                         exp: child,
@@ -1173,7 +1238,8 @@ impl Checker<'_> {
                     if args.len() != formal.len() {
                         return Err(arity(exp.span, formal.len(), args.len()));
                     }
-                    let result = self.value_type(exp, callee.child(Step::Result).resolved());
+                    let result = self.resolve(&callee.child(Step::Result))?;
+                    let result = self.value_type(exp, result);
                     self.compatible(&expected, &result, exp.span)?;
                     for (index, arg) in args.iter().enumerate().rev() {
                         tasks.push(Task {

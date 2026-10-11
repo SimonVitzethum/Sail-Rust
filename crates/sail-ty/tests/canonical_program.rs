@@ -38,6 +38,97 @@ const FLOW_DECLARATIONS: &[&str] = &[
 ];
 
 #[test]
+fn type_synonyms_compose_type_integer_boolean_and_call_substitutions() {
+    let defs = parse(&[
+        "type Bits('width : Int) = bitvector('width)",
+        "type Integer = int",
+        "type Identity('element : Type) = 'element",
+        "type Flag('predicate : Bool) = bool('predicate)",
+        "type Bigger('size : Int) = Bits('size + 1)",
+        "type Pair('element : Type) = (Identity('element), Bits(8))",
+        "val forward : forall 'n, 'n >= 0. (implicit('n), Bits('n)) -> Bits('n)",
+        "function forward(n, b) = b",
+        "function caller() -> Bits(8) = forward(8, 0x12)",
+        "val identity : forall 'a. Identity('a) -> Identity('a)",
+        "function identity(x) = x",
+        "function number() -> Integer = identity(7)",
+        "val not_boolean : forall ('p : Bool). bool('p) -> bool(not('p))",
+        "val flip : forall ('p : Bool). Flag('p) -> Flag(not('p))",
+        "function flip(p) = not_boolean(p)",
+        "function truth() -> Flag(false) = flip(true)",
+        "val bigger : forall 'n. (int('n), Bigger('n)) -> unit",
+        "function width() -> unit = bigger(7, 0x12)",
+        "val unpack : Pair(int) -> int",
+        "function unpack(x, bits) = x",
+        "function wrong_width() -> unit = bigger(8, 0x12)",
+        "function wrong_flag() -> Flag(true) = flip(true)",
+        "function wrong_argument() -> Bits(8) = forward(true, 0x12)",
+    ]);
+    let program = declare(&defs);
+    for (position, (def, it)) in defs.iter().enumerate() {
+        let result = program.check_definition(def, it.clone(), position);
+        assert_eq!(
+            result.is_err(),
+            position >= 20,
+            "position {position}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn ten_thousand_parametric_aliases_expand_and_release_on_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let mut interner = SimpleInterner::new();
+            let parameter = interner.intern("element");
+            let list = Name::dummy(interner.intern("list"));
+            let names: Vec<_> = (0..10_000)
+                .map(|i| Name::dummy(interner.intern(&format!("Alias_{i}"))))
+                .collect();
+            let interner = Arc::new(interner);
+            let mut program = Program::new();
+            for (position, name) in names.iter().enumerate() {
+                let target = if position == 0 {
+                    list.clone()
+                } else {
+                    names[position - 1].clone()
+                };
+                let def = Node::dummy(DefKind::Type(Node::dummy(TypeDefKind::Abbrev {
+                    name: name.clone(),
+                    quant: vec![QuantItem::Id(KOpt {
+                        kind: Kind::Type,
+                        kid: parameter,
+                    })],
+                    arg: Node::dummy(TypArgKind::Typ(Node::dummy(TypKind::App {
+                        name: target,
+                        args: vec![Node::dummy(TypArgKind::Typ(Node::dummy(TypKind::Var(
+                            parameter,
+                        ))))],
+                    }))),
+                })));
+                program.declare(&def, interner.clone(), position).unwrap();
+                sail_ast::storage::drop_definition(def);
+            }
+            let defs = parse(&[
+                "type Alias_9999('a : Type) = 'a",
+                "val f : Alias_9999(int) -> list(int)",
+                "function f(x) = x",
+            ]);
+            program
+                .declare(&defs[1].0, defs[1].1.clone(), 10_000)
+                .unwrap();
+            program
+                .check_definition(&defs[2].0, defs[2].1.clone(), 10_001)
+                .unwrap();
+            drop(program);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn explicit_implicit_parameters_have_integer_singleton_semantics() {
     let defs = parse(&[
         "val forward : forall 'n, 'n >= 0. implicit('n) -> int('n)",

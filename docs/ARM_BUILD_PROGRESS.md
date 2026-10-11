@@ -148,8 +148,13 @@ work stacks. The run passes `flow.sail`, inline signatures and operator lookup,
 and proves the nonnegative-shift obligations in `_shl_int_general` using
 separate true/false branch facts. Guards and nested conditions preserve borrowed
 substitutions; facts cannot escape their immutable scope. The next failure is
-`slice_mask` in `vector.sail`, at the integer semantics of `implicit('n)`.
-The run takes 51.80 s and peaks at 1.3 GiB without swap. The current focused
+`slice_mask` in `vector.sail`, at its unsupported vector literal. Explicit
+implicit argument views and general type-alias expansion now pass; borrowed
+substitutions compose across interners and release mixed chains iteratively.
+A 10,000-alias regression passes on a 128 KiB stack. The run takes 50.76 s
+and peaks at 1.3 GiB without swap. The current focused gate passes 217 tests,
+including 33 canonical tests, under 128 MiB per binary without swap.
+The earlier focused
 solver/typechecker/CLI gate has 214 passing tests under 128 MiB per binary
 (75.8 MiB peak), including 30 canonical tests, negative flow/overload cases and
 10,000-level conditional scopes and inline tuple patterns. OCaml accepts the

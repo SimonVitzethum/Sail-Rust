@@ -339,7 +339,7 @@ fn inline_signatures_are_declared_before_disk_backed_parallel_body_checks() {
 fn parallel_disk_backed_checks_resolve_overloads_and_confine_branch_assumptions() {
     let dir=temp_dir("overload-flow");
     let input=dir.join("input.sail");
-    let declarations="val ge : forall 'n 'm. (int('n), int('m)) -> bool('n >= 'm)\nval neg : forall 'n. int('n) -> int(- 'n)\nval nonnegative : forall 'n, 'n >= 0. int('n) -> int\noverload choose = {nonnegative}\n";
+    let declarations="type Integer('value : Int) = int('value)\ntype Predicate('truth : Bool) = bool('truth)\nval ge : forall 'n 'm. (int('n), int('m)) -> Predicate('n >= 'm)\nval neg : forall 'n. int('n) -> int(- 'n)\nval nonnegative : forall 'n, 'n >= 0. Integer('n) -> int\noverload choose = {nonnegative}\n";
     for bad in [false,true] {
         let body=if bad {"function shift(n : int) -> int = if ge(n, 0) then choose(n) else choose(n)\n"} else {"function shift(n : int) -> int = if ge(n, 0) then choose(n) else choose(neg(n))\n"};
         std::fs::write(&input,format!("{declarations}{body}")).unwrap();
@@ -348,7 +348,7 @@ fn parallel_disk_backed_checks_resolve_overloads_and_confine_branch_assumptions(
             let stderr=String::from_utf8_lossy(&out.stderr);
             assert_eq!(out.status.code(),Some(1),"{stderr}");
             if bad {assert!(stderr.contains("dependent call quantifier constraint"),"{stderr}");}
-            else {assert!(stderr.contains(&format!("typechecked 5 definitions and 9 expressions using {workers} workers")),"{stderr}");assert!(stderr.contains("compilation incomplete"),"{stderr}");}
+            else {assert!(stderr.contains(&format!("typechecked 7 definitions and 9 expressions using {workers} workers")),"{stderr}");assert!(stderr.contains("compilation incomplete"),"{stderr}");}
         }
     }
     std::fs::remove_dir_all(dir).unwrap();

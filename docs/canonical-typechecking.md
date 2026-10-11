@@ -85,8 +85,17 @@ constraints before selecting a candidate. Unsupported candidate elaboration
 remains an error. Context propagation through nested ambiguous calls is not yet
 complete.
 
+Type-kind aliases now expand through shared signature views, including Type,
+Int and Bool parameters, tuples and composed arithmetic result refinements.
+Alias substitutions retain their own interners and caller binder identities;
+calls validate all arguments and the return after installing substitutions.
+One substitution structure owns both type and scalar bindings, with iterative
+cleanup across mixed chains. A regression expands and releases 10,000
+parametric aliases on a 128 KiB stack. Numeric/constraint-kind synonyms and
+function aliases in `val`/inline headers still require further elaboration.
+
 Unknown expression rules, arithmetic inference of nontrivial call parameters,
-general refinement subsumption, synonym expansion,
+general refinement subsumption, numeric/constraint synonym expansion,
 mappings and scattered definitions fail explicitly. This is a partial checker:
 it does not yet produce the complete typed AST required by the rewrite and Lean
 backend passes. Successful checking of the supported subset still ends with
@@ -115,8 +124,9 @@ The latest full ARM gate passes the declaration phase, including the constructor
 conditions of `Mem_read_request` and `Mem_write_request`, inline signatures and
 operator overload resolution. Branch proofs now pass both general shift
 functions in `arith.sail`. The next failure is `slice_mask` in `vector.sail`,
-where an `implicit('n)` argument must behave as an integer singleton.
-The run takes 51.80 s, peaks at 1.3 GiB under the 16 GiB/no-swap limit
+where vector-literal checking (`[bitone] : bits(1)`) is not yet implemented.
+Explicit implicit arguments and the `bits` alias now pass. The run takes
+50.76 s, peaks at 1.3 GiB under the 16 GiB/no-swap limit
 and still exits 1 before Lean/Lake.
 The focused solver/typechecker/CLI suite has 203 passing tests under 128 MiB per
 binary, including 21 canonical tests. It covers source-position global
@@ -140,6 +150,12 @@ The CLI checks a positive and negative dependent overload/branch fixture with
 one and four disk-backed workers. OCaml Sail accepts the positive flow fixture
 under 256 MiB without swap (130.9 MiB peak; an expected exhaustiveness warning
 for its guarded single clause).
+
+After type alias expansion, the focused gate has 217 passing tests under
+128 MiB per binary without swap, including 33 canonical tests. Positive
+type/Int/Bool alias composition is also accepted by OCaml Sail under 256 MiB
+without swap (37.7 MiB peak). The CLI's one/four-worker flow fixture now uses
+aliases in both parameter and predicate return positions.
 
 The memory bound is the resident declaration tables plus a bounded number of
 loaded definitions, local scopes and worker temporaries. A single definition
