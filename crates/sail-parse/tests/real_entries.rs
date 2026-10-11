@@ -394,6 +394,21 @@ fn constructor_arguments_use_bound_kinds_and_inference_respects_shadowing() {
 }
 
 #[test]
+fn arm_bitfield_concat_keeps_range_order_through_parentheses() {
+    let out = parse_def("bitfield PMEVTYPER_EL0_Type : bits(64) = { evtCount : (15..10 @ 9..0) }").unwrap();
+    let DefKind::Type(ty) = &out.value.kind else { panic!("{:?}", out.value); };
+    let TypeDefKind::Bitfield { fields, .. } = &ty.kind else { panic!("{ty:?}"); };
+    let sail_ast::IndexRangeKind::Concat(left, right) = &fields[0].1.kind else { panic!("{fields:?}"); };
+    let bounds = |r: &sail_ast::IndexRange| {
+        let sail_ast::IndexRangeKind::Range { lo, hi } = &r.kind else { panic!("{r:?}"); };
+        let (sail_ast::NExpKind::Constant(lo), sail_ast::NExpKind::Constant(hi)) = (&lo.kind, &hi.kind) else { panic!("{r:?}"); };
+        (lo.clone(), hi.clone())
+    };
+    assert_eq!(bounds(left), ("15".into(), "10".into()));
+    assert_eq!(bounds(right), ("9".into(), "0".into()));
+}
+
+#[test]
 fn function_domain_tuple_becomes_multiple_arguments() {
     let out = parse_def("val f : (int, bool) -> int").unwrap();
     assert!(matches!(&out.value.kind, DefKind::Val(spec)

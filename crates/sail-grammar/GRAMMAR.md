@@ -51,18 +51,14 @@ lifted onto the Sail rules in this lane:
 4. **Nullable Block + `with`**: `Block` is strict now (see E4), so after
    `{ Exp` the lookahead `with` can only shift the `StructUpdate` arm of
    `BlockOrUpd` (`;`/`}` reduce the block item instead).
-5. **`IndexRange` parens removed (Lane 76, static audit — E3, no build)**:
-   `"(" IndexRange ")"` duplicated `AtomicTyp`'s `"(" Typ ")"` for every
-   parenthesised type, so `(t)` was ambiguous (two trees, same
-   `Single(t)` AST) and `(a, b)` was shift-vs-reduce on `,` — while being
-   the only spelling for `(a..b)` / `(a@b)`. Menhir's shift preference
-   resolves `(t)`/`(a, b)` to the `Typ` reading, which is exactly what the
-   removal keeps; only parenthesised `..`-ranges/`@`-concats are lost
-   (bare `a..b` / `a@b` still parse). Corpus: 0 occurrences in `sail-lib`
-   (no `bitfield`s at all there; `@` only as expression operator) —
-   `tests/corpus.rs` guards this on the Rig. `pub MPat` was demoted to a
-   private rule alongside (only used inside `MPExp`; the wiring below
-   never listed an `MPatParser`).
+5. **`IndexRange` parentheses**: Follow the OCaml `index_range`,
+   `paren_index_range` and `atomic_index_range` productions. Explicit
+   parentheses surround a range (`(7..0)`) or concat (`(15..10 @ 9..0)`);
+   singleton parentheses belong only to `Typ`. This preserves the full ARM
+   spelling without the ambiguous generic `"(" IndexRange ")"` wrapper.
+   Tests cover AST shape, nested grouping, right association and core range
+   order. The earlier removal of these forms was a porting error hidden by
+   the absence of bitfields in the standard-library corpus.
 6. **`RDefBody` strict (Lane 87, E4 `Block` shape, re-applied on this
     branch)**: the old `(<RIdDef> ",")* <RIdDef>?` list was nullable AND
     used as `RDefBody?` in the `bitfield` arm, so `{}` had two trees

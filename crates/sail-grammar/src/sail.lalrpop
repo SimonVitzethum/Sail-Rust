@@ -53,12 +53,9 @@
 //     `RegAttrs`/`RegAttrsTail` copy of `Attrs`/`AttrsTail` (per-use-site
 //     dedup against LALR-merge imprecision, Rig 1547). Same keys and
 //     attributes in the same order; accepted language unchanged.
-//   - `IndexRange` parens removed: `"(" IndexRange ")"` duplicated
-//     `AtomicTyp`'s `"(" Typ ")"` for every parenthesised type (`(t)` had
-//     two trees; `(a, b)` was shift-vs-reduce on `,`) while being the only
-//     way to write `(a..b)` / `(a@b)`. Bare `a..b` / `a@b` still parse;
-//     parenthesised ranges are rejected (see GRAMMAR.md; 0 occurrences in
-//     `sail-lib`, checked by `tests/corpus.rs` on the Rig).
+//   - IndexRange uses OCaml's separate parenthesised range and concat
+//     productions. Singleton parentheses belong only to Typ, avoiding the
+//     ambiguity of a generic "(" IndexRange ")" wrapper.
 //   - D1/D2 (`Typ` index-range vs tuple, paren vs tuple): UNCHANGED, pending
 //     corpus evaluation via `tests/corpus.rs` (see GRAMMAR.md).
 // - Every Menhir `A | A B` common-prefix rule is factored to `A B?` with
@@ -1536,27 +1533,26 @@ TypeUnions: Vec<TypeUnion> = {
     <u:TypeUnion> "," => vec![u],
 }
 
-// `index_range`: the parenthesised arm `"(" IndexRange ")"` was removed
-// (Lane 76) — it duplicated `AtomicTyp`'s `"(" Typ ")"` for every
-// parenthesised type, so `(t)` was ambiguous and `(a, b)` conflicted.
-// Bare `..`-ranges and `@`-concats cover the corpus (no bitfields in
-// `sail-lib`); `(a..b)` / `(a@b)` are rejected, see GRAMMAR.md.
-// The `@` tail is two explicit arms (Lane 98) — the old
-// `("@" <IndexRange>)?` tail left an empty production whose reduce
-// competed with the `@` shift (Rig 1267:5-1270:5). Accepted language
-// unchanged.
+// Match OCaml's separate index_range / paren_index_range productions.
+// Only ranges and concats need explicit parenthesised forms; singleton
+// parentheses already belong to Typ. A generic "(" IndexRange ")" would
+// give singleton types two parses and was the source of the old conflict.
 IndexRange: IndexRange = {
-    <a:AtomicIndexRange> => a,
-    <a:AtomicIndexRange> "@" <hi:IndexRange> =>
+    <a:ParenIndexRange> => a,
+    <a:ParenIndexRange> "@" <hi:IndexRange> =>
         IndexRange::Concat(Box::new(a), Box::new(hi)),
 }
 
-// The `..` tail is two explicit arms (Lane 98) — the old
-// `(".." <Typ>)?` tail left an empty production whose reduce competed
-// with the `..` shift (Rig 1274:5-1277:5). Accepted language unchanged.
+ParenIndexRange: IndexRange = {
+    <a:AtomicIndexRange> => a,
+    "(" <a:ParenIndexRange> "@" <hi:IndexRange> ")" =>
+        IndexRange::Concat(Box::new(a), Box::new(hi)),
+}
+
 AtomicIndexRange: IndexRange = {
     <t:Typ> => IndexRange::Single(t),
     <t:Typ> ".." <hi:Typ> => IndexRange::Range(t, hi),
+    "(" <t:Typ> ".." <hi:Typ> ")" => IndexRange::Range(t, hi),
 }
 
 // `r_id_def`.

@@ -567,13 +567,9 @@ fn parse_struct_update_vs_block() {
 
 #[test]
 fn parse_bitfield_ranges() {
-    // Bare `..`-ranges are the only range spelling (Lane 76: the
-    // `"(" IndexRange ")"` arm was removed — it duplicated `Typ` parens,
-    // see GRAMMAR.md).
     assert!(parse_def("bitfield B : bits(8) = { f : 7..0 }").is_ok());
     assert!(parse_def("bitfield B : bits(8) = { f : 4 }").is_ok());
-    // Parenthesised ranges are rejected; `Typ` parens still work.
-    assert!(parse_def("bitfield B : bits(8) = { f : (7..0) }").is_err());
+    assert!(parse_def("bitfield B : bits(8) = { f : (7..0) }").is_ok());
     assert!(parse_typ("(int, bool)").is_ok());
 }
 
@@ -773,6 +769,18 @@ fn parse_index_range_tails() {
     assert_eq!(
         parse_def("bitfield B : bits(8) = { f : a @ b }").unwrap(),
         field(ab.clone())
+    );
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : (a @ b) }").unwrap(),
+        field(ab.clone())
+    );
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : (a) @ (b) }").unwrap(),
+        field(ab.clone())
+    );
+    assert_eq!(
+        parse_def("bitfield B : bits(8) = { f : ((a @ b) @ c) }").unwrap(),
+        field(concat(ab, IndexRange::Single(Typ::Id("c".to_string()))))
     );
     // Right-nested: `a @ b @ c` is `a @ (b @ c)`.
     assert_eq!(
