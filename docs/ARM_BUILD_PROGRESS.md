@@ -29,6 +29,20 @@ is not a complete build. Lean acceptance must include compiling generated code.
 - Attributes on the same line no longer swallow their following definition.
   Builtin argument sorts, refined `int`/`bool` names, tuple function arguments,
   numeric/bool aliases and operator folding have OCaml reference regressions.
+- Binder kinds now follow their uses and constraints instead of defaulting to
+  `Type`. Conflicting kinds fail explicitly; existential shadowing is local.
+  Constructor signatures propagate through includes in source order. Workers
+  share immutable copy-on-write signature maps, and already converted type
+  declarations are reused rather than parsed twice. Earlier workers cannot see
+  later declarations, and failed or outcome-local declarations do not escape.
+- Parenthesized bitfield ranges and concatenations match the OCaml productions,
+  including ARM's `(15..10 @ 9..0)`. Singleton type parentheses remain unique.
+- Setter assignment becomes an application with the RHS appended once, matching
+  OCaml's unit/tuple argument normalization and `setter` annotation. AST nodes
+  store optional boxed annotations; expressions, patterns and top-level/nested
+  definition wrappers retain structured attributes, docs and private visibility.
+  Unannotated JSON remains compatible. Field/clause annotations and propagation
+  through all later compiler passes still need completion.
 - All 59 standard-library files are embedded, including nested concurrency and
   float libraries. A separately documented, unmodified Sail 0.17.1 `trace.sail`
   supplies the legacy ARM include; its license and source hash are retained.
@@ -47,8 +61,8 @@ old artifacts cannot satisfy a failed run. Logs are retained there.
 
 ## Remaining acceptance work
 
-Full kind/type elaboration, all expression/mapping conversions, attributes and
-visibility, typed rewrites and executable Lean body emission remain incomplete.
+Full kind/type elaboration, all expression/mapping conversions, complete
+annotation handling, typed rewrites and executable Lean body emission remain incomplete.
 The E2E path also reports missing stages. Whole-program checking and generated
 Lean must be verified on the full model. The bounded frontend holds a window of
 definitions, not a strict byte quota: one large definition must still fit RAM,

@@ -9,6 +9,30 @@
 use crate::{NodeId, Span, Symbol};
 use serde::{Deserialize, Serialize};
 
+/// Untyped source annotations. Most nodes have none; store the uncommon
+/// payload behind a pointer rather than allocating vectors on every node.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Annotation {
+    pub attributes: Vec<Attribute>,
+    pub documentation: Option<String>,
+    pub private: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attribute {
+    pub name: String,
+    pub data: Option<AttributeData>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AttributeData {
+    Object(Vec<(String, AttributeData)>),
+    Num(String),
+    Str(String),
+    Bool(bool),
+    List(Vec<AttributeData>),
+}
+
 /// A located AST node: generational identity + source span + payload.
 /// `Send + Sync` whenever `K` is (all our `K`s are).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,12 +40,14 @@ pub struct Node<K> {
     pub id: NodeId,
     pub span: Span,
     pub kind: K,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotation: Option<Box<Annotation>>,
 }
 
 impl<K> Node<K> {
     #[must_use]
     pub fn new(id: NodeId, span: Span, kind: K) -> Self {
-        Node { id, span, kind }
+        Node { id, span, kind, annotation: None }
     }
 
     #[must_use]
@@ -30,7 +56,12 @@ impl<K> Node<K> {
             id: NodeId::DUMMY,
             span: Span::DUMMY,
             kind,
+            annotation: None,
         }
+    }
+
+    pub fn annotation_mut(&mut self) -> &mut Annotation {
+        self.annotation.get_or_insert_with(Box::default)
     }
 }
 

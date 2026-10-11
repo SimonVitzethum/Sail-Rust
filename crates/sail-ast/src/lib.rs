@@ -28,6 +28,7 @@ pub use interner::{Interner, SimpleInterner, Symbol};
 pub use span::{FileId, Span};
 
 pub use ast::{
+    Annotation, Attribute, AttributeData,
     Ast, Constraint, ConstraintKind, DecSpec, Def, DefKind, Exp, ExpKind, Extern, Fixity, Funcl,
     FunclSet, FExp, IndexRange, IndexRangeKind, KOpt, Kind, LExp, LExpKind, Lit, LitKind, Loop,
     Mapcl, MapclKind, MPExp, MPExpKind, Name, NExp, NExpKind, Node, Order, PExp, PExpKind, Pat, PatKind, QuantItem,

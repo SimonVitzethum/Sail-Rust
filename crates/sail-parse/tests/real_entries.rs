@@ -394,6 +394,44 @@ fn constructor_arguments_use_bound_kinds_and_inference_respects_shadowing() {
 }
 
 #[test]
+fn setter_assignments_append_rhs_once_and_keep_ocaml_argument_shapes() {
+    for (source, name, arity) in [
+        ("_R(n) = compute()", "_R", 2),
+        ("set() = compute()", "set", 1),
+        ("set((a, b)) = compute()", "set", 3),
+        ("set(a, (b, c)) = compute()", "set", 3),
+        ("x.f() = compute()", "_mod_f", 2),
+    ] {
+        let out = parse_exp(source).unwrap();
+        let ExpKind::App { func, args } = &out.value.kind else { panic!("{:?}", out.value); };
+        assert_eq!(out.interner.resolve(func.symbol), Some(name));
+        assert_eq!(args.len(), arity, "{source}");
+        assert!(matches!(&args.last().unwrap().kind, ExpKind::App { func, .. }
+            if out.interner.resolve(func.symbol) == Some("compute")));
+        assert_eq!(out.value.annotation.as_ref().unwrap().attributes[0].name, "setter");
+    }
+    for source in ["var set() = 1 in ()", "(set(1), x) = (2, 3)", "set(1)[0] = 1"] {
+        assert!(parse_exp(source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn source_annotations_survive_conversion_and_serialization() {
+    let out = parse_def("/// kept documentation\nprivate $[never_fold, payload { enabled = true, values = [1, \"x\"] }] val f : unit -> unit").unwrap();
+    let annotation = out.value.annotation.as_ref().unwrap();
+    assert!(annotation.private);
+    assert!(annotation.documentation.as_ref().unwrap().contains("kept documentation"));
+    assert_eq!(annotation.attributes[0].name, "never_fold");
+    assert!(matches!(&annotation.attributes[1].data, Some(sail_ast::AttributeData::Object(fields))
+        if matches!(fields[0].1, sail_ast::AttributeData::Bool(true))));
+    let json = serde_json::to_vec(&out.value).unwrap();
+    assert_eq!(serde_json::from_slice::<sail_ast::Def>(&json).unwrap(), out.value);
+    assert!(parse_exp("$[never_fold] f()").unwrap().value.annotation.is_some());
+    assert!(parse_pat("$[payload 1] x").unwrap().value.annotation.is_some());
+    assert!(parse_exp("x").unwrap().value.annotation.is_none());
+}
+
+#[test]
 fn declared_constructors_infer_kinds_without_retaining_their_bodies() {
     let mut parser = RealParser::new();
     let span = sail_ast::Span::DUMMY;

@@ -15,5 +15,8 @@ sail-grammar = { path = "../sail-grammar" }
 sail-lex = { path = "../sail-lex" }
 sail-shard = { path = "../sail-shard" }
 
+[dev-dependencies]
+serde_json = "1"
+
 [lints]
 workspace = true

@@ -107,7 +107,46 @@ pub(crate) fn parse_def_src(c: &mut Ctx, span: Span, src: &str) -> Result<Def, S
         Ok(kind) => kind,
         Err(error) => { *c.constructors = saved; return Err(error); }
     };
-    Ok(c.node(span, kind))
+    let mut def = c.node(span, kind);
+    annotate_definition(&mut def, &d);
+    Ok(def)
+}
+
+fn attributes(attrs: &[g::Attr]) -> Vec<sail_ast::Attribute> {
+    attrs.iter().map(|attr| sail_ast::Attribute {
+        name: attr.name.clone(), data: attr.data.as_ref().map(attribute_data),
+    }).collect()
+}
+
+fn attribute_data(data: &g::AttrData) -> sail_ast::AttributeData {
+    use sail_ast::AttributeData as A;
+    match data {
+        g::AttrData::Object(fields) => A::Object(fields.iter().map(|(name, data)| (name.clone(), attribute_data(data))).collect()),
+        g::AttrData::Num(value) => A::Num(value.clone()),
+        g::AttrData::Str(value) => A::Str(value.clone()),
+        g::AttrData::Bool(value) => A::Bool(*value),
+        g::AttrData::List(values) => A::List(values.iter().map(attribute_data).collect()),
+    }
+}
+
+fn annotate_definition(def: &mut Def, mut source: &g::Def) {
+    loop {
+        match source {
+            g::Def::Attr(attrs, inner) => {
+                def.annotation_mut().attributes.extend(attributes(attrs));
+                source = inner;
+            }
+            g::Def::Private(inner) => {
+                def.annotation_mut().private = true;
+                source = inner;
+            }
+            g::Def::Doc(g::DocComment::Line(doc) | g::DocComment::Block(doc), inner) => {
+                def.annotation_mut().documentation = Some(doc.clone());
+                source = inner;
+            }
+            g::Def::Aux(_) => break,
+        }
+    }
 }
 
 /// `let`-Def aus Mini-AST-Rohtext senken (Datei-Pfad, [`crate::real`]).
@@ -603,7 +642,11 @@ fn conv_pat(c: &mut Ctx, span: Span, p: &g::Pat) -> Result<Pat, String> {
             _ => return Err("`as` with non-name has no sail-ast core node".to_owned()),
         },
         // Attribute haben im Core keinen Muster-Slot → Hülle entfällt.
-        g::Pat::Attr(_, q) => return conv_pat(c, span, q),
+        g::Pat::Attr(attrs, q) => {
+            let mut pat = conv_pat(c, span, q)?;
+            pat.annotation_mut().attributes.splice(0..0, attributes(attrs));
+            return Ok(pat);
+        },
     };
     Ok(c.node(span, kind))
 }
@@ -736,6 +779,19 @@ fn conv_mpat(c: &mut Ctx, span: Span, p: &g::MPat) -> Result<Pat, String> {
 // ---------------------------------------------------------------------------
 // Ausdrücke
 // ---------------------------------------------------------------------------
+
+/// `to_ast_assign` distinguishes a complete application from an l-value.
+/// Infix parsing can wrap the application in a one-operand chain. Calls
+/// inside fields or vector accesses remain invalid assignment targets.
+fn assignment_call(exp: &g::Exp) -> Option<&g::Exp> {
+    match exp {
+        g::Exp::App(..) => Some(exp),
+        g::Exp::Infix(chain) if chain.prefixes.is_empty() && chain.tail.is_empty() =>
+            assignment_call(&chain.head),
+        g::Exp::Suffix(_, suffixes) if matches!(suffixes.last(), Some(g::ExpSuffix::Call(..))) => Some(exp),
+        _ => None,
+    }
+}
 
 /// Oberflächen-Ausdruck als L-Wert lesen (Teilmenge mit Core-Slots).
 fn exp_to_lexp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<LExp, String> {
@@ -936,9 +992,33 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
             }
             return Ok(acc);
         }
-        g::Exp::Assign(x, y) => ExpKind::Assign {
-            lexp: Box::new(exp_to_lexp(c, span, x)?),
-            value: Box::new(conv_exp(c, span, y)?),
+        g::Exp::Assign(x, y) => {
+            if let Some(call) = assignment_call(x) {
+                let application = conv_exp(c, span, call)?;
+                let ExpKind::App { func, mut args } = application.kind else {
+                    return Err("setter target must be a function application".into());
+                };
+                // OCaml treats a sole unit as no arguments and flattens a
+                // sole tuple. All other argument lists retain their shape.
+                if args.len() == 1 {
+                    let only = args.pop().expect("one argument");
+                    match only.kind {
+                        ExpKind::Lit(Node { kind: LitKind::Unit, .. }) => {}
+                        ExpKind::Tuple(items) => args = items,
+                        _ => args.push(only),
+                    }
+                }
+                args.push(conv_exp(c, span, y)?);
+                let mut setter = c.node(span, ExpKind::App { func, args });
+                setter.annotation_mut().attributes.push(sail_ast::Attribute {
+                    name: "setter".into(), data: None,
+                });
+                return Ok(setter);
+            }
+            ExpKind::Assign {
+                lexp: Box::new(exp_to_lexp(c, span, x)?),
+                value: Box::new(conv_exp(c, span, y)?),
+            }
         },
         g::Exp::Let(q, x, y) => ExpKind::Let {
             pat: conv_pat(c, span, q)?,
@@ -1093,7 +1173,11 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
             exp: Box::new(conv_exp(c, span, x)?),
         },
         // Attribute haben im Core keinen Ausdruck-Slot → Hülle entfällt.
-        g::Exp::Attr(_, x) => return conv_exp(c, span, x),
+        g::Exp::Attr(attrs, x) => {
+            let mut exp = conv_exp(c, span, x)?;
+            exp.annotation_mut().attributes.splice(0..0, attributes(attrs));
+            return Ok(exp);
+        },
     };
     Ok(c.node(span, kind))
 }
@@ -1632,7 +1716,9 @@ fn conv_defaux(c: &mut Ctx, span: Span, d: &g::DefAux) -> Result<DefKind, String
             let nested = (|| {
                 defs.iter().map(|def| {
                     let kind = conv_def(c, span, def)?;
-                    Ok(c.node(span, kind))
+                    let mut converted = c.node(span, kind);
+                    annotate_definition(&mut converted, def);
+                    Ok(converted)
                 }).collect::<Result<Vec<_>, String>>()
             })();
             *c.fixities = saved_fixities;
