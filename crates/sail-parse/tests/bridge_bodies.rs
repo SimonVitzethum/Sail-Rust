@@ -51,6 +51,7 @@ fn type_keyword_picks_typedefkind() {
             })
             .unwrap_or_else(|| panic!("Type-Def fehlt für {src:?}"));
         let got = match &td.kind {
+            TypeDefKind::Abstract { .. } => panic!("unexpected abstract type"),
             TypeDefKind::Abbrev { name, quant, .. } => {
                 assert!(quant.is_empty());
                 assert_eq!(resolve(&out, name.symbol).as_deref(), Some(want));

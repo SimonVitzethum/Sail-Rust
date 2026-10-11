@@ -365,7 +365,7 @@ pub fn is_match_bv(arms: &[Pat]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Effect, FunSig, Nexp, Typ};
+    use crate::{FunSig, Nexp, Typ};
 
     fn printer() -> LeanPrinter {
         LeanPrinter::with_default()
@@ -570,7 +570,9 @@ mod tests {
             name: "f".into(),
             args: vec![("x".into(), Typ::Nat)],
             ret: Typ::Nat,
-            effect: Effect::Pure,
+            is_monadic: false,
+            early_return: false,
+            has_loop: false,
             span: crate::Span::new(crate::FileId(0), 1, 1),
         };
         assert_eq!(

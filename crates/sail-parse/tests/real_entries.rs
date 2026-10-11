@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+use sail_ast::Interner as _;
 use sail_ast::{DefKind, ExpKind, PatKind, TypArgKind, TypKind, TypeDefKind};
 use sail_parse::{
     FileId, RealParser, parse_def, parse_exp, parse_file, parse_file_real, parse_pat, parse_typ,

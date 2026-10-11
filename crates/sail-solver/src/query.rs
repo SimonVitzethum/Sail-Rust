@@ -318,7 +318,7 @@ mod tests {
         let a = ixa.intern("a");
         let mut ixb = SimpleInterner::new();
         let b = ixb.intern("b");
-        assert_eq!((a, b), (sail_nexp::Kid(0), sail_nexp::Kid(0)));
+        assert_eq!((a, b), (sail_ast::Symbol(0), sail_ast::Symbol(0)));
         assert_ne!(
             Constraint::from_nconstraint(&ge(a), &ixa).cache_key(),
             Constraint::from_nconstraint(&ge(b), &ixb).cache_key()

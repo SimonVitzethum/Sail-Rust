@@ -471,7 +471,6 @@ mod tests {
     use sail_ast::{
         DecSpec, LitKind, Name, Node, NodeId, SimpleInterner, Span, Symbol, TypKind,
     };
-    use sail_ast::Interner as _;
 
     struct Ctx {
         interner: SimpleInterner,
@@ -569,15 +568,18 @@ mod tests {
         assert_eq!(lean_typ_string_of_ast(&ctx.typ_id("int"), &ctx.interner), "Int");
         assert_eq!(lean_typ_string_of_ast(&ctx.typ_id("nat"), &ctx.interner), "Nat");
         // option/list/vector go through the printer, not the spelling fallback.
-        let opt = ctx.typ_app("option", vec![Ctx::typarg_typ(ctx.typ_id("bool"))]);
+        let bool_typ = ctx.typ_id("bool");
+        let opt = ctx.typ_app("option", vec![Ctx::typarg_typ(bool_typ)]);
         assert_eq!(lean_typ_string_of_ast(&opt, &ctx.interner), "(Option Bool)");
-        let list = ctx.typ_app("list", vec![Ctx::typarg_typ(ctx.typ_id("int"))]);
+        let int_typ = ctx.typ_id("int");
+        let list = ctx.typ_app("list", vec![Ctx::typarg_typ(int_typ)]);
         assert_eq!(lean_typ_string_of_ast(&list, &ctx.interner), "(List Int)");
+        let bool_typ = ctx.typ_id("bool");
         let vec = ctx.typ_app(
             "vector",
             vec![
                 Ctx::typarg_nexp(Ctx::nexp_const("8")),
-                Ctx::typarg_typ(ctx.typ_id("bool")),
+                Ctx::typarg_typ(bool_typ),
             ],
         );
         assert_eq!(lean_typ_string_of_ast(&vec, &ctx.interner), "(Vector Bool 8)");
@@ -600,7 +602,8 @@ mod tests {
         );
         // register(t) has no printer-`Typ` case: fallback, callers use
         // `RegisterInfo::register_ref_ty` for the `(RegisterRef T)` spelling.
-        let reg = ctx.typ_app("register", vec![Ctx::typarg_typ(ctx.typ_id("bool"))]);
+        let bool_typ = ctx.typ_id("bool");
+        let reg = ctx.typ_app("register", vec![Ctx::typarg_typ(bool_typ)]);
         assert_eq!(lean_typ_of_ast(&reg, &ctx.interner), None);
         // Non-decimal-widest nexp constants are outside `Nexp::Const(i128)`.
         let huge = "999999999999999999999999999999999999999999999999999999999999";
@@ -616,9 +619,11 @@ mod tests {
     fn ast_extraction_matches_string_pipeline() {
         let mut ctx = Ctx::new();
         let init: Exp = ctx.lit_exp("00000000000000000000000000000000");
+        let bits32 = ctx.bits("32");
+        let bits64 = ctx.bits("64");
         let defs: Vec<Def> = vec![
-            Node::dummy(DefKind::Register(ctx.dec("PSTATE", ctx.bits("32"), Some(init)))),
-            Node::dummy(DefKind::Register(ctx.dec("SP", ctx.bits("64"), None))),
+            Node::dummy(DefKind::Register(ctx.dec("PSTATE", bits32, Some(init)))),
+            Node::dummy(DefKind::Register(ctx.dec("SP", bits64, None))),
             // Non-register defs are skipped, order of registers preserved.
             Node::dummy(DefKind::Pragma {
                 key: "x".to_owned(),
@@ -659,8 +664,9 @@ mod tests {
             func: callee,
             args: Vec::new(),
         });
+        let bits8 = ctx.bits("8");
         let defs: Vec<Def> =
-            vec![Node::dummy(DefKind::Register(ctx.dec("R", ctx.bits("8"), Some(app))))];
+            vec![Node::dummy(DefKind::Register(ctx.dec("R", bits8, Some(app))))];
         let regs = extract_registers_ast(&defs, &ctx.interner);
         assert_eq!(regs.len(), 1);
         assert!(regs[0].has_init);
@@ -671,7 +677,8 @@ mod tests {
             func: callee2,
             args: Vec::new(),
         });
-        let dec = ctx.dec("R", ctx.bits("8"), Some(app2));
+        let bits8 = ctx.bits("8");
+        let dec = ctx.dec("R", bits8, Some(app2));
         match dec_spec_to_minimal(&dec, &ctx.interner).expect("resolvable name") {
             MinimalDef::Register { name, typ, init } => {
                 assert_eq!(name, "R");
