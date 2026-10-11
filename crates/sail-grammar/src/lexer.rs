@@ -163,6 +163,7 @@ fn is_oper_char(c: char) -> bool {
 
 fn keyword(word: &str) -> Option<Tok> {
     let t = match word {
+        "_" => Tok::Under,
         "and" => Tok::And,
         "as" => Tok::As,
         "assert" => Tok::Assert,

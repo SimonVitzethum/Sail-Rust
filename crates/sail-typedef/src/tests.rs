@@ -436,6 +436,7 @@ fn bitfield_is_hard_error_with_span() {
     let td_span = Span::new(FileId(3), 10, 40);
     let bv8 = typ_app(&mut ix, "bits", vec![targ_nexp(nexp_const("8"))]);
     let td = TypeDef {
+        annotation: None,
         id: NodeId::DUMMY,
         span: td_span,
         kind: TypeDefKind::Bitfield {
@@ -460,6 +461,7 @@ fn abstract_is_hard_error_with_span() {
     let mut ix = SimpleInterner::new();
     let td_span = Span::new(FileId(5), 0, 9);
     let td = TypeDef {
+        annotation: None,
         id: NodeId::DUMMY,
         span: td_span,
         kind: TypeDefKind::Abstract {

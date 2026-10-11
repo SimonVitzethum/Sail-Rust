@@ -11,6 +11,22 @@ use sail_ast::{
 use sail_resolve::ResolveErrorKind;
 use sail_resolve::resolve::resolve;
 
+#[test]
+fn deep_pattern_names_use_an_explicit_work_stack() {
+    std::thread::Builder::new().stack_size(64 * 1024).spawn(|| {
+        let mut interner = SimpleInterner::new();
+        let symbol = interner.intern("leaf");
+        let mut pat = Node::dummy(PatKind::Id(Name::dummy(symbol)));
+        for _ in 0..10_000 {
+            pat = Node::dummy(PatKind::Not(Box::new(pat)));
+        }
+        assert_eq!(sail_resolve::resolve::pat_names(&pat, &interner),
+            vec![("leaf".to_owned(), Span::DUMMY)]);
+        // Check the traversal separately from the AST's derived destructor.
+        while let PatKind::Not(inner) = pat.kind { pat = *inner; }
+    }).unwrap().join().unwrap();
+}
+
 fn nm(it: &mut SimpleInterner, text: &str) -> Name {
     Name::dummy(it.intern(text))
 }

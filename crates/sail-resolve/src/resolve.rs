@@ -663,7 +663,9 @@ fn rec_is_rec(rec: &RecOpt) -> bool {
 /// are *not* walked: bodies are `Undef` placeholders until the Lane-02
 /// grammar lands (see `RESOLVE_GAPS.md`).
 pub fn pat_names(pat: &Pat, it: &impl Interner) -> Vec<(String, Span)> {
-    fn walk(pat: &Pat, it: &impl Interner, out: &mut Vec<(String, Span)>) {
+    let mut out = Vec::new();
+    let mut pending = vec![pat];
+    while let Some(pat) = pending.pop() {
         match &pat.kind {
             PatKind::Id(name) => {
                 if let Some(text) = it.resolve(name.symbol).map(str::to_owned) {
@@ -674,7 +676,7 @@ pub fn pat_names(pat: &Pat, it: &impl Interner) -> Vec<(String, Span)> {
                 if let Some(text) = it.resolve(id.symbol).map(str::to_owned) {
                     out.push((text, id.span));
                 }
-                walk(pat, it, out);
+                pending.push(pat);
             }
             PatKind::VectorSubrange { id, .. } => {
                 if let Some(text) = it.resolve(id.symbol).map(str::to_owned) {
@@ -682,11 +684,11 @@ pub fn pat_names(pat: &Pat, it: &impl Interner) -> Vec<(String, Span)> {
                 }
             }
             PatKind::Or(a, b) | PatKind::Cons(a, b) => {
-                walk(a, it, out);
-                walk(b, it, out);
+                pending.push(b);
+                pending.push(a);
             }
             PatKind::Not(inner) | PatKind::Typ { pat: inner, .. } | PatKind::Var { pat: inner, .. } => {
-                walk(inner, it, out);
+                pending.push(inner);
             }
             PatKind::App { args, .. }
             | PatKind::Vector(args)
@@ -694,20 +696,14 @@ pub fn pat_names(pat: &Pat, it: &impl Interner) -> Vec<(String, Span)> {
             | PatKind::Tuple(args)
             | PatKind::List(args)
             | PatKind::StringAppend(args) => {
-                for a in args {
-                    walk(a, it, out);
-                }
+                pending.extend(args.iter().rev());
             }
             PatKind::Struct { fields, .. } => {
-                for (_, fp) in fields {
-                    walk(fp, it, out);
-                }
+                pending.extend(fields.iter().rev().map(|(_, pat)| pat));
             }
             PatKind::Lit(_) | PatKind::Wild => {}
         }
     }
-    let mut out = Vec::new();
-    walk(pat, it, &mut out);
     out
 }
 

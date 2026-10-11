@@ -394,6 +394,15 @@ fn constructor_arguments_use_bound_kinds_and_inference_respects_shadowing() {
 }
 
 #[test]
+fn wildcard_parameters_do_not_become_named_bindings() {
+    let out = parse_def("function eq_unit(_, _) = true").unwrap();
+    let DefKind::Fundef { funcls, .. } = &out.value.kind else { panic!("{:?}", out.value); };
+    let sail_ast::PExpKind::PatExp { pat, .. } = &funcls[0].arm.kind else { panic!("{:?}", funcls); };
+    assert!(matches!(&pat.kind, PatKind::Tuple(items)
+        if items.len() == 2 && items.iter().all(|pat| matches!(pat.kind, PatKind::Wild))));
+}
+
+#[test]
 fn large_arm_impdef_converts_on_the_default_thread_stack() {
     // Unmodified ARMv9.4 ImpDefBool with its original license. The recursive
     // converter overflowed Rust's default 2 MiB worker stack on this body.

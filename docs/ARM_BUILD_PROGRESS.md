@@ -50,6 +50,10 @@ is not a complete build. Lean acceptance must include compiling generated code.
   22-source ARM frontend now reaches global name resolution; this is still not
   a typed compilation or Lean build. Other recursive type/pattern/serialization
   paths remain to be audited.
+- Pattern-name collection uses an explicit work stack as well, with a regression
+  covering 10,000 nested patterns on a 64 KiB thread stack. The grammar lexer
+  distinguishes wildcard `_` from identifiers such as `_R`; repeated wildcard
+  parameters no longer become duplicate value bindings.
 - All 59 standard-library files are embedded, including nested concurrency and
   float libraries. A separately documented, unmodified Sail 0.17.1 `trace.sail`
   supplies the legacy ARM include; its license and source hash are retained.

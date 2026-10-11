@@ -1,6 +1,15 @@
 use sail_grammar::lexer::{tokenize, Tok};
 
 #[test]
+fn wildcard_is_distinct_from_underscore_prefixed_identifiers() {
+    let tokens: Vec<_> = tokenize("_ _R __deref").unwrap()
+        .into_iter().map(|(_, token, _)| token).collect();
+    assert_eq!(tokens, vec![Tok::Under, Tok::Id("_R".into()), Tok::Id("__deref".into())]);
+    assert!(matches!(sail_grammar::parse_pat("_").unwrap(), sail_grammar::ast::Pat::Wild));
+    assert!(matches!(sail_grammar::parse_typ("_").unwrap(), sail_grammar::ast::Typ::Wild));
+}
+
+#[test]
 fn longest_operator_match_preserves_reserved_tokens_and_suffixes() {
     let tokens: Vec<_> = tokenize("= == >= >=_s != / /_u ^^ @ ^ :: : .. . * ** | || => -> <-> - --")
         .unwrap().into_iter().map(|(_, token, _)| token).collect();
