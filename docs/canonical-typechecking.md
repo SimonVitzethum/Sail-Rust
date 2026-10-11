@@ -44,13 +44,22 @@ and rigid dependent identities was checked by OCaml Sail under 256 MiB without
 swap (49.9 MiB peak). These are not evidence of a complete ARM typecheck.
 
 `scripts/typecheck-ooc-gate.sh` generates a supported-subset workload and checks
-all 4,096 definitions and 1,052,672 expressions with eight workers under
+all 4,096 definitions and 1,052,672 expressions with 16 workers under
 **128 MiB without swap**. The flat AST store contains **567,919,927 bytes**
 (about 542 MiB), over four times the cgroup limit. The run peaks at 128 MiB;
-body/declaration checking takes 1.98 s and the full frontend/checking run 9.86 s.
+body/declaration checking takes 1.36 s and the full frontend/checking run 10.42 s.
+The earlier eight-worker run also passes (1.98 s checking, 9.86 s total).
 The script requires the expected counts, a workload larger than the memory
 limit and the explicit missing-backend failure. It does not accept this partial
 compilation as ARM or Lean success.
+
+The current full ARM gate reaches an explicit missing proof during declaration
+checking: `Mem_read_request` in
+`concurrency_interface/read_write_v1.sail`. Its constructor conditions must be
+instantiated and discharged from the calling scheme's assumptions. Kind/scope
+checking alone cannot establish this, so the checker rejects it until the
+canonical dependent solver bridge exists. The latest full-model invocation
+still exits 1, peaks at 1.3 GiB under the 16 GiB limit and never reaches Lake.
 
 The memory bound is the resident declaration tables plus a bounded number of
 loaded definitions, local scopes and worker temporaries. A single definition

@@ -72,8 +72,8 @@ old artifacts cannot satisfy a failed run. Logs are retained there.
 
 ## Remaining acceptance work
 
-Latest validation (2026-10-11): the complete workspace has 1,136 passing tests
-under `MemoryMax=4G MemorySwapMax=0` (480.3 MiB cgroup peak). The focused
+Latest validation (2026-10-11): the complete workspace has 1,150 passing tests
+under `MemoryMax=4G MemorySwapMax=0` (396.3 MiB cgroup peak). The earlier focused
 AST/parser/resolver/CLI gate has 226 passing tests with each binary limited to
 128 MiB without swap (110.9 MiB maximum, including six 10,000-level trees on
 a 128 KiB thread stack). Its separately limited build peaks at 533.8 MiB.
@@ -100,6 +100,29 @@ limit. The regular **16 GiB** gate reaches the same point (44.66 s, 1.3 GiB
 cgroup peak). The flat format currently uses roughly twice the space of the old
 recursive JSON, and the ordered reader remains sequential. These are failed
 compilations at the missing typechecker/backend, not full ARM build results.
+
+The CLI now also runs a real, partial canonical typechecker. Declaration
+histories preserve source-position lookup; bounded workers load bodies from
+disk and report errors deterministically. Supported rules include ordinary
+polymorphic calls, validated annotations, tuples, locals, conditions, enum
+constants, union constructor signatures and literal refinements. Unproved
+constructor conditions and unsupported rules fail explicitly. The dedicated
+typechecker/CLI gate has **170 passing tests**, each binary under 128 MiB
+without swap (38.9 MiB peak), including 10,000 nested calls/scopes/numeric terms
+on small thread stacks. See [canonical typechecking](canonical-typechecking.md).
+
+The large supported-subset gate checks **4,096 definitions and 1,052,672
+expressions** with **16 workers under 128 MiB without swap**. It processes
+567,919,927 AST bytes on disk (about 542 MiB); checking takes 1.36 s and the full
+run 10.42 s. It deliberately requires the missing-backend error after checking.
+It demonstrates actual disk-backed body checking, not complete ARM compilation.
+
+The latest full ARM invocation under 16 GiB still converts all 31,267
+definitions and then rejects the missing constraint discharge for
+`Mem_read_request` in `concurrency_interface/read_write_v1.sail`. The run peaks
+at 1.3 GiB without swap (53.11 s). Connecting canonical parameter substitution,
+scheme assumptions and the prover is required before these declarations can
+pass. No full ARM body check or Lake build has succeeded.
 
 Full kind/type elaboration, all expression/mapping conversions, complete
 annotation handling, typed rewrites and executable Lean body emission remain incomplete.
