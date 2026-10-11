@@ -72,21 +72,34 @@ old artifacts cannot satisfy a failed run. Logs are retained there.
 
 ## Remaining acceptance work
 
-Latest validation (2026-10-11): the complete workspace has 1,128 passing tests
-under `MemoryMax=4G MemorySwapMax=0` (716.6 MiB cgroup peak). The additional
-memory gate executes 368 frontend/OOC/scheduler/rewrite tests under 128 MiB
-per binary, including the large ARM definition, 10,000-pattern traversal and
-512/256 MiB synthetic workloads. All pass; test binaries peak at 13.9 MiB
-(the separately limited build step peaks at 506.1 MiB).
+Latest validation (2026-10-11): the complete workspace has 1,136 passing tests
+under `MemoryMax=4G MemorySwapMax=0` (480.3 MiB cgroup peak). The focused
+AST/parser/resolver/CLI gate has 226 passing tests with each binary limited to
+128 MiB without swap (110.9 MiB maximum, including six 10,000-level trees on
+a 128 KiB thread stack). Its separately limited build peaks at 533.8 MiB.
 
-The latest canonical 22-input ARM gate completes grammar/core-AST conversion
-without enlarging worker stacks and reaches name resolution at 680.4 MiB
-cgroup peak under the 16 GiB limit. It fails with three resolver diagnostics,
-starting with duplicate `max_int` val specs in the library and ARM prelude.
-The OCaml reference `type_env.ml::add_val_spec` permits legacy duplicate
-function declarations with a warning and updates their binding; the Rust
-resolver currently rejects them. This is the next semantic mismatch to fix.
-These figures measure a failed frontend run, not a complete ARM compilation.
+The canonical 22-input ARM frontend now converts, spools, reloads and resolves
+31,267 definitions from 45 files using 16 workers on normal thread stacks.
+Three legacy val redeclarations (`max_int`, `pow2`, `sub_bits_int`) produce
+warnings; the later binding wins and existing extern metadata persists,
+matching the OCaml reference and an executable differing-signature test.
+
+Recursive AST JSON cannot reload ARM `ImpDefBool` under serde_json's nesting
+limit. The new versioned flat format reconstructs and destroys all recursive
+AST families iteratively, including annotation data and internal values.
+Worker results contain only content IDs and sizes. See
+[flat AST storage](flat-ast-storage.md) for its representation and limits.
+
+The former `/tmp` spool was on tmpfs and therefore retained its data in RAM
+with swap disabled. Spooling now uses the disk cache directory or
+`SAIL_RS_SPOOL_DIR`; Linux RAM filesystems are rejected explicitly. The real
+ARM frontend reads/writes 1,039,913,215 flat AST bytes under **512 MiB** with no
+swap and reaches the explicit missing compiler stages (46.62 s, 512 MiB cgroup
+peak). This demonstrates eviction of disk-backed data larger than the memory
+limit. The regular **16 GiB** gate reaches the same point (44.66 s, 1.3 GiB
+cgroup peak). The flat format currently uses roughly twice the space of the old
+recursive JSON, and the ordered reader remains sequential. These are failed
+compilations at the missing typechecker/backend, not full ARM build results.
 
 Full kind/type elaboration, all expression/mapping conversions, complete
 annotation handling, typed rewrites and executable Lean body emission remain incomplete.
