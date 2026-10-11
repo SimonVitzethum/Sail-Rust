@@ -423,9 +423,19 @@ pub struct Mapcl {
     pub kind: MapclKind,
 }
 
+/// One side of a bidirectional mapping (`mpexp_aux`). It is a mapping
+/// pattern with an optional guard, not a match arm with a fabricated body.
+pub type MPExp = Node<MPExpKind>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MPExpKind {
+    Pat(Pat),
+    When { pat: Pat, guard: Exp },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MapclKind {
-    Bidir { forwards: PExp, backwards: PExp },
+    Bidir { forwards: MPExp, backwards: MPExp },
     Forwards(PExp),
     Backwards(PExp),
 }

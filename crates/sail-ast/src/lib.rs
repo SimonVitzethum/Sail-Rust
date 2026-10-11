@@ -30,7 +30,7 @@ pub use span::{FileId, Span};
 pub use ast::{
     Ast, Constraint, ConstraintKind, DecSpec, Def, DefKind, Exp, ExpKind, Extern, Fixity, Funcl,
     FunclSet, FExp, IndexRange, IndexRangeKind, KOpt, Kind, LExp, LExpKind, Lit, LitKind, Loop,
-    Mapcl, MapclKind, Name, NExp, NExpKind, Node, Order, PExp, PExpKind, Pat, PatKind, QuantItem,
+    Mapcl, MapclKind, MPExp, MPExpKind, Name, NExp, NExpKind, Node, Order, PExp, PExpKind, Pat, PatKind, QuantItem,
     RecOpt, ScatteredDef, Subst, StructName, TAnnotOpt, Typ, TypArg, TypArgKind, TypKind, TypPat,
     TypPatKind, TypSchm, TypeDef, TypeDefKind, TypeUnion, ValSpec, Value,
 };

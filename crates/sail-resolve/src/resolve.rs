@@ -24,7 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use sail_ast::{
-    Ast, Def, DefKind, Funcl, Interner, Mapcl, MapclKind, Name, Pat, PatKind, PExp, PExpKind,
+    Ast, Def, DefKind, Funcl, Interner, Mapcl, MapclKind, MPExpKind, Name, Pat, PatKind, PExp, PExpKind,
     RecOpt, ScatteredDef, Span, Symbol, TypeDefKind,
 };
 
@@ -385,31 +385,17 @@ impl Resolver {
     }
 
     fn bind_mapcl(&mut self, clause: &Mapcl, it: &impl Interner) {
-        let pair: [&PExp; 2];
-        let single: [&PExp; 1];
-        let list: &[&PExp] = match &clause.kind {
+        match &clause.kind {
             MapclKind::Bidir { forwards, backwards } => {
-                pair = [forwards, backwards];
-                &pair
-            }
-            MapclKind::Forwards(a) | MapclKind::Backwards(a) => {
-                single = [a];
-                &single
-            }
-        };
-        for arm in list {
-            match &arm.kind {
-                PExpKind::PatExp { pat, .. } => {
-                    self.env.enter_scope();
-                    self.bind_pat_list(&pat_names(pat, it));
-                    self.env.exit_scope();
-                }
-                PExpKind::PatWhen { pat, .. } => {
+                for side in [forwards, backwards] {
+                    let (MPExpKind::Pat(pat) | MPExpKind::When { pat, .. }) = &side.kind;
                     self.env.enter_scope();
                     self.bind_pat_list(&pat_names(pat, it));
                     self.env.exit_scope();
                 }
             }
+            MapclKind::Forwards(arm) | MapclKind::Backwards(arm) =>
+                self.bind_funcl_arm(arm, it),
         }
     }
 

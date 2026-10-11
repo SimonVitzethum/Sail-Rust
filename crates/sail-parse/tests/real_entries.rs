@@ -288,6 +288,31 @@ fn descending_loops_and_legacy_bitfield_calls_keep_their_semantics() {
 }
 
 #[test]
+fn bidirectional_mappings_preserve_both_patterns_and_guards() {
+    use sail_ast::{MapclKind, MPExpKind};
+    let out = parse_def("mapping m = { x if p(x) <-> y if q(y) }").unwrap();
+    let DefKind::Mapdef { clauses, .. } = &out.value.kind else { panic!("{:?}", out.value); };
+    let MapclKind::Bidir { forwards, backwards } = &clauses[0].kind else { panic!("{:?}", clauses); };
+    for (side, binding, predicate) in [(forwards, "x", "p"), (backwards, "y", "q")] {
+        let MPExpKind::When { pat, guard } = &side.kind else { panic!("{side:?}"); };
+        let PatKind::Id(name) = &pat.kind else { panic!("{pat:?}"); };
+        assert_eq!(out.interner.resolve(name.symbol), Some(binding));
+        let ExpKind::App { func, .. } = &guard.kind else { panic!("{guard:?}"); };
+        assert_eq!(out.interner.resolve(func.symbol), Some(predicate));
+    }
+    let out = parse_def("mapping m = { x <-> y when p(x) }").unwrap();
+    let DefKind::Mapdef { clauses, .. } = &out.value.kind else { panic!("{:?}", out.value); };
+    assert!(matches!(&clauses[0].kind, MapclKind::Bidir { forwards, backwards }
+        if matches!(forwards.kind, MPExpKind::When { .. }) && matches!(backwards.kind, MPExpKind::When { .. })));
+    for source in [
+        "mapping m = { x if p(x) <-> y when q(x) }",
+        "mapping m = { x <-> y if p(y) when q(y) }",
+    ] {
+        assert!(parse_def(source).is_err(), "conflicting if/when guards: {source}");
+    }
+}
+
+#[test]
 fn function_domain_tuple_becomes_multiple_arguments() {
     let out = parse_def("val f : (int, bool) -> int").unwrap();
     assert!(matches!(&out.value.kind, DefKind::Val(spec)

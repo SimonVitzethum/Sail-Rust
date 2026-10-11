@@ -11,12 +11,11 @@
 //!   same-named `PatKind` variants; anything else maps back to `None`.
 //! - `Exp::{Id,Lit,App,Tuple,Let,Match,Bool}` map onto the `ExpKind`
 //!   subset; `Exit` maps to `ExpKind::Exit`; `Other` maps to `None`
-//!   (it entfällt, per contract). Expression-side `Wild` (from
-//!   [`exp_of_mpat`][crate::ast::exp_of_mpat]) becomes `Undef`.
+//!   (explicitly unsupported at the conversion boundary).
 //! - `MappingClause::{Bidir,Forwards,Backwards}` map onto
 //!   `MapclKind::{Bidir,Forwards,Backwards}` with field names unchanged;
-//!   bidir arms elaborate to `left-pat → right-exp` / `right-pat →
-//!   left-exp` (the `rewrite_ast_realize_mappings` direction split).
+//!   bidirectional sides retain mapping patterns and guards (`MPExp`).
+//!   Executable directions are generated only by mapping elaboration.
 //! - `MappingDef` maps onto `Mapdef { name, annot: Typ_bidir, clauses }`
 //!   (`typ1/typ2` spellings become `Id` types; full `TypSchm`
 //!   elaboration is Lane 02).
@@ -28,7 +27,7 @@
 //! local types; this module is the swap seam.
 
 use sail_ast::{
-    Exp as AstExp, ExpKind, Extern, Funcl, Interner, Lit, LitKind, Mapcl, MapclKind, Name, Node,
+    Exp as AstExp, ExpKind, Extern, Funcl, Interner, Lit, LitKind, Mapcl, MapclKind, MPExp, MPExpKind, Name, Node,
     NodeId, PExp, PExpKind, Pat as AstPat, PatKind, Span, TAnnotOpt, Typ, TypKind, TypSchm,
     ValSpec as AstValSpec,
 };
@@ -59,10 +58,7 @@ fn mk_pexp(kind: PExpKind) -> PExp {
 pub fn pat_to_ast(p: &Pat, it: &mut impl Interner) -> AstPat {
     match p {
         Pat::Lit(s) => mk_pat(PatKind::Lit(Node::dummy(LitKind::String(it.intern(s))))),
-        Pat::Var(_) => mk_pat(PatKind::Var {
-            pat: Box::new(mk_pat(PatKind::Wild)),
-            typ_pat: Node::dummy(sail_ast::TypPatKind::Wild),
-        }),
+        Pat::Var(name) => mk_pat(PatKind::Id(ast_name(it, name))),
         Pat::App(f, args) => mk_pat(PatKind::App {
             func: ast_name(it, f),
             args: args.iter().map(|a| pat_to_ast(a, it)).collect(),
@@ -89,10 +85,7 @@ pub fn pat_from_ast(p: &AstPat, it: &impl Interner) -> Option<Pat> {
             _ => None,
         },
         PatKind::Wild => Some(Pat::Wild),
-        PatKind::Var { pat, .. } => match &pat.kind {
-            PatKind::Wild => Some(Pat::Var("_".to_owned())),
-            _ => None,
-        },
+        PatKind::Id(name) => Some(Pat::Var(resolve_name(name, it)?)),
         PatKind::App { func, args } => {
             let mut out = Vec::with_capacity(args.len());
             for a in args {
@@ -183,30 +176,41 @@ pub fn arm_to_pexp(a: &Arm, it: &mut impl Interner) -> Option<PExp> {
     }
 }
 
-fn body_exp(e: &Exp, it: &mut impl Interner) -> Option<AstExp> {
-    // Expression-side wildcard (from `exp_of_mpat`) has no `ExpKind`
-    // counterpart; `Undef` marks the untranslatable direction.
-    if matches!(e, Exp::Other(s) if s == "_") {
-        return Some(mk_exp(ExpKind::Undef));
-    }
-    exp_to_ast(e, it)
+fn mpat_arm(m: &Mpat, guard: &Option<Exp>, it: &mut impl Interner) -> Option<MPExp> {
+    let pat = pat_to_ast(&crate::ast::pat_of_mpat(m), it);
+    Some(Node::dummy(match guard {
+        None => MPExpKind::Pat(pat),
+        Some(g) => MPExpKind::When { pat, guard: exp_to_ast(g, it)? },
+    }))
 }
 
-fn mpat_arm(
-    m: &Mpat,
-    guard: &Option<Exp>,
-    body: &Exp,
-    it: &mut impl Interner,
-) -> Option<PExp> {
-    let pat = pat_to_ast(&crate::ast::pat_of_mpat(m), it);
-    let body = body_exp(body, it)?;
-    match guard {
-        None => Some(mk_pexp(PExpKind::PatExp { pat, body })),
-        Some(g) => Some(mk_pexp(PExpKind::PatWhen {
-            pat,
-            guard: exp_to_ast(g, it)?,
-            body,
-        })),
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+
+    #[test]
+    fn mapping_variables_roundtrip_without_becoming_wildcards() {
+        let pattern = Pat::Tuple(vec![Pat::Var("first".into()),
+            Pat::App("tag".into(), vec![Pat::Var("second".into())])]);
+        let mut interner = sail_ast::SimpleInterner::new();
+        let ast = pat_to_ast(&pattern, &mut interner);
+        assert_eq!(pat_from_ast(&ast, &interner), Some(pattern));
+    }
+
+    #[test]
+    fn bidirectional_conversion_retains_guards_without_fabricating_expressions() {
+        let clause = MappingClause::Bidir {
+            left: Mpat::Var("left".into()), left_guard: Some(Exp::Id("accept_left".into())),
+            right: Mpat::Wild, right_guard: Some(Exp::Id("accept_right".into())),
+        };
+        let mut interner = sail_ast::SimpleInterner::new();
+        let ast = clause_to_ast(&clause, &mut interner).unwrap();
+        let MapclKind::Bidir { forwards, backwards } = ast.kind else { panic!("{ast:?}"); };
+        for (side, predicate) in [(forwards, "accept_left"), (backwards, "accept_right")] {
+            let MPExpKind::When { guard, .. } = side.kind else { panic!("{side:?}"); };
+            let ExpKind::Id(name) = guard.kind else { panic!("{guard:?}"); };
+            assert_eq!(interner.resolve(name.symbol), Some(predicate));
+        }
     }
 }
 
@@ -219,8 +223,8 @@ pub fn clause_to_ast(c: &MappingClause, it: &mut impl Interner) -> Option<Mapcl>
     match c {
         MappingClause::Bidir { left, left_guard, right, right_guard } => {
             Some(mk_mapcl(MapclKind::Bidir {
-                forwards: mpat_arm(left, left_guard, &crate::ast::exp_of_mpat(right), it)?,
-                backwards: mpat_arm(right, right_guard, &crate::ast::exp_of_mpat(left), it)?,
+                forwards: mpat_arm(left, left_guard, it)?,
+                backwards: mpat_arm(right, right_guard, it)?,
             }))
         }
         MappingClause::Forwards { arm } => {

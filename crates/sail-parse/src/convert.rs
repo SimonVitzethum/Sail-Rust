@@ -13,7 +13,7 @@
 use sail_ast::{
     Constraint, ConstraintKind, DecSpec, Def, DefKind, Exp, ExpKind, Extern, FExp, Fixity, Funcl,
     FunclSet, IdGen, IndexRange, IndexRangeKind, Interner as _, KOpt, Kind, LExp, LExpKind, Lit,
-    LitKind, Loop, Mapcl, MapclKind, Name, NExp, NExpKind, Node, Order, PExp, PExpKind, Pat,
+    LitKind, Loop, Mapcl, MapclKind, MPExpKind, Name, NExp, NExpKind, Node, Order, PExp, PExpKind, Pat,
     PatKind, QuantItem, RecOpt, ScatteredDef, SimpleInterner, Span, StructName, Subst, TAnnotOpt,
     Typ, TypArg, TypArgKind, TypKind, TypPatKind, TypSchm, TypeDefKind, TypeUnion, ValSpec,
 };
@@ -1141,27 +1141,17 @@ fn conv_mpexp_parts(
 }
 
 fn conv_mapcl(c: &mut Ctx, span: Span, m: &g::MapCl) -> Result<Mapcl, String> {
-    // `Bidir`-Rümpfe: Muster-als-Ausdruck braucht Elaboration → `Undef`
-    // (Präzedenz: Brücken-`dummy_arm`).
-    let undef = |c: &mut Ctx| c.node(span, ExpKind::Undef);
     let kind = match m {
         g::MapCl::Bidir(fwd, bwd) => {
-            let (fpat, _) = conv_mpexp_parts(c, span, fwd)?;
-            let (bpat, _) = conv_mpexp_parts(c, span, bwd)?;
-            let mk = |c: &mut Ctx, pat: Pat| PExp {
-                id: c.ids.fresh(),
-                span,
-                kind: PExpKind::PatExp {
-                    pat,
-                    body: undef(c),
-                },
+            let mut side = |surface: &g::MPExp| {
+                let (pat, guard) = conv_mpexp_parts(c, span, surface)?;
+                let kind = match guard {
+                    None => MPExpKind::Pat(pat),
+                    Some(guard) => MPExpKind::When { pat, guard },
+                };
+                Ok::<_, String>(c.node(span, kind))
             };
-            let fwd_arm = mk(c, fpat);
-            let bwd_arm = mk(c, bpat);
-            MapclKind::Bidir {
-                forwards: fwd_arm,
-                backwards: bwd_arm,
-            }
+            MapclKind::Bidir { forwards: side(fwd)?, backwards: side(bwd)? }
         }
         g::MapCl::Forwards(p) => MapclKind::Forwards(conv_patexp(c, span, p)?),
         g::MapCl::ForwardsDeprecated(mp, body) => {
@@ -1197,8 +1187,14 @@ fn conv_mapcl(c: &mut Ctx, span: Span, m: &g::MapCl) -> Result<Mapcl, String> {
             match inner.kind {
                 MapclKind::Forwards(a) => MapclKind::Forwards(attach(a)?),
                 MapclKind::Backwards(a) => MapclKind::Backwards(attach(a)?),
-                MapclKind::Bidir { .. } => {
-                    return Err("guard over bidir clause needs elaboration".to_owned());
+                MapclKind::Bidir { forwards, backwards } => {
+                    let mut attach = |side: sail_ast::MPExp| {
+                        let MPExpKind::Pat(pat) = side.kind else {
+                            return Err("mapping clause has both an 'if' and a 'when' guard".to_owned());
+                        };
+                        Ok(c.node(span, MPExpKind::When { pat, guard: guard.clone() }))
+                    };
+                    MapclKind::Bidir { forwards: attach(forwards)?, backwards: attach(backwards)? }
                 }
             }
         }
