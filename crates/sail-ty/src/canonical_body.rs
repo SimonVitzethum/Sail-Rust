@@ -655,6 +655,28 @@ impl Checker<'_> {
             Arc::new(it),
         )
     }
+    fn vector_type(&self, length: usize, element: Type) -> Type {
+        let mut interner = SimpleInterner::new();
+        let name = Name::dummy(interner.intern("vector"));
+        let variable = interner.intern("__element");
+        let mut typ = Type::owned(
+            Node::dummy(TypKind::App {
+                name,
+                args: vec![
+                    Node::dummy(TypArgKind::NExp(Node::dummy(NExpKind::Constant(
+                        length.to_string(),
+                    )))),
+                    Node::dummy(TypArgKind::Typ(Node::dummy(TypKind::Var(variable)))),
+                ],
+            }),
+            Arc::new(interner),
+        );
+        typ.substitutions = Arc::new(Substitutions {
+            types: BTreeMap::from([(variable, element)]),
+            scalars: BTreeMap::new(),
+        });
+        typ
+    }
     fn compatible(&self, expected: &Type, found: &Type, span: Span) -> TypeResult<()> {
         let mut pairs = vec![(expected.clone(), found.clone())];
         while let Some((expected, found)) = pairs.pop() {
@@ -887,6 +909,7 @@ impl Checker<'_> {
         enum Synthesis<'a> {
             Enter(&'a Exp),
             Call(&'a Exp, Vec<Type>, usize),
+            Vector(&'a Exp, usize),
         }
         let mut work = vec![Synthesis::Enter(exp)];
         let mut results = Vec::new();
@@ -901,6 +924,17 @@ impl Checker<'_> {
                         ExpKind::Lit(lit) => self.literal(lit)?,
                         ExpKind::Id(name) => self.id(name, scope)?,
                         ExpKind::Typ { typ, .. } => self.annotation(typ)?,
+                        ExpKind::Vector(items) => {
+                            let Some(first) = items.first() else {
+                                return Err(unsupported(
+                                    exp.span,
+                                    "cannot infer the element type of an empty vector",
+                                ));
+                            };
+                            work.push(Synthesis::Vector(exp, items.len()));
+                            work.push(Synthesis::Enter(first));
+                            continue;
+                        }
                         ExpKind::App { func, args } => {
                             let mut candidates = self.call_candidates(func, scope)?;
                             if candidates.len() != 1 {
@@ -941,6 +975,24 @@ impl Checker<'_> {
                     self.calls.insert(exp as *const Exp, callee);
                     self.inferred.insert(exp as *const Exp, result.clone());
                     results.push(result);
+                }
+                Synthesis::Vector(exp, length) => {
+                    let element = results.pop().expect("inferred first vector element");
+                    let bit = self.refined(
+                        "bitvector",
+                        TypArgKind::NExp(Node::dummy(NExpKind::Constant("1".into()))),
+                    );
+                    let typ = if element.name() == Some("bitvector")
+                        && self.compatible(&bit, &element, exp.span).is_ok()
+                    {
+                        self.refined(
+                            "bitvector",
+                            TypArgKind::NExp(Node::dummy(NExpKind::Constant(length.to_string()))),
+                        )
+                    } else {
+                        self.vector_type(length, element)
+                    };
+                    results.push(self.value_type(exp, typ));
                 }
             }
         }
@@ -1311,6 +1363,39 @@ impl Checker<'_> {
                         tasks.push(Task {
                             exp: item,
                             expected: expected.child(Step::TypeArgument(0)),
+                            scope: scope.clone(),
+                            returning: returning.clone(),
+                        });
+                    }
+                }
+                ExpKind::Vector(items) => {
+                    let element = match expected.name() {
+                        Some("bitvector") => self.refined(
+                            "bitvector",
+                            TypArgKind::NExp(Node::dummy(NExpKind::Constant("1".into()))),
+                        ),
+                        Some("vector") => expected.child(Step::TypeArgument(1)),
+                        _ => return Err(mismatch(exp.span, &expected, &self.builtin("vector"))),
+                    };
+                    let length = self.refined(
+                        "atom",
+                        TypArgKind::NExp(Node::dummy(NExpKind::Constant(items.len().to_string()))),
+                    );
+                    self.scalar_equal(
+                        &Scalar {
+                            owner: expected,
+                            index: 0,
+                        },
+                        &Scalar {
+                            owner: length,
+                            index: 0,
+                        },
+                        exp.span,
+                    )?;
+                    for item in items.iter().rev() {
+                        tasks.push(Task {
+                            exp: item,
+                            expected: element.clone(),
                             scope: scope.clone(),
                             returning: returning.clone(),
                         });

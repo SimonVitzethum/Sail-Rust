@@ -123,10 +123,11 @@ compilation as ARM or Lean success.
 The latest full ARM gate passes the declaration phase, including the constructor
 conditions of `Mem_read_request` and `Mem_write_request`, inline signatures and
 operator overload resolution. Branch proofs now pass both general shift
-functions in `arith.sail`. The next failure is `slice_mask` in `vector.sail`,
-where vector-literal checking (`[bitone] : bits(1)`) is not yet implemented.
-Explicit implicit arguments and the `bits` alias now pass. The run takes
-50.76 s, peaks at 1.3 GiB under the 16 GiB/no-swap limit
+functions in `arith.sail`. Vector-literal checking now passes `slice_mask`,
+including `[bitone] : bits(1)`. The next failure is `to_bytes_le` in
+`vector.sail`, which needs mutable declarations, loop checking and indexed
+assignments. Explicit implicit arguments and the `bits` alias also pass.
+The run takes 50.69 s, peaks at 1.4 GiB under the 16 GiB/no-swap limit
 and still exits 1 before Lean/Lake.
 The focused solver/typechecker/CLI suite has 203 passing tests under 128 MiB per
 binary, including 21 canonical tests. It covers source-position global
@@ -156,6 +157,16 @@ After type alias expansion, the focused gate has 217 passing tests under
 type/Int/Bool alias composition is also accepted by OCaml Sail under 256 MiB
 without swap (37.7 MiB peak). The CLI's one/four-worker flow fixture now uses
 aliases in both parameter and predicate return positions.
+
+After vector checking and corrected bit-literal lowering, the focused parser,
+solver, typechecker and CLI gate passes 322 tests under 128 MiB per binary
+without swap (87.8 MiB peak). The separate canonical gate passes 35 tests,
+including 10,000 nested vector literals on a 128 KiB stack. Vector checking
+proves lengths and checks every element; inference retains borrowed element
+types. `bitone` and `bitzero` now lower to one-bit binary literals, matching
+OCaml, and are rejected as numeric type arguments. OCaml also accepts the
+15-definition positive vector fixture under 256 MiB without swap (67.2 MiB
+peak). These gates do not establish full ARM or Lean compilation.
 
 The memory bound is the resident declaration tables plus a bounded number of
 loaded definitions, local scopes and worker temporaries. A single definition

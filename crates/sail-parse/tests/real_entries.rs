@@ -13,6 +13,20 @@ fn fixture(name: &str) -> String {
     std::fs::read_to_string(format!("{dir}/tests/fixtures/{name}")).unwrap()
 }
 
+#[test]
+fn bit_spellings_lower_to_binary_literals_and_never_to_integer_sizes() {
+    for (source,digit) in [("bitzero","0"),("bitone","1")] {
+        let parsed=parse_exp(source).unwrap();
+        let ExpKind::Lit(literal)=&parsed.value.kind else {panic!("expected literal")};
+        let sail_ast::LitKind::Bin(symbol)=literal.kind else {panic!("bit literal must be binary")};
+        assert_eq!(parsed.interner.resolve(symbol),Some(digit));
+        let parsed=parse_pat(source).unwrap();
+        assert!(matches!(parsed.value.kind,PatKind::Lit(sail_ast::Node {kind:sail_ast::LitKind::Bin(_),..})));
+        assert!(parse_typ(&format!("bitvector({source})")).is_err());
+        assert!(parse_def(&format!("val f : forall 'n, 'n == {source}. int('n) -> int")).is_err());
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Aktiv: Fehler tragen Spans (gilt mit und ohne generierte Tabellen).
 // ---------------------------------------------------------------------------

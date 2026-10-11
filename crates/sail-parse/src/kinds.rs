@@ -149,7 +149,7 @@ impl Inference<'_> {
                     .signature(name, 0)?
                     .map(|(_, result)| result),
             },
-            g::Typ::Lit(g::Lit::Num(_) | g::Lit::Zero | g::Lit::One) => Some(Int),
+            g::Typ::Lit(g::Lit::Num(_)) => Some(Int),
             g::Typ::Lit(g::Lit::True | g::Lit::False) => Some(Bool),
             g::Typ::Lit(_) => return Err("invalid literal in a type expression".into()),
             g::Typ::Dec | g::Typ::Inc => Some(Order),

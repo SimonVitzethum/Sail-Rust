@@ -50,8 +50,10 @@ impl Ctx<'_> {
             g::Lit::False => LitKind::False,
             g::Lit::Unit => LitKind::Unit,
             g::Lit::Num(s) => LitKind::Num(self.interner.intern(s)),
-            g::Lit::Zero => LitKind::Num(self.interner.intern("0")),
-            g::Lit::One => LitKind::Num(self.interner.intern("1")),
+            // initial_check.to_ast_lit lowers bitzero/bitone to one-bit
+            // binary literals, not integer zero/one.
+            g::Lit::Zero => LitKind::Bin(self.interner.intern("0")),
+            g::Lit::One => LitKind::Bin(self.interner.intern("1")),
             g::Lit::Bin(s) => LitKind::Bin(self.interner.intern(s)),
             g::Lit::Hex(s) => LitKind::Hex(self.interner.intern(s)),
             g::Lit::Str(s) => LitKind::String(self.interner.intern(s)),
@@ -375,12 +377,6 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
 fn conv_typarg(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<TypArg, String> {
     let kind = match t {
         g::Typ::Lit(g::Lit::Num(s)) => TypArgKind::NExp(c.node(span, NExpKind::Constant(s.clone()))),
-        g::Typ::Lit(g::Lit::Zero) => {
-            TypArgKind::NExp(c.node(span, NExpKind::Constant("0".to_owned())))
-        }
-        g::Typ::Lit(g::Lit::One) => {
-            TypArgKind::NExp(c.node(span, NExpKind::Constant("1".to_owned())))
-        }
         g::Typ::Var(s) => match c.bound_kinds.get(s) {
             Some(g::Kind::Type) => TypArgKind::Typ(conv_typ(c, span, t)?),
             Some(g::Kind::Bool) => TypArgKind::Bool(Box::new(conv_constraint(c, span, t)?)),
@@ -418,8 +414,6 @@ fn conv_nexp(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<NExp, String> {
         g::Typ::Id(s) => NExpKind::Id(c.name(span, s)),
         g::Typ::Var(s) => NExpKind::Var(c.interner.intern(s)),
         g::Typ::Lit(g::Lit::Num(s)) => NExpKind::Constant(s.clone()),
-        g::Typ::Lit(g::Lit::Zero) => NExpKind::Constant("0".to_owned()),
-        g::Typ::Lit(g::Lit::One) => NExpKind::Constant("1".to_owned()),
         g::Typ::App(f, args) => {
             let mut cargs = Vec::with_capacity(args.len());
             for a in args {
@@ -2006,6 +2000,7 @@ mod symbol_threading_tests {
             let mut c = ctx(&mut ids, &mut interner, &mut fixities, &mut constructors);
                 c.lit(span, &lit)
             };
+            if matches!(lit,g::Lit::Zero|g::Lit::One) {assert!(matches!(node.kind,LitKind::Bin(_)));}
             let sym = match node.kind {
                 LitKind::Num(s) | LitKind::Bin(s) | LitKind::Hex(s) | LitKind::String(s) | LitKind::Real(s) => s,
                 other => panic!("erwarte Symbol-Payload, got {other:?}"),

@@ -147,13 +147,18 @@ and dependent obligations. Nested expansion and deep header cleanup use explicit
 work stacks. The run passes `flow.sail`, inline signatures and operator lookup,
 and proves the nonnegative-shift obligations in `_shl_int_general` using
 separate true/false branch facts. Guards and nested conditions preserve borrowed
-substitutions; facts cannot escape their immutable scope. The next failure is
-`slice_mask` in `vector.sail`, at its unsupported vector literal. Explicit
-implicit argument views and general type-alias expansion now pass; borrowed
-substitutions compose across interners and release mixed chains iteratively.
-A 10,000-alias regression passes on a 128 KiB stack. The run takes 50.76 s
-and peaks at 1.3 GiB without swap. The current focused gate passes 217 tests,
-including 33 canonical tests, under 128 MiB per binary without swap.
+substitutions; facts cannot escape their immutable scope. Vector checking now
+passes `slice_mask`, including `[bitone] : bits(1)`. The next failure is
+`to_bytes_le` in `vector.sail`, requiring mutable declarations, loops and indexed
+assignments. Explicit implicit argument views and general type-alias expansion
+also pass; borrowed substitutions compose across interners and release mixed
+chains iteratively. The parser now lowers `bitone`/`bitzero` to one-bit binary
+literals, matching OCaml, and rejects them as numeric type arguments.
+10,000-level alias and vector regressions pass on a 128 KiB stack. The run takes
+50.69 s and peaks at 1.4 GiB without swap. The current focused parser/solver/
+typechecker/CLI gate passes 322 tests under 128 MiB per binary without swap
+(87.8 MiB peak); the separate canonical gate passes 35 tests. OCaml accepts the
+15-definition positive vector fixture under 256 MiB without swap (67.2 MiB peak).
 The earlier focused
 solver/typechecker/CLI gate has 214 passing tests under 128 MiB per binary
 (75.8 MiB peak), including 30 canonical tests, negative flow/overload cases and

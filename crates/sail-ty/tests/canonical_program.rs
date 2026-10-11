@@ -38,6 +38,80 @@ const FLOW_DECLARATIONS: &[&str] = &[
 ];
 
 #[test]
+fn bit_literals_and_vectors_check_exact_lengths_elements_and_inferred_calls() {
+    let mut sources = vec![
+        "type bit = bitvector(1)",
+        "function one() -> bit = bitone",
+        "function zero_bit() -> bit = bitzero",
+        "function two() -> bitvector(2) = [bitone, bitzero]",
+        "function numbers() -> vector(2, int) = [1, 2]",
+        "function nested() -> vector(2, bitvector(2)) = [[bitone, bitzero], [bitzero, bitone]]",
+        "function tuples() -> vector(1, (int, bool)) = [(1, true)]",
+        "val pass : forall 'n. bitvector('n) -> bitvector('n)",
+        "function call() -> bitvector(2) = pass([bitone, bitzero])",
+        "val keep : vector(2, int) -> vector(2, int)",
+        "function call_vector() -> vector(2, int) = keep([1, 2])",
+        "function empty_bits() -> bitvector(0) = []",
+        "function empty_vector() -> vector(0, int) = []",
+        "val accepts : bit -> unit",
+        "function accepts(bitone) = ()",
+    ];
+    let positive = sources.len();
+    sources.extend([
+        "function integer() -> int = bitone",
+        "function wrong_bits_length() -> bitvector(2) = [bitone]",
+        "function wrong_bits_element() -> bitvector(1) = [true]",
+        "function wrong_vector_element() -> vector(2, int) = [1, false]",
+        "function wrong_vector_length() -> vector(3, int) = [1, 2]",
+        "function missing_element() -> bitvector(2) = pass([bitone, absent])",
+        "function second_width() -> bitvector(2) = [bitone, 0x12]",
+        "function inferred_constants() -> unit = let x = [1, 2] in ()",
+    ]);
+    let defs = parse(&sources);
+    let program = declare(&defs);
+    for (position, (def, it)) in defs.iter().enumerate() {
+        let result = program.check_definition(def, it.clone(), position);
+        assert_eq!(
+            result.is_err(),
+            position >= positive,
+            "position {position}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn ten_thousand_nested_vector_literals_infer_check_and_release_iteratively() {
+    std::thread::Builder::new()
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let mut defs = parse(&["function deep() -> unit = let value = () in ()"]);
+            let (mut def, it) = defs.pop().unwrap();
+            let DefKind::Fundef { funcls, .. } = &mut def.kind else {
+                panic!()
+            };
+            let PExpKind::PatExp { body, .. } = &mut funcls[0].arm.kind else {
+                panic!()
+            };
+            let ExpKind::Let { bind, .. } = &mut body.kind else {
+                panic!()
+            };
+            let mut nested = Node::dummy(ExpKind::Lit(Node::dummy(LitKind::Unit)));
+            for _ in 0..10_000 {
+                nested = Node::dummy(ExpKind::Vector(vec![nested]));
+            }
+            **bind = nested;
+            let mut program = Program::new();
+            program.declare(&def, it.clone(), 0).unwrap();
+            assert_eq!(program.check_definition(&def, it, 0).unwrap(), 10_003);
+            sail_ast::storage::drop_definition(def);
+            drop(program);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn type_synonyms_compose_type_integer_boolean_and_call_substitutions() {
     let defs = parse(&[
         "type Bits('width : Int) = bitvector('width)",
