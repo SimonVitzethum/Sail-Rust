@@ -289,6 +289,33 @@ fn declared_constructor_kinds_follow_include_order_in_parallel_frontend() {
 }
 
 #[test]
+fn disk_spool_override_is_used_and_cleaned_after_successful_and_failed_frontends() {
+    let dir = temp_dir("disk-spool");
+    let input = dir.join("input.sail");
+    let spool = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("../../target/spool-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&spool);
+    for (source, expected) in [
+        ("function f() = ()\n", "frontend converted 1 definitions"),
+        ("$else\n", "$else without conditional"),
+    ] {
+        std::fs::write(&input, source).unwrap();
+        let out = Command::new(binary())
+            .args(["--lean", "--no-core", "-verbose", "2", input.to_str().unwrap()])
+            .env_remove("SAIL_RS_DRY_RUN").env_remove("SAIL_RS_LIBDIR")
+            .env("SAIL_RS_THREADS", "2").env("SAIL_RS_SPOOL_DIR", &spool)
+            .env("TMPDIR", &dir).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(stderr.contains(expected), "{stderr}");
+        assert!(stderr.contains(spool.canonicalize().unwrap().to_str().unwrap()), "{stderr}");
+        assert_eq!(std::fs::read_dir(&spool).unwrap().count(), 0);
+    }
+    std::fs::remove_dir_all(spool).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn legacy_val_redeclarations_do_not_stop_the_frontend() {
     let dir = temp_dir("repeated-val");
     let input = dir.join("main.sail");

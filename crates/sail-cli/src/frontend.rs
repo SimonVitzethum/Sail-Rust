@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use sail_ast::{DefKind, FileId, Node, NodeId, Span};
+use sail_ast::storage::{DefinitionSnapshot, drop_definition};
 use sail_ooc::{ContentId, WarmLayer};
 use sail_parse::preprocess::Preprocessor;
 use sail_parse::{Def as SurfaceDef, ParserContext, PragmaArg, RealParser};
@@ -32,9 +33,35 @@ fn error(message: impl Into<String>) -> CliError {
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Result<Self, CliError> {
+        // /tmp is commonly tmpfs. With swap disabled its contents cannot be
+        // evicted, defeating out-of-core storage even after all ASTs are freed.
+        let root = if let Some(path) = std::env::var_os("SAIL_RS_SPOOL_DIR") {
+            PathBuf::from(path)
+        } else if let Some(path) = std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from).filter(|path| path.is_absolute()) {
+            path.join("sail-rs/spool")
+        } else if let Some(home) = std::env::var_os("HOME") {
+            PathBuf::from(home).join(".cache/sail-rs/spool")
+        } else {
+            std::env::current_dir().map_err(|e| CliError::fatal(e.to_string()))?
+                .join("target/sail-rs-spool")
+        };
+        fs::create_dir_all(&root).map_err(|e| CliError::fatal(format!("cannot create spool {}: {e}", root.display())))?;
+        let root = root.canonicalize().map_err(|e| CliError::fatal(e.to_string()))?;
+        #[cfg(target_os = "linux")]
+        {
+            let mounts = fs::read_to_string("/proc/self/mountinfo")
+                .map_err(|e| CliError::fatal(format!("cannot check spool filesystem: {e}")))?;
+            match spool_filesystem(&root, &mounts) {
+                Some("tmpfs" | "ramfs" | "devtmpfs" | "hugetlbfs") => return Err(error(format!(
+                    "out-of-core spool {} is on a RAM filesystem; set SAIL_RS_SPOOL_DIR to a disk-backed directory", root.display()))),
+                None => return Err(CliError::fatal("cannot determine spool filesystem")),
+                Some(_) => {},
+            }
+        }
         static NEXT: AtomicU64 = AtomicU64::new(0);
         for _ in 0..100 {
-            let path = std::env::temp_dir().join(format!(
+            let path = root.join(format!(
                 "sail-rs-frontend-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
@@ -53,6 +80,25 @@ impl Scratch {
             "cannot allocate an isolated frontend spool",
         ))
     }
+}
+
+/// Resolve mount boundaries by path component, including bind mounts and
+/// mountinfo's escaped spaces/backslashes. Paths are canonicalized first.
+#[cfg(target_os = "linux")]
+fn spool_filesystem<'a>(path: &Path, mounts: &'a str) -> Option<&'a str> {
+    let mut best = None;
+    let mut length = 0;
+    for line in mounts.lines() {
+        let Some((mount, filesystem)) = line.split_once(" - ") else { continue };
+        let Some(point) = mount.split_whitespace().nth(4) else { continue };
+        let point = point.replace("\\040", " ").replace("\\011", "\t")
+            .replace("\\012", "\n").replace("\\134", "\\");
+        if point.len() >= length && path.starts_with(Path::new(&point)) {
+            length = point.len();
+            best = filesystem.split_whitespace().next();
+        }
+    }
+    best
 }
 impl Drop for Scratch {
     fn drop(&mut self) {
@@ -173,6 +219,24 @@ fn apply_library_option(opts: &mut Options, command: &str) -> Result<(), String>
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn spool_mount_detection_respects_components_and_escaped_paths() {
+        let mounts = "1 0 8:1 / / rw - ext4 /dev/disk rw\n\
+2 1 0:2 / /tmp rw - tmpfs tmpfs rw\n\
+3 1 8:2 / /data\\040disk rw - ext4 /dev/other rw\n\
+4 3 0:3 / /data\\040disk/cache rw - tmpfs tmpfs rw\n\
+5 1 8:1 /disk/subdir /bind rw - ext4 /dev/disk rw\n";
+        for (path, expected) in [
+            ("/tmp/work", "tmpfs"), ("/tmp2/work", "ext4"),
+            ("/data disk/work", "ext4"), ("/data disk/cache/work", "tmpfs"),
+            ("/bind/work", "ext4"),
+        ] {
+            assert_eq!(spool_filesystem(Path::new(path), mounts), Some(expected), "{path}");
+        }
+        assert_eq!(spool_filesystem(Path::new("/tmp"), "malformed\n"), None);
+    }
+
     #[test]
     fn library_extern_options_extend_the_effective_compiler_configuration() {
         let mut opts = Options::default();
@@ -213,6 +277,7 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
         Err(e) => return Err(error(format!("SAIL_RS_THREADS: {e}"))),
     };
     let scratch = Scratch::new()?;
+    if opts.verbose >= 2 { eprintln!("sail-rs: disk spool {}", scratch.0.display()); }
     let external = std::env::var_os("SAIL_RS_LIBDIR").map(PathBuf::from);
     let manifest_path = scratch.0.join("definitions.jsonl");
     let mut manifest =
@@ -316,16 +381,28 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
             };
             let interner = parser.into_interner();
             if opts.verbose >= 2 { eprintln!("sail-rs: spool {}:{}", record.path, record.span); }
-            let bytes = serde_json::to_vec(&(&def, &interner))
+            let snapshot = DefinitionSnapshot::new(def);
+            let mut bytes = Vec::new();
+            snapshot.write(&mut bytes, &interner)
                 .map_err(|e| CliError::fatal(e.to_string()))?;
-            let id = ContentId::of_domain_parts("sail-rs/core-ast-v1", &[&bytes]);
+            drop(snapshot);
+            drop(interner);
+            let id = ContentId::of_domain_parts("sail-rs/flat-ast-v1", &[&bytes]);
             warm.store(&id, &bytes)
                 .map_err(|e| CliError::fatal(e.to_string()))?;
-            Ok::<_, CliError>((def, interner, id, bytes.len() as u64))
+            // Queued results hold disk references, never completed AST bodies.
+            Ok::<_, CliError>((id, bytes.len() as u64))
         },
         |_, result| {
-            let (def, interner, id, bytes) = result?;
+            let (id, bytes) = result?;
+            let reader = warm.reader(&id)
+                .map_err(|e| CliError::fatal(e.to_string()))?
+                .ok_or_else(|| CliError::fatal(format!("missing AST blob {id}")))?;
+            let (snapshot, interner) = DefinitionSnapshot::read(reader)
+                .map_err(|e| CliError::fatal(format!("AST blob {id}: {e}")))?;
+            let def = snapshot.into_definition();
             resolver.add_definition(&def, &interner);
+            drop_definition(def);
             writeln!(snapshots, "{id}").map_err(|e| CliError::fatal(e.to_string()))?;
             definitions += 1;
             ast_bytes += bytes;
