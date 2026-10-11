@@ -261,3 +261,19 @@ fn includes_macros_attributes_and_fixities_keep_order_across_workers() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn arm_legacy_trace_include_contains_real_declarations_and_bodies() {
+    let dir = temp_dir("legacy-trace");
+    let input = dir.join("main.sail");
+    std::fs::write(&input, "$include <trace.sail>\n").unwrap();
+    let out = Command::new(binary())
+        .args(["--lean", "--no-core", input.to_str().unwrap()])
+        .env_remove("SAIL_RS_DRY_RUN").env_remove("SAIL_RS_LIBDIR")
+        .env("SAIL_RS_THREADS", "2").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr.contains("frontend converted 8 definitions from 2 files"), "{stderr}");
+    assert!(stderr.contains("compilation incomplete"), "{stderr}");
+    std::fs::remove_dir_all(dir).unwrap();
+}

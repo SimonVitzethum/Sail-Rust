@@ -19,16 +19,39 @@ is not a complete build. Lean acceptance must include compiling generated code.
 - The warm layer supports uncached concurrent writes and buffered reads, checks
   cached-read budgets before allocation, and prevents racing writers overwriting
   immutable blobs. The sequential driver no longer caches all completed bodies.
+- Ordinary CLI invocations now expand includes and conditional macros in source
+  order, spool raw definitions to disk, and convert them through the real grammar
+  with bounded workers (default at most 16; `SAIL_RS_THREADS` overrides it).
+  Fixity snapshots preserve compilation order. Completed ASTs with their local
+  interners are stored as immutable blobs; resolution retains exported names and
+  linkage summaries. The CLI rejects incomplete checking/emission with exit 1
+  and never publishes a comments-only Lean project as a successful compilation.
+- Attributes on the same line no longer swallow their following definition.
+  Builtin argument sorts, refined `int`/`bool` names, tuple function arguments,
+  numeric/bool aliases and operator folding have OCaml reference regressions.
+- All 59 standard-library files are embedded, including nested concurrency and
+  float libraries. A separately documented, unmodified Sail 0.17.1 `trace.sail`
+  supplies the legacy ARM include; its license and source hash are retained.
 - `scripts/test-memory-limited.sh` builds tests under 4 GiB and executes each
   binary under 128 MiB without swap. It includes a 512 MiB streaming workload and
   a 256 MiB rewrite/spill/read workload. These demonstrate memory mechanisms,
   not ARM compiler completeness. All test invocations use systemd limits.
 
+## Reproducible acceptance gate
+
+Run `scripts/arm-lean-gate.sh` (or `SAIL_ARM_MEMORY=28G` for the fallback).
+It builds Rust under 4 GiB, obtains the 22 canonical ARM Lean inputs from the
+model Makefile, and runs compilation and then `lake build` under the selected
+limit with swap disabled. Each invocation gets a fresh output directory, so
+old artifacts cannot satisfy a failed run. Logs are retained there.
+
 ## Remaining acceptance work
 
-The CLI's ordinary Lean path still emits a marked frontend stub. The E2E path
-reports missing stages. Preprocessing/includes, full typed AST integration,
-whole-program checks and executable Lean emission must be wired up and verified
-on the full reference model. A successful exit from the stub path must never be
-recorded as successful ARM compilation. Synthetic memory peaks must not be
-reported as ARM build peaks. No measured full ARM build currently exists.
+Full kind/type elaboration, all expression/mapping conversions, attributes and
+visibility, typed rewrites and executable Lean body emission remain incomplete.
+The E2E path also reports missing stages. Whole-program checking and generated
+Lean must be verified on the full model. The bounded frontend holds a window of
+definitions, not a strict byte quota: one large definition must still fit RAM,
+and exported-name summaries grow with the program. Synthetic or partial
+frontend peaks must not be reported as ARM build peaks. No successful full ARM
+build, nor successful `lake build` of Rust-generated ARM, currently exists.

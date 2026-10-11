@@ -153,6 +153,48 @@ fn include_source(
     ))
 }
 
+/// The standard library uses these backend declarations in unguarded code.
+/// Apply them to the same options that later emission will receive, and keep
+/// the directive in the AST. Other $option forms remain explicit errors until
+/// their compilation-order effects can be supported.
+fn apply_library_option(opts: &mut Options, command: &str) -> Result<(), String> {
+    let mut words = command.split_whitespace();
+    let flag = words.next().ok_or("empty $option directive")?;
+    if !flag.starts_with('-') {
+        return Err("$option requires a flag, not an input filename".into());
+    }
+    let name = words.next().ok_or("$option extern type requires a name")?;
+    if words.next().is_some() {
+        return Err("unsupported $option syntax: expected one extern-type declaration".into());
+    }
+    let flag = flag.trim_start_matches('-').replace('_', "-");
+    match flag.as_str() {
+        "lean-extern-type" => opts.lean_extern_types.push(name.into()),
+        "lem-extern-type" | "coq-extern-type" => opts.passthrough_value.push((flag, name.into())),
+        _ => return Err(format!("unsupported $option directive: {command}")),
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_extern_options_extend_the_effective_compiler_configuration() {
+        let mut opts = Options::default();
+        opts.lean_extern_types.push("Existing".into());
+        for command in ["-lem_extern_type result", "-coq_extern_type result", "--lean-extern-type result"] {
+            apply_library_option(&mut opts, command).unwrap();
+        }
+        assert_eq!(opts.lean_extern_types, ["Existing", "result"]);
+        assert_eq!(opts.passthrough_value.len(), 2);
+        for command in ["", "-lean_extern_type", "-lean_extern_type result other.sail", "-D FEATURE", "input.sail x"] {
+            assert!(apply_library_option(&mut opts, command).is_err(), "{command}");
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct FrontendSummary {
     pub files: usize,
@@ -164,7 +206,7 @@ pub struct FrontendSummary {
 /// Convert all active input definitions without retaining whole-program bodies.
 /// Any lexical, include, grammar, conversion or linkage gap stops the pipeline.
 /// Successful conversion is deliberately not reported as successful checking.
-pub fn run(opts: &Options) -> Result<FrontendSummary, CliError> {
+pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
     let workers = match std::env::var("SAIL_RS_THREADS") {
         Ok(value) => value
             .parse::<usize>()
@@ -187,6 +229,8 @@ pub fn run(opts: &Options) -> Result<FrontendSummary, CliError> {
     for symbol in &opts.defines {
         preprocessor.define(symbol.clone());
     }
+    let no_core = opts.no_core;
+    let inputs = opts.inputs.clone();
     let mut emit = |path: &str, source: &str, def: sail_parse::SpannedDef| -> Result<(), String> {
         let id = FileId(u32::try_from(files.len()).map_err(|_| "too many input files")?);
         let id = *files.entry(path.to_owned()).or_insert(id);
@@ -194,10 +238,10 @@ pub fn run(opts: &Options) -> Result<FrontendSummary, CliError> {
         span.file = id;
         let pragma = match &def.def {
             SurfaceDef::Pragma { name, arg } => {
-                if name == "option" {
-                    return Err("$option directives require compiler option elaboration, which is not implemented".into());
-                }
                 let (PragmaArg::Line(arg) | PragmaArg::Structured(arg)) = arg;
+                if name == "option" {
+                    apply_library_option(opts, arg)?;
+                }
                 Some((name.clone(), arg.clone()))
             }
             _ => None,
@@ -223,7 +267,7 @@ pub fn run(opts: &Options) -> Result<FrontendSummary, CliError> {
         serde_json::to_writer(&mut manifest, &record).map_err(|e| e.to_string())?;
         manifest.write_all(b"\n").map_err(|e| e.to_string())
     };
-    if !opts.no_core {
+    if !no_core {
         let (path, source) =
             library_source(sail_prelude::CORE_LIBRARY.name, external.as_deref()).map_err(error)?;
         preprocessor
@@ -235,7 +279,7 @@ pub fn run(opts: &Options) -> Result<FrontendSummary, CliError> {
             )
             .map_err(|e| error(e.to_string()))?;
     }
-    for input in &opts.inputs {
+    for input in &inputs {
         let (path, source) = file_source(Path::new(input)).map_err(CliError::fatal)?;
         preprocessor
             .process(

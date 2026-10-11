@@ -13,6 +13,14 @@
 /// Read from `sail/dune-project` (`(version 0.20.3)`).
 pub const SAIL_VERSION: &str = "0.20.3";
 
+/// Legacy library required by ARMv9.4-A's Sail 0.17.1 prelude.
+/// Kept separately from the 0.20.3 inventory, with its upstream license.
+pub static LEGACY_TRACE: PreludeFile = PreludeFile {
+    name: "trace.sail",
+    contents: include_str!("../compat/sail-0.17.1/trace.sail"),
+    bytes: include_bytes!("../compat/sail-0.17.1/trace.sail"),
+};
+
 /// One vendored prelude file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreludeFile {
@@ -115,6 +123,7 @@ pub fn get(name: &str) -> Option<&'static PreludeFile> {
     PRELUDE_FILES.iter().find(|f| f.name == name)
         .or_else(|| (name == CORE_LIBRARY.name).then_some(&CORE_LIBRARY))
         .or_else(|| AUXILIARY_FILES.iter().find(|f| f.name == name))
+        .or_else(|| (name == LEGACY_TRACE.name).then_some(&LEGACY_TRACE))
 }
 
 /// Minimal empty-model skeleton: a stub Sail model that only pulls in

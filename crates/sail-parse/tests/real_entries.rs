@@ -227,6 +227,67 @@ fn builtin_type_arguments_keep_their_sorts_and_refined_names() {
 }
 
 #[test]
+fn deprecated_order_parameters_are_erased_with_their_binders() {
+    for source in ["vector(4, dec, bool)", "vector(4, inc, bool)", "vector(4, bool)"] {
+        let out = parse_typ(source).unwrap();
+        assert!(matches!(&out.value.kind, TypKind::App { args, .. }
+            if args.len() == 2 && matches!(args[0].kind, TypArgKind::NExp(_))
+                && matches!(args[1].kind, TypArgKind::Typ(_))), "{source}: {:?}", out.value);
+    }
+    let out = parse_def("val shift : forall ('n : Int) ('ord : Order). (bitvector('n, 'ord), int) -> bitvector('n, 'ord)").unwrap();
+    let DefKind::Val(spec) = &out.value.kind else { panic!("{:?}", out.value); };
+    assert_eq!(spec.typschm.quant.len(), 1);
+    assert!(parse_typ("vector(4, bool, bool)").is_err());
+    assert!(parse_typ("bitvector(4, 9)").is_err());
+}
+
+#[test]
+fn vector_access_updates_and_lvalue_suffix_chains_match_ocaml_lowering() {
+    let out = parse_exp("r.a[i].b[7 .. 0] = x").unwrap();
+    let ExpKind::Assign { lexp, .. } = &out.value.kind else { panic!("{:?}", out.value); };
+    let sail_ast::LExpKind::VectorRange { lexp, .. } = &lexp.kind else { panic!("{lexp:?}"); };
+    let sail_ast::LExpKind::Field { lexp, .. } = &lexp.kind else { panic!("{lexp:?}"); };
+    assert!(matches!(lexp.kind, sail_ast::LExpKind::Vector { .. }));
+    for (source, function, arity) in [
+        ("v[i]", "vector_access#", 2),
+        ("v[7 .. 0]", "vector_subrange#", 3),
+        ("v[0, 8]", "slice", 3),
+        ("[v with i = x]", "vector_update#", 3),
+        ("[v with 7 .. 0 = y]", "vector_update_subrange#", 4),
+    ] {
+        let out = parse_exp(source).unwrap();
+        let ExpKind::App { func, args } = &out.value.kind else { panic!("{source}: {:?}", out.value); };
+        assert_eq!(out.interner.resolve(func.symbol), Some(function));
+        assert_eq!(args.len(), arity);
+    }
+    let out = parse_exp("[v with i = x, j = y]").unwrap();
+    assert!(matches!(&out.value.kind, ExpKind::App { args, .. }
+        if matches!(args[0].kind, ExpKind::App { .. })));
+    assert!(matches!(parse_exp("*p = x").unwrap().value.kind,
+        ExpKind::Assign { lexp, .. } if matches!(lexp.kind, sail_ast::LExpKind::Deref(_))));
+    assert!(parse_exp("(*p, x) = y").is_err());
+    assert!(parse_exp("v[0, 8] = x").is_err());
+}
+
+#[test]
+fn descending_loops_and_legacy_bitfield_calls_keep_their_semantics() {
+    for (source, order) in [
+        ("foreach (i from 7 downto 0) ()", sail_ast::Order::Dec),
+        ("foreach (i from 0 to 7) ()", sail_ast::Order::Inc),
+    ] {
+        assert!(matches!(parse_exp(source).unwrap().value.kind,
+            ExpKind::For { order: actual, .. } if actual == order));
+    }
+    for (source, reference, arity) in [("x.f()", false, 1), ("R->f(2)", true, 2)] {
+        let out = parse_exp(source).unwrap();
+        let ExpKind::App { func, args } = &out.value.kind else { panic!("{:?}", out.value); };
+        assert_eq!(out.interner.resolve(func.symbol), Some("_mod_f"));
+        assert_eq!(args.len(), arity);
+        assert_eq!(matches!(args[0].kind, ExpKind::Ref(_)), reference);
+    }
+}
+
+#[test]
 fn function_domain_tuple_becomes_multiple_arguments() {
     let out = parse_def("val f : (int, bool) -> int").unwrap();
     assert!(matches!(&out.value.kind, DefKind::Val(spec)

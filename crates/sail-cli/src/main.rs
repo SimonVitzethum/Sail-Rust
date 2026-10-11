@@ -114,7 +114,8 @@ fn check_inputs(opts: &Options, memo: &mut BoundedMemoCache) -> Result<(), CliEr
 /// Run the real disk-backed frontend before rejecting missing compiler stages.
 /// No generated Lean project is published until every required stage exists.
 fn run_compiler(opts: &Options, profiler: &mut Profiler) -> Result<(), CliError> {
-    let summary = profiler.phase("frontend", || frontend::run(opts))?;
+    let mut effective_options = opts.clone();
+    let summary = profiler.phase("frontend", || frontend::run(&mut effective_options))?;
     eprintln!("sail-rs: frontend converted {} definitions from {} files using {} workers; {} AST bytes spooled",
         summary.definitions, summary.files, summary.workers, summary.ast_bytes);
     Err(CliError {

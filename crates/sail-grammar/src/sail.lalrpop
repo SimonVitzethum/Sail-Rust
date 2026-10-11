@@ -865,8 +865,8 @@ AtomBase: Exp = {
     <l:Lit> => Exp::Lit(l),
     <i:Ident> => Exp::Id(i),
     <i:Ident> <t:IdCallTail> => Exp::App(i, t),
-    <i:Ident> "->" <g:Ident> <a:IdCallTail> =>
-        Exp::Suffix(Box::new(Exp::Id(i)), vec![ExpSuffix::Call(g, a)]),
+    <i:Ident> "->" <g:Ident> <a:CallArgs> =>
+        Exp::Suffix(Box::new(Exp::Ref(i)), vec![ExpSuffix::Call(g, a)]),
     <k:Kid> => Exp::Sizeof(Typ::Var(k)),
     "ref" <i:Ident> => Exp::Ref(i),
     "exit" <a:ExitArgs> => Exp::Exit(Box::new(a)),
@@ -906,7 +906,7 @@ IdCallTail: Vec<Exp> = {
 }
 
 CallArgs: Vec<Exp> = {
-    "()" => vec![Exp::Lit(Lit::Unit)],
+    "()" => vec![],
     "(" <es:ExpList> ")" => es,
 }
 

@@ -177,6 +177,11 @@ fn conv_quant_items(c: &mut Ctx, span: Span, q: &Option<g::TypQuant>) -> Result<
     };
     let mut out = Vec::new();
     for kopt in &q.kopts {
+        // Deprecated Order binders and arguments disappear together in
+        // OCaml initial_check's to_ast_kind_aux/to_ast_typ conversion.
+        if matches!(kopt.kind, Some(g::Kind::Order)) {
+            continue;
+        }
         // Fehlende Kind-Annotation defaultet auf `Type` (Oberflächen-
         // Elaboration entscheidet sonst nach Präfix; siehe ADAPTER.md).
         let kind = match &kopt.kind {
@@ -234,6 +239,15 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
         g::Typ::Var(s) => TypKind::Var(c.interner.intern(s)),
         g::Typ::App(f, args) => {
             let mut cargs = Vec::with_capacity(args.len());
+            let order_index = match (f.as_str(), args.len()) {
+                ("vector", 3) | ("bitvector", 2) => Some(1),
+                _ => None,
+            };
+            if let Some(i) = order_index {
+                if !matches!(&args[i], g::Typ::Dec | g::Typ::Inc | g::Typ::Var(_)) {
+                    return Err(format!("invalid Order argument for {f}"));
+                }
+            }
             // Builtin argument kinds are known before user declarations.
             // Trying every argument as a numeric expression first turns
             // `list(bool)` into a list indexed by a numeric identifier.
@@ -245,10 +259,13 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
                 "vector" => Some(&[Kind::Int, Kind::Type]),
                 _ => None,
             };
-            if kinds.is_some_and(|kinds| kinds.len() != args.len()) {
+            if kinds.is_some_and(|kinds| kinds.len() != args.len() - usize::from(order_index.is_some())) {
                 return Err(format!("incorrect type argument count for {f}"));
             }
-            for (i, a) in args.iter().enumerate() {
+            for (i, a) in args.iter().enumerate().filter_map(|(i, a)| {
+                if Some(i) == order_index { None }
+                else { Some((i - usize::from(order_index.is_some_and(|order| i > order)), a)) }
+            }) {
                 let arg = match kinds.map(|kinds| kinds[i]) {
                     Some(Kind::Type) => { let typ = conv_typ(c, span, a)?; c.node(span, TypArgKind::Typ(typ)) }
                     Some(Kind::Int) => { let nexp = conv_nexp(c, span, a)?; c.node(span, TypArgKind::NExp(nexp)) }
@@ -679,49 +696,69 @@ fn exp_to_lexp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<LExp, String> {
     let kind = match e {
         g::Exp::Id(s) => LExpKind::Id(c.name(span, s)),
         g::Exp::Suffix(head, sufs) => {
-            let [suf] = sufs.as_slice() else {
-                return Err("lexp suffix chain has no sail-ast core node".to_owned());
-            };
-            match suf {
-                g::ExpSuffix::Field(f) => LExpKind::Field {
-                    lexp: Box::new(exp_to_lexp(c, span, head)?),
-                    field: c.name(span, f),
-                },
-                g::ExpSuffix::TypAnnot(t) => {
-                    let g::Exp::Id(s) = &**head else {
-                        return Err("annotated lexp needs a plain identifier".to_owned());
-                    };
-                    LExpKind::Typ {
-                        typ: conv_typ(c, span, t)?,
-                        id: c.name(span, s),
+            let mut acc = exp_to_lexp(c, span, head)?;
+            for suffix in sufs {
+                let kind = match suffix {
+                    g::ExpSuffix::Field(field) => LExpKind::Field {
+                        lexp: Box::new(acc), field: c.name(span, field),
+                    },
+                    g::ExpSuffix::Index(index) => LExpKind::Vector {
+                        lexp: Box::new(acc), index: Box::new(conv_exp(c, span, index)?),
+                    },
+                    g::ExpSuffix::Subrange(lo, hi) => LExpKind::VectorRange {
+                        lexp: Box::new(acc), lo: Box::new(conv_exp(c, span, lo)?),
+                        hi: Box::new(conv_exp(c, span, hi)?),
+                    },
+                    g::ExpSuffix::TypAnnot(typ) => {
+                        let LExpKind::Id(id) = acc.kind else {
+                            return Err("annotated lexp needs a plain identifier".into());
+                        };
+                        LExpKind::Typ { typ: conv_typ(c, span, typ)?, id }
                     }
-                }
-                _ => return Err("lexp suffix has no sail-ast core node".to_owned()),
+                    g::ExpSuffix::Call(..) | g::ExpSuffix::Slice(..) =>
+                        return Err("function calls cannot be assignment targets".into()),
+                };
+                acc = c.node(span, kind);
             }
+            return Ok(acc);
         }
         g::Exp::Tuple(es) => {
             let mut ces = Vec::with_capacity(es.len());
             for x in es {
-                ces.push(exp_to_lexp(c, span, x)?);
+                let target = exp_to_lexp(c, span, x)?;
+                if matches!(target.kind, LExpKind::Deref(_)) {
+                    return Err("dereferences cannot be set in a tuple assignment".into());
+                }
+                ces.push(target);
             }
             LExpKind::Tuple(ces)
         }
-        // `@` auf L-Werten: Vektor-Konkatenation.
         g::Exp::Infix(chain) => {
-            if !chain.prefixes.is_empty() {
-                return Err("prefix operators need elaboration-time folding".to_owned());
-            }
-            let mut items = Vec::with_capacity(chain.tail.len() + 1);
-            items.push(exp_to_lexp(c, span, &chain.head)?);
-            for (op, local, rhs) in &chain.tail {
-                if op != "@" || !local.is_empty() {
-                    return Err("lexp infix has no sail-ast core node".to_owned());
-                }
-                items.push(exp_to_lexp(c, span, rhs)?);
-            }
-            LExpKind::VectorConcat(items)
+            let tree = fold_borrowed(chain, Side::Exp, c.fixities)?;
+            return folded_lexp(c, span, &tree);
         }
         _ => return Err("expression is not a valid l-value".to_owned()),
+    };
+    Ok(c.node(span, kind))
+}
+
+// L-values use the same precedence and prefix folding as expressions.
+fn folded_lexp(c: &mut Ctx, span: Span, tree: &Folded<&g::Exp>) -> Result<LExp, String> {
+    let kind = match tree {
+        Folded::Leaf(exp) => return exp_to_lexp(c, span, exp),
+        Folded::Prefix { op, arg } if op == "__deref" =>
+            LExpKind::Deref(Box::new(folded_exp(c, span, arg)?)),
+        Folded::Infix { op, lhs, rhs } if op == "@" => {
+            let mut parts = Vec::new();
+            for part in [folded_lexp(c, span, lhs)?, folded_lexp(c, span, rhs)?] {
+                match part.kind {
+                    LExpKind::VectorConcat(items) => parts.extend(items),
+                    _ => parts.push(part),
+                }
+            }
+            LExpKind::VectorConcat(parts)
+        }
+        _ => return Err("expression is not a valid l-value".into()),
     };
     Ok(c.node(span, kind))
 }
@@ -846,11 +883,19 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
                         typ: conv_typ(c, span, t)?,
                         exp: Box::new(acc),
                     },
-                    _ => {
-                        return Err(
-                            "expression suffix has no sail-ast core node (see ADAPTER.md)"
-                                .to_owned(),
-                        );
+                    g::ExpSuffix::Index(index) => ExpKind::App {
+                        func: c.name(span, "vector_access#"),
+                        args: vec![acc, conv_exp(c, span, index)?],
+                    },
+                    g::ExpSuffix::Subrange(lo, hi) | g::ExpSuffix::Slice(lo, hi) => ExpKind::App {
+                        func: c.name(span, if matches!(suf, g::ExpSuffix::Slice(..)) { "slice" } else { "vector_subrange#" }),
+                        args: vec![acc, conv_exp(c, span, lo)?, conv_exp(c, span, hi)?],
+                    },
+                    g::ExpSuffix::Call(name, args) => {
+                        let mut actual = Vec::with_capacity(args.len() + 1);
+                        actual.push(acc);
+                        for arg in args { actual.push(conv_exp(c, span, arg)?); }
+                        ExpKind::App { func: c.name(span, &format!("_mod_{name}")), args: actual }
                     }
                 };
                 acc = c.node(span, next);
@@ -916,8 +961,8 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
                 Some(s) => conv_exp(c, span, s)?,
             };
             let order = match &head.order {
-                // Ohne Ordnung: aufsteigend (Sail-Default, dokumentiert).
-                None => Order::Inc,
+                // The surface `to`/`downto` determines the implicit order.
+                None => match head.ord { g::LoopOrd::To => Order::Inc, g::LoopOrd::Downto => Order::Dec },
                 Some(g::Typ::Inc) => Order::Inc,
                 Some(g::Typ::Dec) => Order::Dec,
                 Some(_) => return Err("foreach order needs `inc`/`dec`".to_owned()),
@@ -975,8 +1020,19 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
             }
             ExpKind::Vector(ces)
         }
-        g::Exp::VectorUpdate(..) => {
-            return Err("vector updates have no sail-ast core node (see ADAPTER.md)".to_owned());
+        g::Exp::VectorUpdate(head, updates) => {
+            let mut acc = conv_exp(c, span, head)?;
+            for update in updates {
+                let (name, args) = match update {
+                    g::VectorUpdate::Single(index, value) => ("vector_update#",
+                        vec![acc, conv_exp(c, span, index)?, conv_exp(c, span, value)?]),
+                    g::VectorUpdate::Range(lo, hi, value) => ("vector_update_subrange#",
+                        vec![acc, conv_exp(c, span, lo)?, conv_exp(c, span, hi)?, conv_exp(c, span, value)?]),
+                };
+                let func = c.name(span, name);
+                acc = c.node(span, ExpKind::App { func, args });
+            }
+            return Ok(acc);
         }
         g::Exp::List(es) => {
             let mut ces = Vec::with_capacity(es.len());
