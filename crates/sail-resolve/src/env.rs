@@ -3,7 +3,8 @@
 //! One global scope per Sail definition namespace (Sail top level is
 //! order-independent) plus an explicit lexical-scope stack for clause
 //! locals. Duplicate insertion into the *same* namespace is a `distincto`
-//! error; shadowing across lexical scopes is allowed.
+//! error except legacy repeated `val` declarations, which replace the previous
+//! binding with a warning. Shadowing across lexical scopes is allowed.
 //!
 //! Namespaces (Lane 78): types, ctors, valspecs, functions, registers,
 //! mappings, values (top-level `let`), overloads, fixities, outcomes,
@@ -37,8 +38,8 @@ pub struct CtorEntry {
 pub struct ValSpecEntry {
     pub name: String,
     pub span: Span,
-    /// Whether the `val` carries an `extern` block (Bridge Lane 63
-    /// always yields `None`; real extern bindings arrive with Lane 02).
+    /// Whether any declaration for this name supplied an `extern` block.
+    /// A later declaration without one preserves the previous binding.
     pub has_extern: bool,
 }
 
@@ -365,19 +366,25 @@ impl Env {
         }
     }
 
-    pub(crate) fn insert_valspec(&mut self, e: ValSpecEntry) -> Result<(), ResolveError> {
+    /// OCaml `type_env.ml::add_val_spec` accepts legacy redeclarations and
+    /// `update_val_spec` replaces the signature. Externs are a separate table
+    /// in OCaml, so omitting an extern must not erase an earlier one.
+    pub(crate) fn insert_valspec(&mut self, mut e: ValSpecEntry) {
         use std::collections::hash_map::Entry;
         match self.valspecs.entry(e.name.clone()) {
             Entry::Vacant(v) => {
                 v.insert(e);
-                Ok(())
             }
-            Entry::Occupied(o) => Err(ResolveError {
-                kind: ResolveErrorKind::DuplicateValSpec,
-                name: e.name,
-                first: o.get().span,
-                second: e.span,
-            }),
+            Entry::Occupied(mut o) => {
+                self.warnings.push(ResolveError {
+                    kind: ResolveErrorKind::DuplicateValSpec,
+                    name: e.name.clone(),
+                    first: o.get().span,
+                    second: e.span,
+                });
+                e.has_extern |= o.get().has_extern;
+                o.insert(e);
+            }
         }
     }
 
@@ -680,10 +687,7 @@ mod tests {
             })
             .is_ok()
         );
-        assert!(
-            env.insert_valspec(ValSpecEntry { name: "f".to_string(), span, has_extern: false })
-                .is_ok()
-        );
+        env.insert_valspec(ValSpecEntry { name: "f".to_string(), span, has_extern: false });
         assert!(
             env.insert_function(FunctionEntry {
                 name: "g".to_string(),

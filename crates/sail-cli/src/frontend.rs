@@ -336,7 +336,18 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
         .flush()
         .map_err(|e| CliError::fatal(e.to_string()))?;
     let resolved = resolver.finish();
+    for warning in resolved.warnings.iter().take(20) {
+        eprintln!("sail-rs: warning: {warning}");
+    }
+    if resolved.warnings.len() > 20 {
+        eprintln!("sail-rs: {} further resolution warnings", resolved.warnings.len() - 20);
+    }
     if let Some(first) = resolved.errors.first() {
+        if opts.verbose >= 2 {
+            for diagnostic in resolved.errors.iter().skip(1).take(19) {
+                eprintln!("sail-rs: name resolution: {diagnostic}");
+            }
+        }
         return Err(error(format!(
             "frontend name resolution: {first} ({} error(s))",
             resolved.errors.len()

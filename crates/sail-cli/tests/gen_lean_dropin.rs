@@ -289,6 +289,26 @@ fn declared_constructor_kinds_follow_include_order_in_parallel_frontend() {
 }
 
 #[test]
+fn legacy_val_redeclarations_do_not_stop_the_frontend() {
+    let dir = temp_dir("repeated-val");
+    let input = dir.join("main.sail");
+    // OCaml 0.20.3 checks this using the later bool signature with a warning.
+    std::fs::write(&input, "val changed : int -> int\nval changed : bool -> bool\nfunction changed(x) = x\nval main : unit -> bool\nfunction main() = changed(true)\n").unwrap();
+    for workers in ["1", "4"] {
+        let out = Command::new(binary())
+            .args(["--lean", "--no-core", input.to_str().unwrap()])
+            .env_remove("SAIL_RS_DRY_RUN").env_remove("SAIL_RS_LIBDIR")
+            .env("SAIL_RS_THREADS", workers).output().unwrap();
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1));
+        assert!(stderr.contains("warning: duplicate val spec 'changed'"), "{stderr}");
+        assert!(stderr.contains("frontend converted 5 definitions"), "{stderr}");
+        assert!(stderr.contains("compilation incomplete"), "{stderr}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn arm_legacy_trace_include_contains_real_declarations_and_bodies() {
     let dir = temp_dir("legacy-trace");
     let input = dir.join("main.sail");

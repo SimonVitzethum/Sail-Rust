@@ -203,13 +203,50 @@ fn distinct_errors_per_namespace() {
         union_def(&mut it, "V", &["A"]),
     ]);
     let r = resolve(&ast, &it);
-    // valspec + register + mapping + ctor duplicates = 4 errors.
-    assert_eq!(r.errors.len(), 4, " {:?}", r.errors);
+    // Repeated val specs are a legacy warning; other duplicates remain errors.
+    assert_eq!(r.errors.len(), 3, " {:?}", r.errors);
+    assert_eq!(r.warnings.len(), 1);
+    assert_eq!(r.warnings[0].kind, ResolveErrorKind::DuplicateValSpec);
     // Same name in *different* namespaces is fine: add a type `f`.
     let mut it2 = SimpleInterner::new();
     let ast2 = Ast::new(vec![struct_def(&mut it2, "f"), valspec_def(&mut it2, "f")]);
     let r2 = resolve(&ast2, &it2);
     assert!(r2.errors.is_empty(), " {:?}", r2.errors);
+}
+
+#[test]
+fn repeated_valspecs_replace_in_source_order_and_preserve_externs() {
+    let declaration = |it: &mut SimpleInterner, start| {
+        let mut def = valspec_def(it, "f");
+        let DefKind::Val(val) = &mut def.kind else { unreachable!() };
+        val.span = Span { start, end: start + 5, ..Span::DUMMY };
+        if start == 20 {
+            val.extern_opt = Some(sail_ast::Extern {
+                pure: true, bindings: vec![("lean".into(), "external_f".into())],
+            });
+        }
+        def
+    };
+    let mut shared = SimpleInterner::new();
+    let defs = [10, 20, 30].into_iter().map(|start| declaration(&mut shared, start)).collect();
+    let expected = resolve(&Ast::new(defs), &shared);
+    assert!(expected.is_ok(), "{:?}", expected.errors);
+    let entry = expected.env.lookup_valspec("f").unwrap();
+    assert_eq!(entry.span.start, 30);
+    assert!(entry.has_extern);
+    assert_eq!(expected.warnings.iter().map(|warning|
+        (warning.first.start, warning.second.start)).collect::<Vec<_>>(),
+        vec![(10, 20), (20, 30)]);
+
+    // Shard-local symbols cannot change source-order replacement semantics.
+    let mut streamed = sail_resolve::resolve::Resolver::new();
+    for start in [10, 20, 30] {
+        let mut local = SimpleInterner::new();
+        local.intern(&format!("unrelated_{start}"));
+        let def = declaration(&mut local, start);
+        streamed.add_definition(&def, &local);
+    }
+    assert_eq!(streamed.finish(), expected);
 }
 
 #[test]

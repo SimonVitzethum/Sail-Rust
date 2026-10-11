@@ -42,7 +42,7 @@ pub struct ResolvedProgram {
     pub env: Env,
     /// Fatal `distincto`/linkage errors. Empty iff resolution succeeded.
     pub errors: Vec<ResolveError>,
-    /// Non-fatal ctor-vs-type collision notes.
+    /// Non-fatal redeclaration and ctor-vs-type collision notes.
     pub warnings: Vec<ResolveError>,
     /// Pure rename map for colliding union ctors (possibly empty).
     pub ctor_renames: BTreeMap<String, String>,
@@ -108,7 +108,8 @@ impl Resolver {
     /// This shares the same checks as `resolve_program`.
     pub fn finish(mut self) -> ResolvedProgram {
         self.check_pass();
-        let warnings = self.collision_warnings();
+        let mut warnings = self.env.warnings.clone();
+        warnings.extend(self.collision_warnings());
         let ctor_renames = self.renames();
         let Self { env, errors, .. } = self;
         ResolvedProgram {
@@ -152,13 +153,11 @@ impl Resolver {
                 let Some(name) = Self::name_of(it, &v.name) else {
                     return;
                 };
-                if let Err(e) = self.env.insert_valspec(ValSpecEntry {
+                self.env.insert_valspec(ValSpecEntry {
                     name,
                     span: v.span,
                     has_extern: v.extern_opt.is_some(),
-                }) {
-                    self.push_err(e);
-                }
+                });
             }
             DefKind::Register(r) => {
                 let Some(name) = Self::name_of(it, &r.name) else {
