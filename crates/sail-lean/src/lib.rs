@@ -708,10 +708,10 @@ impl LeanPrinter {
         Ok(buf)
     }
 
-    /// Multithreaded rendering: each signature is rendered on its own
-    /// thread (via `std::thread::scope`) into a per-def `String`, then
-    /// streamed out in input order. Peak RAM stays O(largest def ×
-    /// parallelism); no whole-program document tree is built.
+    /// Render using a bounded worker pool and write each result in input order.
+    /// Additional rendered output is bounded by the scheduler credit window;
+    /// the caller's signature/body slices remain resident. A slow first
+    /// definition cannot accumulate all later rendered strings.
     ///
     /// `bodies[i]` is the body text (or `None` for untranslatable) for
     /// `sigs[i]`. Returns the first hard error encountered, if any.
@@ -726,37 +726,12 @@ impl LeanPrinter {
             bodies.len(),
             "sigs and bodies must have equal length"
         );
-        if sigs.is_empty() {
-            return Ok(());
-        }
-        let n = sigs.len();
-        let mut rendered: Vec<Option<Result<String, Error>>> = Vec::with_capacity(n);
-        rendered.resize_with(n, || None);
-        std::thread::scope(|s| {
-            let chunks: Vec<_> = rendered
-                .iter_mut()
-                .enumerate()
-                .map(|(i, slot)| {
-                    let printer = self.clone();
-                    let sig = &sigs[i];
-                    let body = &bodies[i];
-                    s.spawn(move || {
-                        *slot = Some(printer.render_fun_stub(sig, body.as_deref()));
-                    })
-                })
-                .collect();
-            let _ = chunks;
-        });
-        for slot in rendered {
-            match slot {
-                Some(Ok(text)) => out.write_str(&text)?,
-                Some(Err(e)) => return Err(e),
-                None => {
-                    return Err(Error::Fmt("worker thread failed to render".to_string()));
-                }
-            }
-        }
-        Ok(())
+        let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+            .min(sigs.len().max(1));
+        let scheduler = sail_shard::Scheduler::new(sail_shard::SchedulerConfig::new(8, workers));
+        scheduler.run_streaming(sigs.iter().zip(bodies),
+            |(sig, body)| self.render_fun_stub(sig, body.as_deref()),
+            |_, rendered| { out.write_str(&rendered?)?; Ok(()) })
     }
 
     /// Emit the `SailM`/`SailME` prelude (`doc_monad_abbrev`,

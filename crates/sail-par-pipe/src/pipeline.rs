@@ -1,22 +1,9 @@
-//! Dreistufige Shard-Pipeline Parse → Check → Emit (Implementierung, Lane 84).
-//!
-//! Design-Regeln (von Lane 11/43 übernommen):
-//! * Stufen-Weiterreichung über **bounded** `crossbeam-channel`-Kanäle mit
-//!   Kapazität `max_inflight` — blockierendes `send` = Backpressure.
-//! * Ergebniskanal **unbegrenzt** (Deadlock-Freiheit, vgl.
-//!   [`sail_shard::Scheduler`]-Doku): begrenzt + erst-nach-Produktion-lesen
-//!   verklemmt bei mehreren Workern.
-//! * Produzent, alle Worker-Pools und Konsument laufen nebenläufig in einem
-//!   `thread::scope`; Kanal-Schließung kaskadiert (Produzent fertig → Parse
-//!   drainiert → Check drainiert → Emit drainiert).
-//! * Jede Eingabe trägt ihren Eingangsindex; der Konsument sortiert vor der
-//!   Rückgabe nach diesem Index (deterministischer Merge).
-//! * Panics sind fail-fast (Scope propagiert); erwartete Stufen-Fehler sind
-//!   pro-Shard-`Result`s ([`StageError`]) und verlieren keine Nachbar-Shards.
+//! Bounded Parse → Check → Emit orchestration using one shared worker pool.
+//! Lazy inputs, completed results and reorder buffers share the scheduler's
+//! credit window. Collecting entry points are compatibility adapters; only
+//! `run_pipeline_streaming` permits corpus-independent memory consumption.
 
-use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use sail_shard::Shard;
-use std::sync::Arc;
 use std::thread;
 
 /// Pipeline-Stufe, für die Fehlerattribution in [`StageError`].
@@ -167,122 +154,13 @@ where
     FC: Fn(P) -> Result<C, String> + Send + Sync + 'static,
     FE: Fn(C) -> Result<E, String> + Send + Sync + 'static,
 {
-    let n = shards.len();
-    if n == 0 {
-        return Vec::new();
-    }
-    let cap = config.max_inflight;
-    let np = config.parse_workers.min(n).max(1);
-    let nc = config.check_workers.min(n).max(1);
-    let ne = config.emit_workers.min(n).max(1);
-
-    // Stufen-Kanäle bounded (Backpressure), Ergebniskanal unbegrenzt
-    // (Deadlock-Freiheit, Lane-11-Begründung).
-    let (parse_tx, parse_rx): (Sender<(usize, Shard)>, Receiver<(usize, Shard)>) =
-        bounded(cap);
-    let (check_tx, check_rx): (
-        Sender<(usize, String, Result<P, StageError>)>,
-        Receiver<(usize, String, Result<P, StageError>)>,
-    ) = bounded(cap);
-    let (emit_tx, emit_rx): (
-        Sender<(usize, String, Result<C, StageError>)>,
-        Receiver<(usize, String, Result<C, StageError>)>,
-    ) = bounded(cap);
-    let (res_tx, res_rx): (
-        Sender<(usize, String, Result<E, StageError>)>,
-        Receiver<(usize, String, Result<E, StageError>)>,
-    ) = unbounded();
-
-    let parse = Arc::new(parse);
-    let check = Arc::new(check);
-    let emit = Arc::new(emit);
-
-    thread::scope(|s| {
-        // Parse-Pool.
-        for _ in 0..np {
-            let rx = parse_rx.clone();
-            let tx = check_tx.clone();
-            let parse = Arc::clone(&parse);
-            s.spawn(move || {
-                for (order, shard) in rx {
-                    let id = shard.id.to_string();
-                    let out = parse(shard)
-                        .map_err(|message| StageError::new(Stage::Parse, id.clone(), message));
-                    // Send-Fehler nur, wenn der Empfänger weg ist (Panic-Pfad).
-                    let _ = tx.send((order, id, out));
-                }
-            });
-        }
-        drop(parse_rx);
-        drop(check_tx);
-
-        // Check-Pool: `Err` wird durchgereicht, Closure nicht aufgerufen.
-        for _ in 0..nc {
-            let rx = check_rx.clone();
-            let tx = emit_tx.clone();
-            let check = Arc::clone(&check);
-            s.spawn(move || {
-                for (order, id, parsed) in rx {
-                    let out = match parsed {
-                        Err(e) => Err(e),
-                        Ok(p) => check(p).map_err(|message| {
-                            StageError::new(Stage::Check, id.clone(), message)
-                        }),
-                    };
-                    let _ = tx.send((order, id, out));
-                }
-            });
-        }
-        drop(check_rx);
-        drop(emit_tx);
-
-        // Emit-Pool.
-        for _ in 0..ne {
-            let rx = emit_rx.clone();
-            let tx = res_tx.clone();
-            let emit = Arc::clone(&emit);
-            s.spawn(move || {
-                for (order, id, checked) in rx {
-                    let out = match checked {
-                        Err(e) => Err(e),
-                        Ok(c) => emit(c).map_err(|message| {
-                            StageError::new(Stage::Emit, id.clone(), message)
-                        }),
-                    };
-                    let _ = tx.send((order, id, out));
-                }
-            });
-        }
-        drop(emit_rx);
-        drop(res_tx);
-
-        // Produzent: blockiert bei voller Parse-Queue (bounded, low-RAM).
-        // Danach schließt der Kanal kaskadierend alle Pools.
-        s.spawn(move || {
-            for (order, shard) in shards.into_iter().enumerate() {
-                parse_tx.send((order, shard)).expect("parse worker alive");
-            }
-        });
-
-        // Konsument: exakt n Ergebnisse, dann deterministischer Merge.
-        let mut out = Vec::with_capacity(n);
-        for _ in 0..n {
-            let (order, id, result) = res_rx.recv().expect("emit worker alive");
-            out.push(ShardOutput {
-                order,
-                shard: id,
-                output: result,
-            });
-        }
-        out.sort_by_key(|o| o.order);
-        out
-    })
+    run_shard_parallel(shards, parse, check, emit, config)
 }
 
 /// Ein-poolige Variante: ganze Kette Parse→Check→Emit pro Shard in genau
-/// einem Worker, direkt auf [`sail_shard::Scheduler::run_with_index`]
-/// (Lane 11) aufsetzend. Kein Stufen-Überlapp, aber minimale
-/// Synchronisation und dieselbe Merge-Garantie (nach `order` sortiert).
+/// einem Worker auf dem speicherbegrenzten Streaming-Scheduler.
+/// Die sammelnde Rückgabe hält alle Ergebnisse; für große Modelle
+/// `run_pipeline_streaming` mit einem Dateischreiber verwenden.
 /// Worker-Zahl = [`PipeConfig::chain_workers`].
 pub fn run_shard_parallel<P, C, E, FP, FC, FE>(
     shards: Vec<Shard>,

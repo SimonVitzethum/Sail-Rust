@@ -488,3 +488,21 @@ fn conv_vector_order_bitvector_and_bool_drop() {
         }
     );
 }
+
+#[test]
+fn parallel_printing_large_definition_inventory_uses_bounded_workers() {
+    // ARM-sized declaration inventory. The old thread-per-definition path
+    // exhausted thread/memory limits even though the output was small.
+    struct Counter(usize);
+    impl std::fmt::Write for Counter {
+        fn write_str(&mut self, text: &str) -> std::fmt::Result {
+            self.0 += text.len();
+            Ok(())
+        }
+    }
+    let sigs: Vec<_> = (0..20_000).map(|i| funsig(&format!("f{i}"), Typ::Int, false, false, false)).collect();
+    let bodies = vec![Some("1".into()); sigs.len()];
+    let mut sink = Counter(0);
+    printer().print_defs_parallel(&mut sink, &sigs, &bodies).unwrap();
+    assert!(sink.0 > 300_000);
+}
