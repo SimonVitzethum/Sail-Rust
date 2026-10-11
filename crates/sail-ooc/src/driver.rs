@@ -422,6 +422,7 @@ impl OocDriverLoop {
         // Typcheck + Rewrite (nur dieser Shard in RAM)
         self.hot_phase = Some(DriverPhase::Rewrite);
         let produced = run_phase(&fetched);
+        drop(fetched);
         self.check_bytes(DriverPhase::Rewrite, produced.len())?;
         // sealen (serialisieren + verwerfen, RAM frei)
         self.hot_phase = Some(DriverPhase::Seal);
@@ -446,7 +447,7 @@ impl OocDriverLoop {
         };
         // spillen (warm ablegen)
         self.check_bytes(DriverPhase::Spill, produced.len())?;
-        self.warm.spill(&receipt.content, &produced)?;
+        self.warm.store(&receipt.content, &produced)?;
         self.stats.warm_spills += 1;
         // Summary (nur Fakten in RAM)
         self.check_bytes(DriverPhase::Summary, produced.len())?;
@@ -781,32 +782,22 @@ mod tests {
     }
 
     #[test]
-    fn warm_budget_fehler_laesst_barriere_frei() {
+    fn disk_spills_do_not_accumulate_in_the_live_cache() {
         let dirs = TestDirs::new("budget");
         let mut d = driver(&dirs);
-        d.warm.max_live_bytes = 1;
-        let err = d
-            .run_shard(
-                ShardId::new("a", 0),
-                || b"aa".to_vec(),
+        d.warm.max_live_bytes = 0;
+        for i in 0..32 {
+            let receipt = d.run_shard(
+                ShardId::new("a", i),
+                || vec![42; 1024],
                 |b| b.to_vec(),
                 tiny_summary,
-            )
-            .expect_err("Budget 1 < 2 B");
-        assert!(matches!(err, DriverError::Warm(_)));
-        // Versiegelt, aber nicht gezaehlt; Barriere frei.
-        assert_eq!(d.state(), DriverState::Idle);
-        assert_eq!(d.stats().sealed, 0);
-        // Nach Freigabe laeuft es (Drop-Punkt-Policy).
-        d.warm.max_live_bytes = u64::MAX;
-        d.run_shard(
-            ShardId::new("a", 0),
-            || b"aa".to_vec(),
-            |b| b.to_vec(),
-            tiny_summary,
-        )
-        .expect("nach Budget-Freigabe");
-        assert_eq!(d.stats().sealed, 1);
+            ).expect("disk storage needs no live cache budget");
+            assert!(d.warm.reader(&receipt.content).unwrap().is_some());
+            assert_eq!(d.warm.live_bytes(), 0);
+            assert_eq!(d.state(), DriverState::Idle);
+        }
+        assert_eq!(d.stats().sealed, 32);
     }
 
     #[test]

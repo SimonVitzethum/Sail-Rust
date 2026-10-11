@@ -40,3 +40,19 @@ warm.evict_all(); // Drop-Punkt (Lane-37-Policy)
 Auf Lane 11 (`sail-shard`: Shards/Fingerprints) und Lane 36 (`sail-cache`:
 Disk-Cache) aufgesetzt — gelesen, nicht gedoppelt. Lane-37-Drop-Punkte
 tragen `evict_all`/`SummaryTable::remove`.
+
+## Disk storage without live copies
+
+`WarmLayer::store(&self, id, bytes)` persists a completed shard without caching
+or copying its body. Workers can call it concurrently. Existing contents are
+compared using a fixed 64 KiB buffer; atomic publication never overwrites an
+existing ID, including racing writers. `reader(id)` opens a buffered stream
+without loading the full blob. `get(id)` is the explicit caching API and checks
+file size against the live budget before allocating. That budget accounts for
+cache-owned references, not externally retained `Arc`s or transient conversion
+allocations; use `reader` when those allocations must also be avoided.
+
+`OocDriverLoop` now persists completed shards with `store`, releases fetched
+input after rewriting, and retains only summaries/receipts between shards.
+Ordinary `fs::read` materializes an entire blob; OS page caching does not make
+that operation equivalent to mmap or provide a process heap limit.

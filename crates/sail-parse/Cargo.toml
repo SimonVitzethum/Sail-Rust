@@ -13,6 +13,7 @@ path = "src/lib.rs"
 sail-ast = { path = "../sail-ast" }
 sail-grammar = { path = "../sail-grammar" }
 sail-lex = { path = "../sail-lex" }
+sail-shard = { path = "../sail-shard" }
 
 [lints]
 workspace = true

@@ -299,46 +299,56 @@ where
     FC: Fn(P) -> Result<C, String> + Send + Sync + 'static,
     FE: Fn(C) -> Result<E, String> + Send + Sync + 'static,
 {
-    use sail_shard::{Scheduler, SchedulerConfig};
-
-    if shards.is_empty() {
-        return Vec::new();
-    }
-    let workers = config.chain_workers().min(shards.len()).max(1);
-    let sched = Scheduler::new(SchedulerConfig::new(config.max_inflight, workers));
-    let parse = Arc::new(parse);
-    let check = Arc::new(check);
-    let emit = Arc::new(emit);
-
-    let indexed = sched.run_with_index(shards, move |shard: Shard| {
-        let id = shard.id.to_string();
-        let parsed = match parse(shard) {
-            Ok(v) => v,
-            Err(message) => return (id.clone(), Err((Stage::Parse, message))),
-        };
-        let checked = match check(parsed) {
-            Ok(v) => v,
-            Err(message) => return (id.clone(), Err((Stage::Check, message))),
-        };
-        match emit(checked) {
-            Ok(v) => (id, Ok(v)),
-            Err(message) => (id.clone(), Err((Stage::Emit, message))),
-        }
-    });
-    let mut out: Vec<ShardOutput<E>> = indexed
-        .into_iter()
-        .map(|(order, (id, r))| {
-            let output =
-                r.map_err(|(stage, message)| StageError::new(stage, id.clone(), message));
-            ShardOutput {
-                order,
-                shard: id,
-                output,
-            }
-        })
-        .collect();
-    out.sort_by_key(|o| o.order);
+    let mut out = Vec::with_capacity(shards.len());
+    run_pipeline_streaming(shards, parse, check, emit, config, |item| {
+        out.push(item);
+        Ok::<_, std::convert::Infallible>(())
+    }).expect("infallible collector");
     out
+}
+
+/// Memory-bounded Parse → Check → Emit over lazy inputs, with ordered output.
+///
+/// One worker runs the complete chain for each shard. This shares a single
+/// CPU budget and releases intermediate ASTs immediately, avoiding three
+/// competing pools and queued AST copies. At most `max_inflight +
+/// chain_workers()` shards (including completed results) are resident.
+/// `consume` should spill each output to disk rather than retain its body.
+/// Its first error stops ingress; stage errors remain per-shard results.
+/// Unlike collecting variants, total corpus size does not determine RAM use.
+pub fn run_pipeline_streaming<I, P, C, E, FP, FC, FE, S, Error>(
+    shards: I,
+    parse: FP,
+    check: FC,
+    emit: FE,
+    config: PipeConfig,
+    mut consume: S,
+) -> Result<(), Error>
+where
+    I: IntoIterator<Item = Shard>,
+    I::IntoIter: Send,
+    P: Send,
+    C: Send,
+    E: Send,
+    FP: Fn(Shard) -> Result<P, String> + Sync,
+    FC: Fn(P) -> Result<C, String> + Sync,
+    FE: Fn(C) -> Result<E, String> + Sync,
+    S: FnMut(ShardOutput<E>) -> Result<(), Error>,
+{
+    use sail_shard::{Scheduler, SchedulerConfig};
+    let sched = Scheduler::new(SchedulerConfig::new(
+        config.max_inflight, config.chain_workers(),
+    ));
+    sched.run_streaming(shards, |shard| {
+        let id = shard.id.to_string();
+        let output = parse(shard)
+            .map_err(|message| StageError::new(Stage::Parse, id.clone(), message))
+            .and_then(|p| check(p)
+                .map_err(|message| StageError::new(Stage::Check, id.clone(), message)))
+            .and_then(|c| emit(c)
+                .map_err(|message| StageError::new(Stage::Emit, id.clone(), message)));
+        (id, output)
+    }, |order, (shard, output)| consume(ShardOutput { order, shard, output }))
 }
 
 // Tests als Code (E3: NICHT ausführen; Verifikation via Test-Rig, später).

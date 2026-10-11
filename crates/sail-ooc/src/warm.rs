@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -171,21 +171,43 @@ impl WarmLayer {
                 max: self.max_live_bytes,
             });
         }
-        let path = self.blob_path(id);
-        if path.is_file() {
-            let on_disk = std::fs::read(&path)?;
-            if on_disk.as_slice() == bytes {
-                self.account(id, Arc::<[u8]>::from(bytes));
-                return Ok(());
-            }
-            return Err(WarmError::ContentMismatch { id: *id });
-        }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        atomic_write(&path, bytes)?;
+        self.store(id, bytes)?;
         self.account(id, Arc::<[u8]>::from(bytes));
         Ok(())
+    }
+
+    /// Persist a completed shard without retaining or copying it into RAM.
+    /// Shared access allows workers to spill concurrently. Existing blobs are
+    /// compared in fixed-size blocks; publication never replaces another
+    /// writer's blob. Live-cache budget is independent of disk storage.
+    pub fn store(&self, id: &ContentId, bytes: &[u8]) -> Result<(), WarmError> {
+        let path = self.blob_path(id);
+        match same_file_bytes(&path, bytes) {
+            Ok(true) => return Ok(()),
+            Ok(false) => return Err(WarmError::ContentMismatch { id: *id }),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        std::fs::create_dir_all(&self.dir)?;
+        match atomic_write(&path, bytes) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                if same_file_bytes(&path, bytes)? { Ok(()) }
+                else { Err(WarmError::ContentMismatch { id: *id }) }
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Open a disk-backed blob for sequential consumption using a bounded
+    /// buffer. No cache entry is created; even blobs larger than the live
+    /// budget can be processed with `io::copy` or an incremental decoder.
+    pub fn reader(&self, id: &ContentId) -> Result<Option<io::BufReader<std::fs::File>>, WarmError> {
+        match std::fs::File::open(self.blob_path(id)) {
+            Ok(file) => Ok(Some(io::BufReader::new(file))),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Holt den Blob zu `id` (geteilt, read-only). Laedt bei Bedarf von Platte
@@ -199,26 +221,27 @@ impl WarmLayer {
         if let Some(held) = self.live.get(id) {
             return Ok(Some(Arc::clone(held)));
         }
-        let path = self.blob_path(id);
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                let add = bytes.len() as u64;
-                if self.live_bytes.checked_add(add).unwrap_or(u64::MAX) > self.max_live_bytes {
-                    return Err(WarmError::BudgetExceeded {
-                        live: self.live_bytes,
-                        add,
-                        max: self.max_live_bytes,
-                    });
-                }
-                let arc: Arc<[u8]> = Arc::from(bytes.into_boxed_slice());
-                self.add_live(arc.len() as u64);
-                self.live.insert(*id, Arc::clone(&arc));
-                self.debug_check_accounting();
-                Ok(Some(arc))
-            }
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(WarmError::Io(e)),
+        let Some(mut reader) = self.reader(id)? else { return Ok(None) };
+        // Reject oversized files BEFORE allocating/reading them. The previous
+        // fs::read path could OOM even when it eventually rejected the blob.
+        let add = reader.get_ref().metadata()?.len();
+        if self.live_bytes.checked_add(add).unwrap_or(u64::MAX) > self.max_live_bytes {
+            return Err(WarmError::BudgetExceeded {
+                live: self.live_bytes, add, max: self.max_live_bytes,
+            });
         }
+        let len = usize::try_from(add)
+            .map_err(|_| io::Error::other("warm blob exceeds address space"))?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(len).map_err(io::Error::other)?;
+        bytes.resize(len, 0);
+        reader.read_exact(&mut bytes)?;
+        if reader.read(&mut [0])? != 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "warm blob changed while reading").into());
+        }
+        let arc: Arc<[u8]> = Arc::from(bytes.into_boxed_slice());
+        self.account(id, Arc::clone(&arc));
+        Ok(Some(arc))
     }
 
     /// Streaming-Hilfe: laedt `ids` der Reihe nach (Shard-Streaming, kein
@@ -304,8 +327,21 @@ impl WarmLayer {
     }
 }
 
-/// Schreibt `bytes` atomar nach `path`: Tempfile im selben Verzeichnis
-/// (gleicher Mount → Rename ist atomar) + fsync + Rename.
+/// Compare without materializing another full copy of an existing blob.
+fn same_file_bytes(path: &Path, bytes: &[u8]) -> io::Result<bool> {
+    let mut file = std::fs::File::open(path)?;
+    if file.metadata()?.len() != bytes.len() as u64 { return Ok(false); }
+    let mut buffer = [0u8; 64 * 1024];
+    for chunk in bytes.chunks(buffer.len()) {
+        file.read_exact(&mut buffer[..chunk.len()])?;
+        if &buffer[..chunk.len()] != chunk { return Ok(false); }
+    }
+    let mut extra = [0];
+    Ok(file.read(&mut extra)? == 0)
+}
+
+/// Publish an fsynced temporary file atomically without replacing an existing
+/// content ID. A hard link on the same filesystem provides create-if-absent.
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write as _;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -321,12 +357,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?;
         drop(f);
-        std::fs::rename(&tmp, path)?;
+        std::fs::hard_link(&tmp, path)?;
         Ok(())
     })();
-    if res.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
+    let _ = std::fs::remove_file(&tmp);
     res
 }
 
@@ -543,4 +577,58 @@ mod tests {
         assert_eq!(warm.live_count(), 1);
         assert_eq!(warm.live_bytes(), 1);
     }
+    #[test]
+    fn rejects_large_sparse_blob_before_reading_it() {
+        let t = TestDir::new("sparse");
+        let mut warm = WarmLayer::open(t.path()).with_max_live_bytes(1024);
+        std::fs::create_dir_all(t.path()).unwrap();
+        let id = id_of(b"large");
+        let file = std::fs::File::create(warm.blob_path(&id)).unwrap();
+        file.set_len(512 * 1024 * 1024).unwrap();
+        assert!(matches!(warm.get(&id), Err(WarmError::BudgetExceeded { .. })));
+        assert_eq!(warm.live_bytes(), 0);
+    }
+
+    #[test]
+    fn disk_storage_and_streaming_need_no_live_cache() {
+        let t = TestDir::new("disk-only");
+        let warm = WarmLayer::open(t.path()).with_max_live_bytes(0);
+        let bytes = vec![123; 1024 * 1024];
+        let id = id_of(&bytes);
+        warm.store(&id, &bytes).unwrap();
+        warm.store(&id, &bytes).unwrap();
+        assert_eq!(warm.live_bytes(), 0);
+        let mut reader = warm.reader(&id).unwrap().unwrap();
+        assert_eq!(io::copy(&mut reader, &mut io::sink()).unwrap(), bytes.len() as u64);
+        assert!(matches!(warm.store(&id, b"other"), Err(WarmError::ContentMismatch { .. })));
+    }
+
+    #[test]
+    fn concurrent_publication_cannot_overwrite_an_existing_id() {
+        let t = TestDir::new("concurrent");
+        let warm = WarmLayer::open(t.path());
+        let id = id_of(b"shared");
+        let barrier = std::sync::Barrier::new(8);
+        let outcomes = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8).map(|i| {
+                let warm = &warm;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    let bytes = vec![i as u8; 256 * 1024];
+                    barrier.wait();
+                    (i as u8, warm.store(&id, &bytes))
+                })
+            }).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect::<Vec<_>>()
+        });
+        let winners: Vec<_> = outcomes.iter().filter(|(_, r)| r.is_ok()).collect();
+        assert_eq!(winners.len(), 1);
+        for (_, r) in &outcomes {
+            assert!(r.is_ok() || matches!(r, Err(WarmError::ContentMismatch { .. })));
+        }
+        assert!(std::fs::read(warm.blob_path(&id)).unwrap().iter()
+            .all(|&b| b == winners[0].0));
+        assert_eq!(std::fs::read_dir(t.path()).unwrap().count(), 1, "temporary files leaked");
+    }
+
 }

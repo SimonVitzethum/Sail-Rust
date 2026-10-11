@@ -91,5 +91,5 @@ pub mod pipeline;
 
 pub use merge::{concat_ok, manifest, merge_ordered, merge_ordered_par};
 pub use pipeline::{
-    PipeConfig, ShardOutput, Stage, StageError, run_pipeline, run_shard_parallel,
+    PipeConfig, ShardOutput, Stage, StageError, run_pipeline, run_pipeline_streaming, run_shard_parallel,
 };

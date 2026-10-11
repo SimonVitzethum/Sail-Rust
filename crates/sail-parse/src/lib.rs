@@ -30,35 +30,18 @@ pub use span::{FileId, ParseError, Span, Spanned};
 pub use parser::parse_file;
 pub use real::{ParseOut, RealParser, parse_def, parse_exp, parse_file_real, parse_pat, parse_typ};
 
-/// Parse many files in parallel (one thread per file, via
-/// [`std::thread::scope`]). Results are in input order. The parser holds
-/// no shared mutable state, so this scales linearly with file count —
-/// the intended driver for the full `arm-v9.4-a/src/*.sail` model.
+/// Parse files with a bounded shared worker pool, returning input order.
+/// Input sources and returned ASTs are retained by this collecting API;
+/// lazy, disk-backed callers should use `sail_shard::Scheduler::run_streaming`
+/// with `parse_file` and spill each output in its ordered consumer.
 pub fn parse_files_parallel(inputs: &[(&str, &str)]) -> Vec<Result<ParsedFile, ParseError>> {
-    let mut out: Vec<Option<Result<ParsedFile, ParseError>>> = Vec::with_capacity(inputs.len());
-    out.resize_with(inputs.len(), || None);
-    std::thread::scope(|s| {
-        let handles: Vec<_> = inputs
-            .iter()
-            .enumerate()
-            .map(|(i, (path, src))| {
-                s.spawn(move || {
-                    let r = parse_file(path, src);
-                    (i, r)
-                })
-            })
-            .collect();
-        for h in handles {
-            let (i, r) = h.join().unwrap_or_else(|_| {
-                (
-                    usize::MAX,
-                    Err(ParseError::new(Span::new(FileId(0), 0, 0), "parser thread panicked")),
-                )
-            });
-            if i != usize::MAX {
-                out[i] = Some(r);
-            }
-        }
-    });
-    out.into_iter().map(|o| o.expect("parser thread missing")).collect()
+    let workers = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+        .min(inputs.len().max(1));
+    let scheduler = sail_shard::Scheduler::new(sail_shard::SchedulerConfig::new(8, workers));
+    let mut out = Vec::with_capacity(inputs.len());
+    scheduler.run_streaming(inputs.iter().copied(), |(path, src)| parse_file(path, src), |_, parsed| {
+        out.push(parsed);
+        Ok::<_, std::convert::Infallible>(())
+    }).expect("infallible collector");
+    out
 }
