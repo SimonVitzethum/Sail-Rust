@@ -17,6 +17,22 @@ pub struct Scheme {
     pub typschm: TypSchm,
     pub interner: Arc<SimpleInterner>,
 }
+impl Drop for Scheme {
+    fn drop(&mut self) {
+        let quant = std::mem::take(&mut self.typschm.quant);
+        let typ = std::mem::replace(&mut self.typschm.typ, Node::dummy(TypKind::Unknown));
+        dispose_signature(quant, typ);
+    }
+}
+fn dispose_signature(quant: Vec<QuantItem>, typ: Typ) {
+    sail_ast::storage::drop_definition(Node::dummy(DefKind::Val(ValSpec {
+        id: NodeId::DUMMY,
+        span: Span::DUMMY,
+        name: Name::dummy(Symbol::DUMMY),
+        typschm: TypSchm { quant, typ },
+        extern_opt: None,
+    })));
+}
 #[derive(Clone, Debug)]
 struct Binding<T> {
     position: usize,
@@ -37,6 +53,7 @@ struct ConstructorProof {
 struct Value {
     scheme: Arc<Scheme>,
     enumeration_member: bool,
+    inline: bool,
 }
 
 /// Canonical declaration tables, frozen before parallel body checking. Only
@@ -220,6 +237,7 @@ impl Program {
                                 text(it.as_ref(), member.symbol, member.span)?.to_owned(),
                                 member.span,
                                 Value {
+                                    inline: false,
                                     scheme: Arc::new(Scheme {
                                         typschm: TypSchm {
                                             quant: vec![],
@@ -275,6 +293,7 @@ impl Program {
                                 text(it.as_ref(), ctor.ctor.symbol, ctor.span)?.to_owned(),
                                 ctor.span,
                                 Value {
+                                    inline: false,
                                     scheme: Arc::new(scheme),
                                     enumeration_member: false,
                                 },
@@ -322,11 +341,57 @@ impl Program {
                 self.values.entry(name).or_default().push(Binding {
                     position,
                     value: Value {
+                        inline: false,
                         enumeration_member: false,
                         scheme: Arc::new(Scheme {
                             typschm: val.typschm.clone(),
                             interner: it,
                         }),
+                    },
+                });
+                Ok(())
+            }
+            DefKind::Fundef {
+                annot: TAnnotOpt::Some { quant, typ: ret },
+                funcls,
+                ..
+            } => {
+                let name = function_name(funcls, &it, def.span)?.to_owned();
+                if self.value(&name, position).is_some() {
+                    return self.check_function_header(def, &it, position);
+                }
+                let [clause] = funcls.as_slice() else {
+                    return Err(failure(
+                        def.span,
+                        "cannot infer a function signature from multiple clauses",
+                    ));
+                };
+                let pat = match &clause.arm.kind {
+                    PExpKind::PatExp { pat, .. } | PExpKind::PatWhen { pat, .. } => pat,
+                };
+                let mut interner = it;
+                let arg = infer_pattern_type(pat, Arc::make_mut(&mut interner))?;
+                let args = match arg.kind {
+                    TypKind::Tuple(args) => args,
+                    _ => vec![arg],
+                };
+                let scheme = Scheme {
+                    typschm: TypSchm {
+                        quant: quant.clone(),
+                        typ: Node::dummy(TypKind::Fn {
+                            args,
+                            ret: Box::new(ret.clone()),
+                        }),
+                    },
+                    interner,
+                };
+                self.check_scheme(&scheme.typschm, &scheme.interner, position)?;
+                self.values.entry(name).or_default().push(Binding {
+                    position,
+                    value: Value {
+                        scheme: Arc::new(scheme),
+                        enumeration_member: false,
+                        inline: true,
                     },
                 });
                 Ok(())
@@ -376,6 +441,67 @@ impl Program {
         let mut checker = WellFormed::new(self, it, position);
         checker.quant(&scheme.quant)?;
         checker.run(vec![Task::Typ(&scheme.typ)])
+    }
+
+    /// Validate loaded clauses against their source-position signature. Inline
+    /// annotations store a return type, never an already constructed arrow.
+    pub(crate) fn check_function_header(
+        &self,
+        def: &Def,
+        it: &SimpleInterner,
+        position: usize,
+    ) -> TypeResult<()> {
+        let DefKind::Fundef { annot, funcls, .. } = &def.kind else {
+            return Ok(());
+        };
+        let name = function_name(funcls, it, def.span)?;
+        let TAnnotOpt::Some { quant, typ } = annot else {
+            return Ok(());
+        };
+        let history = self
+            .values
+            .get(name)
+            .ok_or_else(|| TypeError::unbound_var(def.span, name.to_owned()))?;
+        let index = history.partition_point(|b| b.position <= position);
+        let binding = index
+            .checked_sub(1)
+            .map(|i| &history[i])
+            .ok_or_else(|| TypeError::unbound_var(def.span, name.to_owned()))?;
+        let scheme = &binding.value.scheme;
+        if binding.value.inline && binding.position == position {
+            if quant.len() != scheme.typschm.quant.len()
+                || !quant
+                    .iter()
+                    .zip(&scheme.typschm.quant)
+                    .all(|(a, b)| match (a, b) {
+                        (QuantItem::Id(a), QuantItem::Id(b)) => {
+                            a.kind == b.kind && it.resolve(a.kid) == scheme.interner.resolve(b.kid)
+                        }
+                        (QuantItem::Constraint(a), QuantItem::Constraint(b)) => {
+                            crate::canonical_eq::constraint(a, b, it, &scheme.interner, true)
+                        }
+                        _ => false,
+                    })
+            {
+                return Err(failure(
+                    def.span,
+                    "inline quantifiers do not match the synthesized signature",
+                ));
+            }
+        } else if !quant.is_empty() {
+            return Err(failure(
+                def.span,
+                "duplicate quantifier between inline annotation and val declaration",
+            ));
+        }
+        self.check_annotation(typ, it, position, Some(scheme))?;
+        let TypKind::Fn { ret, .. } = &scheme.typschm.typ.kind else {
+            return Err(failure(def.span, "function signature is not an arrow type"));
+        };
+        if !crate::canonical_eq::typ(typ, ret, it, &scheme.interner, true) {
+            return Err(failure(typ.span,"inline return type does not match the function signature (synonym expansion may be required)"));
+        }
+        Ok(())
     }
 
     /// Validate an expression/pattern annotation in its function's quantified
@@ -451,6 +577,65 @@ fn arg_kind(arg: &TypArg) -> Kind {
         TypArgKind::Typ(_) => Kind::Type,
         TypArgKind::Bool(_) => Kind::Bool,
     }
+}
+fn function_name<'a>(clauses: &[Funcl], it: &'a SimpleInterner, span: Span) -> TypeResult<&'a str> {
+    let first = clauses
+        .first()
+        .ok_or_else(|| failure(span, "function has no clauses"))?;
+    let name = text(it, first.name.symbol, first.span)?;
+    for clause in clauses.iter().skip(1) {
+        if text(it, clause.name.symbol, clause.span)? != name {
+            return Err(failure(
+                clause.span,
+                "all clauses in a function definition must have the same name",
+            ));
+        }
+    }
+    Ok(name)
+}
+fn infer_pattern_type(pat: &Pat, it: &mut SimpleInterner) -> TypeResult<Typ> {
+    enum Work<'a> {
+        Pattern(&'a Pat),
+        Tuple(Span, usize),
+    }
+    let mut work = vec![Work::Pattern(pat)];
+    struct Types(Vec<Typ>);
+    impl Drop for Types {
+        fn drop(&mut self) {
+            dispose_signature(
+                vec![],
+                Node::dummy(TypKind::Tuple(std::mem::take(&mut self.0))),
+            );
+        }
+    }
+    let mut types = Types(Vec::new());
+    while let Some(task) = work.pop() {
+        match task {
+            Work::Pattern(p) => match &p.kind {
+                PatKind::Typ { typ, .. } => types.0.push(typ.clone()),
+                PatKind::Lit(lit) => types
+                    .0
+                    .push(crate::canonical_literal::classify(lit, it)?.into_type(it)),
+                PatKind::Tuple(items) => {
+                    work.push(Work::Tuple(p.span, items.len()));
+                    work.extend(items.iter().rev().map(Work::Pattern));
+                }
+                _ => {
+                    return Err(failure(
+                        p.span,
+                        "cannot infer an argument type from an unannotated pattern",
+                    ))
+                }
+            },
+            Work::Tuple(span, count) => {
+                let items = types.0.split_off(types.0.len() - count);
+                types
+                    .0
+                    .push(Node::new(NodeId::DUMMY, span, TypKind::Tuple(items)));
+            }
+        }
+    }
+    Ok(types.0.pop().expect("inferred root pattern type"))
 }
 enum Task<'a> {
     Typ(&'a Typ),

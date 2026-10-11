@@ -318,6 +318,24 @@ fn disk_backed_parallel_typechecking_checks_bodies_and_reports_errors_in_source_
 }
 
 #[test]
+fn inline_signatures_are_declared_before_disk_backed_parallel_body_checks() {
+    let dir=temp_dir("inline-signatures");
+    let input=dir.join("input.sail");
+    let valid="function identity(x : int) -> int = x\nfunction pass(x : int) -> int = identity(x)\nfunction number() -> int(7) = 7\n";
+    for bad in [false,true] {
+        std::fs::write(&input,if bad {"val wrong : int -> bool\nfunction wrong(x : int) -> int = x\n"} else {valid}).unwrap();
+        for workers in ["1","4"] {
+            let out=Command::new(binary()).args(["--lean","--no-core",input.to_str().unwrap()]).env_remove("SAIL_RS_DRY_RUN").env_remove("SAIL_RS_LIBDIR").env("SAIL_RS_THREADS",workers).output().unwrap();
+            let stderr=String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(),Some(1),"{stderr}");
+            if bad {assert!(stderr.contains("inline return type does not match"),"{stderr}");}
+            else {assert!(stderr.contains(&format!("typechecked 3 definitions and 4 expressions using {workers} workers")),"{stderr}");assert!(stderr.contains("compilation incomplete"),"{stderr}");}
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn disk_spool_override_is_used_and_cleaned_after_successful_and_failed_frontends() {
     let dir = temp_dir("disk-spool");
     let input = dir.join("input.sail");

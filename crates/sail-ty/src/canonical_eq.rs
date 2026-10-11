@@ -16,11 +16,36 @@ pub(crate) fn argument(
     right: &SimpleInterner,
     same_scope: bool,
 ) -> bool {
+    equal(vec![Pair::Argument(a, b)], left, right, same_scope)
+}
+pub(crate) fn typ(
+    a: &Typ,
+    b: &Typ,
+    left: &SimpleInterner,
+    right: &SimpleInterner,
+    same_scope: bool,
+) -> bool {
+    equal(vec![Pair::Type(a, b)], left, right, same_scope)
+}
+pub(crate) fn constraint(
+    a: &Constraint,
+    b: &Constraint,
+    left: &SimpleInterner,
+    right: &SimpleInterner,
+    same_scope: bool,
+) -> bool {
+    equal(vec![Pair::Boolean(a, b)], left, right, same_scope)
+}
+fn equal(
+    mut work: Vec<Pair<'_>>,
+    left: &SimpleInterner,
+    right: &SimpleInterner,
+    same_scope: bool,
+) -> bool {
     let names = |a, b| match (left.resolve(a), right.resolve(b)) {
         (Some(a), Some(b)) => a == b,
         _ => false,
     };
-    let mut work = vec![Pair::Argument(a, b)];
     while let Some(pair) = work.pop() {
         match pair {
             Pair::Numeric(a, b) => match (&a.kind, &b.kind) {

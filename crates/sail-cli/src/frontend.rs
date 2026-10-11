@@ -403,7 +403,8 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
             };
             let interner = parser.into_interner();
             let declaration = matches!(&def.kind, DefKind::Type(_) | DefKind::Val(_)
-                | DefKind::Register(_) | DefKind::Constraint(_) | DefKind::Outcome { .. });
+                | DefKind::Register(_) | DefKind::Constraint(_) | DefKind::Outcome { .. }
+                | DefKind::Fundef {annot:sail_ast::TAnnotOpt::Some {..},..});
             if opts.verbose >= 2 { eprintln!("sail-rs: spool {}:{}", record.path, record.span); }
             let snapshot = DefinitionSnapshot::new(def);
             let mut bytes = Vec::new();

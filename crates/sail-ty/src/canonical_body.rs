@@ -274,13 +274,8 @@ pub(crate) fn check(
         calls: HashMap::new(),
     };
     match &def.kind {
-        DefKind::Fundef { rec, annot, funcls } => {
-            if !matches!(annot, TAnnotOpt::None) {
-                return Err(unsupported(
-                    def.span,
-                    "function signature annotation elaboration",
-                ));
-            }
+        DefKind::Fundef { rec, funcls, .. } => {
+            program.check_function_header(def, &checker.it, position)?;
             if matches!(rec, RecOpt::Measure { .. }) {
                 return Err(unsupported(def.span, "termination-measure typing"));
             }
@@ -471,49 +466,12 @@ impl Checker<'_> {
             .ok_or_else(|| TypeError::unbound_var(name.span, name_text.to_owned()))
     }
     fn literal(&mut self, lit: &Lit) -> TypeResult<Type> {
-        Ok(match lit.kind {
-            LitKind::Unit => self.builtin("unit"),
-            LitKind::True | LitKind::False => self.refined(
-                "atom_bool",
-                TypArgKind::Bool(Box::new(Node::dummy(
-                    if matches!(lit.kind, LitKind::True) {
-                        ConstraintKind::True
-                    } else {
-                        ConstraintKind::False
-                    },
-                ))),
-            ),
-            LitKind::Num(symbol) => {
-                let value = self.it.resolve(symbol).ok_or_else(|| {
-                    TypeError::unbound_var(lit.span, "numeric literal symbol".into())
-                })?;
-                self.refined(
-                    "atom",
-                    TypArgKind::NExp(Node::dummy(NExpKind::Constant(value.to_owned()))),
-                )
-            }
-            LitKind::Real(_) => self.builtin("real"),
-            LitKind::String(_) => self.builtin("string"),
-            LitKind::Bin(symbol) | LitKind::Hex(symbol) => {
-                let value = self
-                    .it
-                    .resolve(symbol)
-                    .ok_or_else(|| TypeError::unbound_var(lit.span, "bit literal symbol".into()))?;
-                let digits = value.bytes().filter(|byte| *byte != b'_').count();
-                let width = digits
-                    .checked_mul(if matches!(lit.kind, LitKind::Hex(_)) {
-                        4
-                    } else {
-                        1
-                    })
-                    .ok_or_else(|| unsupported(lit.span, "literal width overflow"))?;
-                self.refined(
-                    "bitvector",
-                    TypArgKind::NExp(Node::dummy(NExpKind::Constant(width.to_string()))),
-                )
-            }
+        Ok(match crate::canonical_literal::classify(lit, &self.it)? {
+            crate::canonical_literal::LiteralType::Primitive(name) => self.builtin(name),
+            crate::canonical_literal::LiteralType::Refined(name, arg) => self.refined(name, arg),
         })
     }
+
     fn refined(&self, name: &str, arg: TypArgKind) -> Type {
         let mut it = SimpleInterner::new();
         let name = Name::dummy(it.intern(name));

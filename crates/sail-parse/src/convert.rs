@@ -1329,12 +1329,25 @@ fn conv_tannot(
     c: &mut Ctx,
     span: Span,
     t: &Option<(Option<g::TypQuant>, g::Typ)>,
+    patterns: &[&g::Pat],
 ) -> Result<TAnnotOpt, String> {
     let Some((quant, typ)) = t else {
         return Ok(TAnnotOpt::None);
     };
+    let mut roots=vec![(typ,g::Kind::Type)];
+    let mut work=patterns.to_vec();
+    while let Some(pat)=work.pop() {
+        match pat {
+            g::Pat::Typ(p,t)=>{roots.push((t,g::Kind::Type));work.push(p);}
+            g::Pat::Attr(_,p)|g::Pat::As(p,_)=>work.push(p),
+            g::Pat::App(_,ps)|g::Pat::Tuple(ps)|g::Pat::List(ps)|g::Pat::Vector(ps)=>work.extend(ps),
+            g::Pat::Struct(_,fields)=>work.extend(fields.iter().filter_map(|f|if let g::FieldPat::Field(_,p)=f {Some(p)} else {None})),
+            g::Pat::Infix(head,tail)=>{work.push(head);work.extend(tail.iter().map(|(_,p)|p));}
+            g::Pat::Wild|g::Pat::Lit(_)|g::Pat::Id(_)|g::Pat::KidVar(_)|g::Pat::VectorSubrange(..)=>{},
+        }
+    }
     Ok(TAnnotOpt::Some {
-        quant: conv_quant_items(c, span, quant, &[(typ, g::Kind::Type)])?,
+        quant: conv_quant_items(c, span, quant, &roots)?,
         typ: conv_typ(c, span, typ)?,
     })
 }
@@ -1479,7 +1492,8 @@ fn conv_fundef_parts(
             exp: conv_exp(c, span, e)?,
         },
     };
-    let annot = conv_tannot(c, span, &f.head.typ)?;
+    let patterns:Vec<_>=std::iter::once(&f.head).chain(&f.tail).map(|clause|match &clause.pat {g::GuardedPat::Plain(p)|g::GuardedPat::Guarded(p,_)=>p}).collect();
+    let annot = conv_tannot(c, span, &f.head.typ,&patterns)?;
     let mut funcls = Vec::with_capacity(f.tail.len() + 1);
     funcls.push(conv_funcl(c, span, &f.head)?);
     for t in &f.tail {

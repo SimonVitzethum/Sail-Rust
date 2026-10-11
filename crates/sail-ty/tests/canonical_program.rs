@@ -25,6 +25,119 @@ fn declare(defs: &[(Def, Arc<SimpleInterner>)]) -> Program {
 }
 
 #[test]
+fn inline_return_annotations_synthesize_source_ordered_recursive_signatures() {
+    let defs = parse(&[
+        "function identity(x : int) -> int = x",
+        "function truth() -> bool(true) = true",
+        "function swap(x : int, y : bool) -> (bool, int) = (y, x)",
+        "function recursive(x : int) -> int = recursive(x)",
+        "function generic forall 'a. (x : 'a) -> 'a = x",
+        "function width forall 'n. (x : bitvector('n)) -> unit = ()",
+        "function flag forall 'p. (x : bool('p)) -> unit = ()",
+        "val call : int -> int",
+        "function call(x) = identity(x)",
+        "val identity : bool -> bool",
+        "function fixed_number(7) -> int(7) = 7",
+    ]);
+    let program = declare(&defs);
+    for (position, (def, it)) in defs.iter().enumerate() {
+        program.check_definition(def, it.clone(), position).unwrap();
+    }
+    assert!(program.value("identity", 0).is_some());
+    assert!(program.value("truth", 0).is_none());
+    for (name, kind) in [
+        ("width", Kind::Int),
+        ("flag", Kind::Bool),
+        ("generic", Kind::Type),
+    ] {
+        assert!(
+            matches!(&program.value(name,10).unwrap().typschm.quant[0],QuantItem::Id(k) if k.kind==kind)
+        );
+    }
+}
+
+#[test]
+fn inline_signatures_validate_existing_vals_and_reject_inconsistent_headers() {
+    let defs = parse(&[
+        "val identity : forall 'a. 'a -> 'a",
+        "function identity(x : 'a) -> 'a = x",
+        "val wrong : int -> bool",
+        "function wrong(x : int) -> int = x",
+        "val duplicate : forall 'a. 'a -> 'a",
+        "function duplicate forall 'a. (x : 'a) -> 'a = x",
+    ]);
+    let mut program = Program::new();
+    for (position, (def, it)) in defs.iter().enumerate() {
+        if [3, 5].contains(&position) {
+            assert!(program.declare(def, it.clone(), position).is_err());
+            assert!(program.check_definition(def, it.clone(), position).is_err());
+        } else {
+            program.declare(def, it.clone(), position).unwrap();
+            program.check_definition(def, it.clone(), position).unwrap();
+        }
+    }
+    for source in [
+        "function unknown(x) -> int = 0",
+        "function unknown(x : Missing) -> int = 0",
+        "function ambiguous(x : int) -> int = x and ambiguous(y : int) = y",
+    ] {
+        let defs = parse(&[source]);
+        let mut program = Program::new();
+        assert!(
+            program.declare(&defs[0].0, defs[0].1.clone(), 0).is_err(),
+            "{source}"
+        );
+        assert!(program.value("unknown", 0).is_none());
+        assert!(program.value("ambiguous", 0).is_none());
+    }
+    let defs = parse(&[
+        "val f : int -> int",
+        "val g : int -> int",
+        "function f(x) = x and g(y) = y",
+    ]);
+    let program = declare(&defs);
+    assert!(program
+        .check_definition(&defs[2].0, defs[2].1.clone(), 2)
+        .is_err());
+}
+
+#[test]
+fn inline_pattern_inference_and_header_cleanup_handle_deep_tuples_on_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            for bad in [false, true] {
+                let mut defs = parse(&["function deep() -> unit = ()"]);
+                let (mut def, it) = defs.pop().unwrap();
+                let DefKind::Fundef { funcls, .. } = &mut def.kind else {
+                    panic!()
+                };
+                let PExpKind::PatExp { pat, .. } = &mut funcls[0].arm.kind else {
+                    panic!()
+                };
+                let mut nested = Node::dummy(PatKind::Lit(Node::dummy(LitKind::Unit)));
+                for _ in 0..10_000 {
+                    nested = Node::dummy(PatKind::Tuple(vec![nested]));
+                }
+                *pat = if bad {
+                    Node::dummy(PatKind::Tuple(vec![nested, Node::dummy(PatKind::Wild)]))
+                } else {
+                    nested
+                };
+                let mut program = Program::new();
+                let result = program.declare(&def, it, 0);
+                assert_eq!(result.is_err(), bad);
+                assert_eq!(program.value("deep", 0).is_none(), bad);
+                sail_ast::storage::drop_definition(def);
+                drop(program);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn canonical_checker_handles_calls_scopes_tuples_and_rigid_polymorphism() {
     let defs = parse(&[
         "val identity : int -> int",
