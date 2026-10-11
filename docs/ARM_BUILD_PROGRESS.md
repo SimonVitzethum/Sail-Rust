@@ -4,7 +4,8 @@ The acceptance target is a complete ARM Sail build with the Rust compiler under
 `systemd MemoryMax=16G MemorySwapMax=0`. A maximum of `28G` is an accepted fallback.
 The confirmed reference is ARMv9.4-A, targeting Lean with a successful
 `lake build` of the generated model. A parse census, stub output or synthetic stress test
-is not a complete build. Lean acceptance must include compiling generated code.
+is not a complete build. Lean acceptance must include compiling generated code
+and contain no `sorry` proof holes.
 
 ## Verified foundations (2026-10-11)
 
@@ -66,9 +67,19 @@ is not a complete build. Lean acceptance must include compiling generated code.
 
 Run `scripts/arm-lean-gate.sh` (or `SAIL_ARM_MEMORY=28G` for the fallback).
 It builds Rust under 4 GiB, obtains the 22 canonical ARM Lean inputs from the
-model Makefile, and runs compilation and then `lake build` under the selected
-limit with swap disabled. Each invocation gets a fresh output directory, so
-old artifacts cannot satisfy a failed run. Logs are retained there.
+model Makefile, and runs compilation, `lake build`, then
+`scripts/CheckLeanNoSorry.lean` under the selected limit with swap disabled.
+The final check imports every compiled project module and inspects elaborated
+types and values, including opaque theorems and transitive imports, for
+`sorryAx`. It catches holes from macros/tactics even if warnings are disabled;
+comments and string literals do not cause false positives. Each invocation gets
+a fresh output directory, so old artifacts cannot satisfy a failed run. Logs
+are retained there.
+
+`scripts/test-lean-no-sorry.sh` verifies the gate on Lean 4.29.0: a complete
+theorem passes, while an opaque proof hole and a module importing that hole fail
+after their own Lean compilation succeeds. All these runs use a 2 GiB/no-swap
+systemd limit (1.5 GiB maximum). This validates the gate, not ARM emission.
 
 ## Remaining acceptance work
 

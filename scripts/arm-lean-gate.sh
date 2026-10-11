@@ -52,4 +52,18 @@ fi
 systemd-run --user --wait --pipe --collect \
     -p "MemoryMax=$MEMORY" -p MemorySwapMax=0 -p "WorkingDirectory=$OUT/lean" \
     "$(command -v lake)" build 2>&1 | tee "$OUT/lake.log"
-printf 'ARM gate passed: full compiler output and lake build completed under %s.\n' "$MEMORY"
+python3 - "$OUT/lean/.lake/build/lib/lean" > "$OUT/lean-modules.txt" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+modules = sorted('.'.join(path.relative_to(root).with_suffix('').parts)
+                 for path in root.rglob('*.olean'))
+if not modules:
+    sys.exit('ARM gate failed: lake build produced no compiled Lean modules')
+print('\n'.join(modules))
+PY
+systemd-run --user --wait --pipe --collect \
+    -p "MemoryMax=$MEMORY" -p MemorySwapMax=0 -p "WorkingDirectory=$OUT/lean" \
+    "$(command -v lake)" env lean --run "$TASK_ROOT/scripts/CheckLeanNoSorry.lean" \
+    "$OUT/lean-modules.txt" 2>&1 | tee "$OUT/no-sorry.log"
+printf 'ARM gate passed: full compiler output, lake build and elaborated no-sorry check completed under %s.\n' "$MEMORY"
