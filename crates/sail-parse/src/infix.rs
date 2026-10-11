@@ -485,6 +485,17 @@ impl<T: Clone> Climber<'_, T> {
     }
 }
 
+/// Fold references without deep-cloning surface operands. Long ARM functions
+/// can contain large subtrees inside a single infix operand.
+pub fn fold_chain_borrowed<'a, T>(chain: &'a g::InfixChain<T>, side: Side, env: &FixityEnv)
+    -> Result<Folded<&'a T>, FoldError>
+{
+    let borrowed = g::InfixChain {
+        prefixes: chain.prefixes.clone(), head: &chain.head,
+        tail: chain.tail.iter().map(|(op, prefixes, rhs)| (op.clone(), prefixes.clone(), rhs)).collect(),
+    };
+    fold_chain(&borrowed, side, env)
+}
 /// `InfixChain` unter der Fixity-Umgebung falten.
 ///
 /// * Unbekannte Operatoren → `Undeclared fixity`-Fehler;

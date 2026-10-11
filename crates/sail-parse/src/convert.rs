@@ -18,7 +18,7 @@ use sail_ast::{
     Typ, TypArg, TypArgKind, TypKind, TypPatKind, TypSchm, TypeDefKind, TypeUnion, ValSpec,
 };
 use sail_grammar::ast as g;
-use crate::infix::{FixityEnv, Folded, Side, fold_chain};
+use crate::infix::{FixityEnv, Folded, Side, fold_chain_borrowed};
 
 /// Lower-Kontext: frische IDs + Interner, vom Aufrufer geliehen (Datei-Pfad
 /// teilt sich so einen ID-Raum mit [`crate::bridge`]).
@@ -26,6 +26,7 @@ pub(crate) struct Ctx<'a> {
     pub(crate) ids: &'a mut IdGen,
     pub(crate) interner: &'a mut SimpleInterner,
     pub(crate) fixities: &'a mut FixityEnv,
+    pub(crate) bound_kinds: crate::kinds::Bindings,
 }
 
 impl Ctx<'_> {
@@ -171,31 +172,19 @@ fn conv_kind(k: &g::Kind) -> Result<Kind, String> {
     }
 }
 
-fn conv_quant_items(c: &mut Ctx, span: Span, q: &Option<g::TypQuant>) -> Result<Vec<QuantItem>, String> {
-    let Some(q) = q else {
-        return Ok(Vec::new());
-    };
+fn conv_quant_items(c: &mut Ctx, span: Span, q: &Option<g::TypQuant>, roots: &[(&g::Typ, g::Kind)]) -> Result<Vec<QuantItem>, String> {
+    let Some(q) = q else { return Ok(Vec::new()); };
+    let inferred = crate::kinds::infer(q, roots, &c.bound_kinds, c.fixities)?;
+    c.bound_kinds.extend(inferred.clone());
     let mut out = Vec::new();
     for kopt in &q.kopts {
-        // Deprecated Order binders and arguments disappear together in
-        // OCaml initial_check's to_ast_kind_aux/to_ast_typ conversion.
-        if matches!(kopt.kind, Some(g::Kind::Order)) {
-            continue;
-        }
-        // Fehlende Kind-Annotation defaultet auf `Type` (Oberflächen-
-        // Elaboration entscheidet sonst nach Präfix; siehe ADAPTER.md).
-        let kind = match &kopt.kind {
-            Some(k) => conv_kind(k)?,
-            None => Kind::Type,
-        };
         for kid in &kopt.kids {
-            out.push(QuantItem::Id(KOpt {
-                kind,
-                kid: c.interner.intern(kid),
-            }));
+            let kind = &inferred[kid];
+            if *kind == g::Kind::Order { continue; }
+            out.push(QuantItem::Id(KOpt { kind: conv_kind(kind)?, kid: c.interner.intern(kid) }));
         }
-        if matches!(kopt.kind, Some(g::Kind::Nat)) {
-            for kid in &kopt.kids {
+        for kid in &kopt.kids {
+            if inferred[kid] == g::Kind::Nat {
                 let kid = c.interner.intern(kid);
                 let variable = c.node(span, NExpKind::Var(kid));
                 let zero = c.node(span, NExpKind::Constant("0".into()));
@@ -211,10 +200,11 @@ fn conv_quant_items(c: &mut Ctx, span: Span, q: &Option<g::TypQuant>) -> Result<
 }
 
 fn conv_typschm(c: &mut Ctx, span: Span, s: &g::TypSchm) -> Result<TypSchm, String> {
-    if s.effect.as_ref().is_some_and(|e| !e.is_empty()) {
-        return Err("effect sets have no sail-ast typschm slot".to_owned());
-    }
-    let quant = conv_quant_items(c, span, &s.quant)?;
+    let saved_kinds = c.bound_kinds.clone();
+    let result = (|| {
+    // Legacy effect annotations are ignored by OCaml initial_check, too;
+    // effects are inferred from bodies and extern purity in later stages.
+    let quant = conv_quant_items(c, span, &s.quant, &[(&s.lhs, g::Kind::Type), (&s.rhs, g::Kind::Type)])?;
     // Binär abbilden (rechtsgenestete Pfeile bleiben curried `Fn`-Knoten).
     let typ = match &s.arrow {
         g::Arrow::Fn => {
@@ -239,6 +229,9 @@ fn conv_typschm(c: &mut Ctx, span: Span, s: &g::TypSchm) -> Result<TypSchm, Stri
         }
     };
     Ok(TypSchm { quant, typ })
+    })();
+    c.bound_kinds = saved_kinds;
+    result
 }
 
 fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
@@ -248,37 +241,24 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
         g::Typ::Var(s) => TypKind::Var(c.interner.intern(s)),
         g::Typ::App(f, args) => {
             let mut cargs = Vec::with_capacity(args.len());
-            let order_index = match (f.as_str(), args.len()) {
-                ("vector", 3) | ("bitvector", 2) => Some(1),
-                _ => None,
-            };
-            if let Some(i) = order_index {
-                if !matches!(&args[i], g::Typ::Dec | g::Typ::Inc | g::Typ::Var(_)) {
-                    return Err(format!("invalid Order argument for {f}"));
-                }
-            }
-            // Builtin argument kinds are known before user declarations.
-            // Trying every argument as a numeric expression first turns
-            // `list(bool)` into a list indexed by a numeric identifier.
-            let kinds: Option<&[Kind]> = match f.as_str() {
-                "int" | "atom" | "bits" | "bitvector" | "implicit" => Some(&[Kind::Int]),
-                "bool" | "atom_bool" => Some(&[Kind::Bool]),
-                "range" => Some(&[Kind::Int, Kind::Int]),
-                "list" | "register" => Some(&[Kind::Type]),
-                "vector" => Some(&[Kind::Int, Kind::Type]),
-                _ => None,
-            };
-            if kinds.is_some_and(|kinds| kinds.len() != args.len() - usize::from(order_index.is_some())) {
+            let kinds = crate::kinds::builtin_signature(f, args.len()).map(|(kinds, _)| kinds);
+            if kinds.as_ref().is_some_and(|kinds| kinds.len() != args.len()) {
                 return Err(format!("incorrect type argument count for {f}"));
             }
-            for (i, a) in args.iter().enumerate().filter_map(|(i, a)| {
-                if Some(i) == order_index { None }
-                else { Some((i - usize::from(order_index.is_some_and(|order| i > order)), a)) }
-            }) {
-                let arg = match kinds.map(|kinds| kinds[i]) {
-                    Some(Kind::Type) => { let typ = conv_typ(c, span, a)?; c.node(span, TypArgKind::Typ(typ)) }
-                    Some(Kind::Int) => { let nexp = conv_nexp(c, span, a)?; c.node(span, TypArgKind::NExp(nexp)) }
-                    Some(Kind::Bool) => { let constraint = conv_constraint(c, span, a)?; c.node(span, TypArgKind::Bool(Box::new(constraint))) }
+            for (i, a) in args.iter().enumerate() {
+                let arg = match kinds.as_ref().map(|kinds| &kinds[i]) {
+                    Some(g::Kind::Order) => {
+                        let valid = match a {
+                            g::Typ::Dec | g::Typ::Inc => true,
+                            g::Typ::Var(name) => c.bound_kinds.get(name) == Some(&g::Kind::Order),
+                            _ => false,
+                        };
+                        if !valid { return Err(format!("invalid Order argument for {f}")); }
+                        continue;
+                    }
+                    Some(g::Kind::Type) => { let typ = conv_typ(c, span, a)?; c.node(span, TypArgKind::Typ(typ)) }
+                    Some(g::Kind::Int | g::Kind::Nat) => { let nexp = conv_nexp(c, span, a)?; c.node(span, TypArgKind::NExp(nexp)) }
+                    Some(g::Kind::Bool) => { let constraint = conv_constraint(c, span, a)?; c.node(span, TypArgKind::Bool(Box::new(constraint))) }
                     None => conv_typarg(c, span, a)?,
                 };
                 cargs.push(arg);
@@ -301,26 +281,25 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
             TypKind::Fn { args, ret: Box::new(conv_typ(c, span, b)?) }
         }
         g::Typ::Exist(kopts, cond, body) => {
-            // Feldreihenfolge wie im Core: Binder, Constraint, Typ
-            // (Annahme, siehe ADAPTER.md).
-            let mut binders = Vec::new();
-            for kopt in kopts {
-                let kind = match &kopt.kind {
-                    Some(k) => conv_kind(k)?,
-                    None => Kind::Type,
-                };
-                for kid in &kopt.kids {
-                    binders.push(KOpt {
-                        kind,
-                        kid: c.interner.intern(kid),
-                    });
+            let quant = g::TypQuant { kopts: kopts.clone(), constraint: Some(cond.clone()) };
+            let inferred = crate::kinds::infer(&quant, &[(body, g::Kind::Type)], &c.bound_kinds, c.fixities)?;
+            let saved = c.bound_kinds.clone();
+            c.bound_kinds.extend(inferred.clone());
+            let result: Result<TypKind, String> = (|| {
+                let mut binders = Vec::new();
+                for kopt in kopts {
+                    for kid in &kopt.kids {
+                        if inferred[kid] == g::Kind::Order { continue; }
+                        binders.push(KOpt { kind: conv_kind(&inferred[kid])?, kid: c.interner.intern(kid) });
+                    }
                 }
-            }
-            TypKind::Exist {
-                binders,
-                constraint: Box::new(conv_constraint(c, span, cond)?),
-                typ: Box::new(conv_typ(c, span, body)?),
-            }
+                Ok(TypKind::Exist { binders,
+                    constraint: Box::new(conv_constraint(c, span, cond)?),
+                    typ: Box::new(conv_typ(c, span, body)?),
+                })
+            })();
+            c.bound_kinds = saved;
+            result?
         }
         g::Typ::NSet(members) => {
             // OCaml to_ast_typ: a finite integer type is an existential
@@ -358,10 +337,15 @@ fn conv_typarg(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<TypArg, String> {
         g::Typ::Lit(g::Lit::One) => {
             TypArgKind::NExp(c.node(span, NExpKind::Constant("1".to_owned())))
         }
-        g::Typ::Var(s) => {
-            let sym = c.interner.intern(s);
-            TypArgKind::NExp(c.node(span, NExpKind::Var(sym)))
-        }
+        g::Typ::Var(s) => match c.bound_kinds.get(s) {
+            Some(g::Kind::Type) => TypArgKind::Typ(conv_typ(c, span, t)?),
+            Some(g::Kind::Bool) => TypArgKind::Bool(Box::new(conv_constraint(c, span, t)?)),
+            Some(g::Kind::Order) => return Err("Order argument needs a declared constructor signature".into()),
+            // Free type variables in standalone fragments lack their enclosing
+            // declaration context. Complete elaboration must resolve them.
+            _ => { let sym = c.interner.intern(s); TypArgKind::NExp(c.node(span, NExpKind::Var(sym))) }
+        },
+        g::Typ::Lit(g::Lit::True | g::Lit::False) => TypArgKind::Bool(Box::new(conv_constraint(c, span, t)?)),
         g::Typ::Id(_) | g::Typ::App(..) | g::Typ::Infix(_) | g::Typ::If(..) => {
             match conv_nexp(c, span, t) {
                 Ok(n) => TypArgKind::NExp(n),
@@ -403,7 +387,7 @@ fn conv_nexp(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<NExp, String> {
 }
 
 fn infix_nexp(c: &mut Ctx, span: Span, chain: &g::InfixChain<g::Typ>) -> Result<NExp, String> {
-    let folded = fold_borrowed(chain, Side::Typ, c.fixities)?;
+    let folded = fold_chain_borrowed(chain, Side::Typ, c.fixities)?;
     folded_nexp(c, span, &folded)
 }
 
@@ -476,7 +460,7 @@ fn conv_constraint(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Constraint, St
 }
 
 fn infix_constraint(c: &mut Ctx, span: Span, chain: &g::InfixChain<g::Typ>) -> Result<Constraint, String> {
-    let folded = fold_borrowed(chain, Side::Typ, c.fixities)?;
+    let folded = fold_chain_borrowed(chain, Side::Typ, c.fixities)?;
     folded_constraint(c, span, &folded)
 }
 
@@ -780,7 +764,7 @@ fn exp_to_lexp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<LExp, String> {
             LExpKind::Tuple(ces)
         }
         g::Exp::Infix(chain) => {
-            let tree = fold_borrowed(chain, Side::Exp, c.fixities)?;
+            let tree = fold_chain_borrowed(chain, Side::Exp, c.fixities)?;
             return folded_lexp(c, span, &tree);
         }
         _ => return Err("expression is not a valid l-value".to_owned()),
@@ -860,18 +844,6 @@ fn conv_patexp(c: &mut Ctx, span: Span, p: &g::PatExp) -> Result<PExp, String> {
         span,
         kind,
     })
-}
-
-// Fold references rather than deep-cloning each surface operand. Long ARM
-// functions can contain large subtrees inside a single infix operand.
-fn fold_borrowed<'a, T>(chain: &'a g::InfixChain<T>, side: Side, env: &FixityEnv)
-    -> Result<Folded<&'a T>, String>
-{
-    let borrowed = g::InfixChain {
-        prefixes: chain.prefixes.clone(), head: &chain.head,
-        tail: chain.tail.iter().map(|(op, prefixes, rhs)| (op.clone(), prefixes.clone(), rhs)).collect(),
-    };
-    Ok(fold_chain(&borrowed, side, env)?)
 }
 
 fn folded_exp(c: &mut Ctx, span: Span, tree: &Folded<&g::Exp>) -> Result<Exp, String> {
@@ -1035,7 +1007,7 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
             body: Box::new(conv_exp(c, span, body)?),
         },
         g::Exp::Infix(chain) => {
-            let folded = fold_borrowed(chain, Side::Exp, c.fixities)?;
+            let folded = fold_chain_borrowed(chain, Side::Exp, c.fixities)?;
             return folded_exp(c, span, &folded);
         }
         g::Exp::Struct(name, fields) => {
@@ -1123,7 +1095,7 @@ fn conv_tannot(
         return Ok(TAnnotOpt::None);
     };
     Ok(TAnnotOpt::Some {
-        quant: conv_quant_items(c, span, quant)?,
+        quant: conv_quant_items(c, span, quant, &[(typ, g::Kind::Type)])?,
         typ: conv_typ(c, span, typ)?,
     })
 }
@@ -1372,12 +1344,29 @@ fn conv_reg_field(
     }
 }
 
+fn field_type_roots<'a>(fields: &'a [g::StructField], roots: &mut Vec<(&'a g::Typ, g::Kind)>) {
+    for field in fields {
+        match field {
+            g::StructField::Item(_, typ) => roots.push((typ, g::Kind::Type)),
+            g::StructField::Attr(_, inner) | g::StructField::Doc(_, inner) => field_type_roots(std::slice::from_ref(inner), roots),
+        }
+    }
+}
+fn union_type_roots<'a>(union: &'a g::TypeUnion, roots: &mut Vec<(&'a g::Typ, g::Kind)>) {
+    match union {
+        g::TypeUnion::Id(_, typ) => roots.push((typ, g::Kind::Type)),
+        g::TypeUnion::AnonRecord(_, fields) => field_type_roots(fields, roots),
+        g::TypeUnion::Attr(_, inner) | g::TypeUnion::Doc(_, inner) | g::TypeUnion::Private(inner) => union_type_roots(inner, roots),
+    }
+}
+
 fn conv_typedef(c: &mut Ctx, span: Span, t: &g::TypeDef) -> Result<TypeDefKind, String> {
     match t {
         g::TypeDef::Abbrev(name, quant, kind, body) => {
             let name = c.name(span, name);
-            let quant = conv_quant_items(c, span, &Some(quant.clone()))?;
-            let arg = match kind.as_ref().unwrap_or(&g::Kind::Type) {
+            let result_kind = match kind { Some(kind) => kind.clone(), None => crate::kinds::result_kind(quant, body, &c.bound_kinds, c.fixities)? };
+            let quant = conv_quant_items(c, span, &Some(quant.clone()), &[(body, result_kind.clone())])?;
+            let arg = match &result_kind {
                 g::Kind::Type => TypArgKind::Typ(conv_typ(c, span, body)?),
                 g::Kind::Int | g::Kind::Nat => TypArgKind::NExp(conv_nexp(c, span, body)?),
                 g::Kind::Bool => TypArgKind::Bool(Box::new(conv_constraint(c, span, body)?)),
@@ -1390,13 +1379,13 @@ fn conv_typedef(c: &mut Ctx, span: Span, t: &g::TypeDef) -> Result<TypeDefKind, 
             name: c.name(span, name),
             kind: conv_kind(kind)?,
         }),
-        g::TypeDef::Record(name, quant, fields) => Ok(TypeDefKind::Record {
-            name: c.name(span, name),
-            quant: conv_quant_items(c, span, &Some(quant.clone()))?,
-            fields: conv_struct_fields(c, span, fields)?,
-            // Die Grammatik trägt kein WF-Flag → angenommen (ADAPTER.md).
-            wf: true,
-        }),
+        g::TypeDef::Record(name, quant, fields) => {
+            let mut roots = Vec::new();
+            field_type_roots(fields, &mut roots);
+            let quant = conv_quant_items(c, span, &Some(quant.clone()), &roots)?;
+            Ok(TypeDefKind::Record { name: c.name(span, name), quant,
+                fields: conv_struct_fields(c, span, fields)?, wf: true })
+        }
         g::TypeDef::Enum(name, params, members) => {
             if !params.is_empty() {
                 return Err("enum type parameters have no sail-ast core slot".to_owned());
@@ -1415,13 +1404,16 @@ fn conv_typedef(c: &mut Ctx, span: Span, t: &g::TypeDef) -> Result<TypeDefKind, 
             })
         }
         g::TypeDef::Variant(name, quant, ctors, wf) => {
+            let mut roots = Vec::new();
+            for ctor in ctors { union_type_roots(ctor, &mut roots); }
+            let quant = conv_quant_items(c, span, &Some(quant.clone()), &roots)?;
             let mut cctors = Vec::with_capacity(ctors.len());
             for u in ctors {
                 cctors.push(conv_type_union(c, span, u)?);
             }
             Ok(TypeDefKind::Variant {
                 name: c.name(span, name),
-                quant: conv_quant_items(c, span, &Some(quant.clone()))?,
+                quant,
                 ctors: cctors,
                 wf: *wf,
             })
@@ -1487,7 +1479,7 @@ fn conv_scattered(c: &mut Ctx, span: Span, s: &g::ScatteredDef) -> Result<Scatte
         g::ScatteredDef::Enum(n) => Ok(ScatteredDef::Enum(c.name(span, n))),
         g::ScatteredDef::Variant(n, q) => Ok(ScatteredDef::Variant {
             name: c.name(span, n),
-            quant: conv_quant_items(c, span, &Some(q.clone()))?,
+            quant: conv_quant_items(c, span, &Some(q.clone()), &[])?,
         }),
         g::ScatteredDef::Function(n) => Ok(ScatteredDef::Function {
             name: c.name(span, n),
@@ -1595,6 +1587,8 @@ fn conv_defaux(c: &mut Ctx, span: Span, d: &g::DefAux) -> Result<DefKind, String
         g::DefAux::Outcome(spec, defs) => {
             // Outcome-local declarations and implementations remain nested;
             // local fixities must not escape into subsequent global code.
+            let quant = conv_quant_items(c, span, &spec.param, &[(&spec.typschm.lhs, g::Kind::Type), (&spec.typschm.rhs, g::Kind::Type)])?;
+            let typschm = conv_typschm(c, span, &spec.typschm)?;
             let saved_fixities = c.fixities.clone();
             let nested = (|| {
                 defs.iter().map(|def| {
@@ -1606,8 +1600,8 @@ fn conv_defaux(c: &mut Ctx, span: Span, d: &g::DefAux) -> Result<DefKind, String
             Ok(DefKind::Outcome {
                 defs: nested?,
                 name: c.name(span, &spec.name),
-                typschm: conv_typschm(c, span, &spec.typschm)?,
-                quant: conv_quant_items(c, span, &spec.param)?,
+                typschm,
+                quant,
             })
         }
         g::DefAux::Instantiation(name, substs) => {
@@ -1681,6 +1675,8 @@ fn conv_defaux(c: &mut Ctx, span: Span, d: &g::DefAux) -> Result<DefKind, String
 }
 
 fn conv_def(c: &mut Ctx, span: Span, d: &g::Def) -> Result<DefKind, String> {
+    let saved_kinds = c.bound_kinds.clone();
+    let result = (|| {
     match d {
         g::Def::Aux(a) => {
             if let g::DefAux::Fixity(assoc, level, name) = a {
@@ -1693,6 +1689,9 @@ fn conv_def(c: &mut Ctx, span: Span, d: &g::Def) -> Result<DefKind, String> {
         g::Def::Attr(_, inner) => conv_def(c, span, inner),
         g::Def::Doc(_, inner) => conv_def(c, span, inner),
     }
+    })();
+    c.bound_kinds = saved_kinds;
+    result
 }
 
 #[cfg(test)]
@@ -1705,7 +1704,7 @@ mod symbol_threading_tests {
     use sail_ast::Interner as _;
 
     fn ctx<'a>(ids: &'a mut IdGen, interner: &'a mut SimpleInterner, fixities: &'a mut FixityEnv) -> Ctx<'a> {
-        Ctx { ids, interner, fixities }
+        Ctx { ids, interner, fixities, bound_kinds: Default::default() }
     }
 
     #[test]

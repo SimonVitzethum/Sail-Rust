@@ -85,6 +85,7 @@ impl RealParser {
             ids: &mut self.ids,
             interner: &mut self.interner,
             fixities: &mut self.fixities,
+            bound_kinds: Default::default(),
         }
     }
 
@@ -193,6 +194,7 @@ pub fn parse_file_real(path: &str, src: &str) -> Result<BridgeOut, ParseError> {
             let text = &src[sd.span.start as usize..sd.span.end as usize];
             let result = crate::convert::parse_def_src(&mut Ctx {
                 ids: &mut b.ids, interner: &mut b.interner, fixities: &mut b.fixities,
+                    bound_kinds: Default::default(),
             }, sd.span, text);
             if let Ok(def) = result {
                 b.defs.push(def);
@@ -217,6 +219,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                     ids: &mut b.ids,
                     interner: &mut b.interner,
                     fixities: &mut b.fixities,
+                    bound_kinds: Default::default(),
                 };
                 crate::convert::conv_let(&mut ctx, span, pat_src, body_src)
             };
@@ -239,6 +242,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                     ids: &mut b.ids,
                     interner: &mut b.interner,
                     fixities: &mut b.fixities,
+                    bound_kinds: Default::default(),
                 };
                 crate::convert::conv_register(&mut ctx, span, name, type_src, init_src)
             };
@@ -257,6 +261,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                     ids: &mut b.ids,
                     interner: &mut b.interner,
                     fixities: &mut b.fixities,
+                    bound_kinds: Default::default(),
                 };
                 crate::convert::conv_constraint_def(&mut ctx, span, src)
             };
@@ -320,6 +325,7 @@ fn lower_def_text(
             ids: &mut b.ids,
             interner: &mut b.interner,
                     fixities: &mut b.fixities,
+                    bound_kinds: Default::default(),
         };
         crate::convert::parse_def_src(&mut ctx, span, full)
     };

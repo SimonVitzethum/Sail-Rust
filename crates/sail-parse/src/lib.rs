@@ -22,6 +22,7 @@ pub mod real;
 pub mod span;
 
 mod convert;
+mod kinds;
 
 pub use bridge::{BridgeOut, Unparsed, bridge_file, bridge_parsed};
 

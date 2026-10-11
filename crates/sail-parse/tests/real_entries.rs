@@ -356,6 +356,44 @@ fn negated_and_conditional_constraints_keep_boolean_arguments() {
 }
 
 #[test]
+fn omitted_binder_kinds_follow_their_uses_and_explicit_kinds_are_checked() {
+    for (source, expected) in [
+        ("val identity : forall 'a. 'a -> 'a", sail_ast::Kind::Type),
+        ("val width : forall 'n, 'n >= 0. bitvector('n) -> int('n)", sail_ast::Kind::Int),
+        ("val predicate : forall 'p. unit -> bool(not('p))", sail_ast::Kind::Bool),
+    ] {
+        let out = parse_def(source).unwrap();
+        let DefKind::Val(spec) = &out.value.kind else { panic!("{:?}", out.value); };
+        assert!(matches!(&spec.typschm.quant[0], sail_ast::QuantItem::Id(kopt)
+            if kopt.kind == expected), "{source}: {:?}", spec.typschm.quant);
+    }
+    for source in [
+        "val bad : forall ('n : Type). bitvector('n) -> unit",
+        "val bad : forall 'a. ('a, bitvector('a)) -> unit",
+        "val unused : forall 'a. unit -> unit",
+    ] {
+        assert!(parse_def(source).is_err(), "{source}");
+    }
+}
+
+#[test]
+fn constructor_arguments_use_bound_kinds_and_inference_respects_shadowing() {
+    let out = parse_def("val f : forall 'a. T('a) -> 'a").unwrap();
+    let DefKind::Val(spec) = &out.value.kind else { panic!("{:?}", out.value); };
+    assert!(matches!(&spec.typschm.typ.kind, TypKind::Fn { args, .. }
+        if matches!(&args[0].kind, TypKind::App { args, .. }
+            if matches!(args[0].kind, TypArgKind::Typ(_)))));
+    let out = parse_def("val f : forall 'n. (bitvector('n), {'n, 'n >= 0. int('n)}) -> int('n)").unwrap();
+    assert!(matches!(&out.value.kind, DefKind::Val(spec)
+        if matches!(&spec.typschm.quant[0], sail_ast::QuantItem::Id(kopt) if kopt.kind == sail_ast::Kind::Int)));
+    parse_def("val f : forall 'a. ('a, {('a : Int), 'a >= 0. int('a)}) -> 'a").unwrap();
+    let inferred = parse_def("type Numeric = 2048").unwrap();
+    assert!(matches!(&inferred.value.kind, DefKind::Type(ty)
+        if matches!(&ty.kind, TypeDefKind::Abbrev { arg, .. } if matches!(arg.kind, TypArgKind::NExp(_)))));
+    parse_def("val legacy : int -> unit effect {escape}").unwrap();
+}
+
+#[test]
 fn function_domain_tuple_becomes_multiple_arguments() {
     let out = parse_def("val f : (int, bool) -> int").unwrap();
     assert!(matches!(&out.value.kind, DefKind::Val(spec)
