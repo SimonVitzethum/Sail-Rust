@@ -437,6 +437,28 @@ fn conv_constraint(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Constraint, St
         g::Typ::Var(s) => ConstraintKind::Var(c.interner.intern(s)),
         g::Typ::Lit(g::Lit::True) => ConstraintKind::True,
         g::Typ::Lit(g::Lit::False) => ConstraintKind::False,
+        g::Typ::App(f, args) if f == "not" => {
+            let [argument] = args.as_slice() else {
+                return Err("not expects one Bool argument".into());
+            };
+            let argument = conv_constraint(c, span, argument)?;
+            let argument = c.node(span, TypArgKind::Bool(Box::new(argument)));
+            ConstraintKind::App { func: c.name(span, f), args: vec![argument] }
+        }
+        g::Typ::If(condition, then_branch, else_branch) => {
+            // initial_check lowers Boolean conditionals to
+            // (condition & then_branch) | (not(condition) & else_branch).
+            let positive = conv_constraint(c, span, condition)?;
+            let then_branch = conv_constraint(c, span, then_branch)?;
+            let positive = c.node(span, ConstraintKind::And(Box::new(positive), Box::new(then_branch)));
+            let condition = conv_constraint(c, span, condition)?;
+            let argument = c.node(span, TypArgKind::Bool(Box::new(condition)));
+            let name = c.name(span, "not");
+            let negative = c.node(span, ConstraintKind::App { func: name, args: vec![argument] });
+            let else_branch = conv_constraint(c, span, else_branch)?;
+            let negative = c.node(span, ConstraintKind::And(Box::new(negative), Box::new(else_branch)));
+            ConstraintKind::Or(Box::new(positive), Box::new(negative))
+        }
         g::Typ::App(f, args) => {
             let mut cargs = Vec::with_capacity(args.len());
             for a in args {

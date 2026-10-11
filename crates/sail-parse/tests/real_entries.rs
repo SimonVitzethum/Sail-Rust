@@ -343,6 +343,19 @@ fn nat_quantifiers_retain_nonnegative_constraints_and_finite_types_elaborate() {
 }
 
 #[test]
+fn negated_and_conditional_constraints_keep_boolean_arguments() {
+    let mut parser = RealParser::new();
+    let out = parser.parse_constraint("not('n >= 0 & 'n < 8)", sail_ast::Span::DUMMY).unwrap();
+    assert!(matches!(&out.kind, sail_ast::ConstraintKind::App { func, args }
+        if parser.interner().resolve(func.symbol) == Some("not")
+            && matches!(&args[0].kind, TypArgKind::Bool(nc) if matches!(nc.kind, sail_ast::ConstraintKind::And(..)))));
+    let out = parser.parse_constraint("if 'cheri then 'nt >= 0 else 'nt == 0", sail_ast::Span::DUMMY).unwrap();
+    assert!(matches!(&out.kind, sail_ast::ConstraintKind::Or(yes, no)
+        if matches!(yes.kind, sail_ast::ConstraintKind::And(..)) && matches!(no.kind, sail_ast::ConstraintKind::And(..))));
+    assert!(parser.parse_constraint("not(1, 2)", sail_ast::Span::DUMMY).is_err());
+}
+
+#[test]
 fn function_domain_tuple_becomes_multiple_arguments() {
     let out = parse_def("val f : (int, bool) -> int").unwrap();
     assert!(matches!(&out.value.kind, DefKind::Val(spec)
