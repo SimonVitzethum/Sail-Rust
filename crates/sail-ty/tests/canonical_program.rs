@@ -38,6 +38,31 @@ const FLOW_DECLARATIONS: &[&str] = &[
 ];
 
 #[test]
+fn explicit_implicit_parameters_have_integer_singleton_semantics() {
+    let defs = parse(&[
+        "val forward : forall 'n, 'n >= 0. implicit('n) -> int('n)",
+        "function forward(n) = n",
+        "val consume : forall 'n. int('n) -> int('n)",
+        "val relay : forall 'n. implicit('n) -> int('n)",
+        "function relay(n) = consume(n)",
+        "function literal() -> int(7) = forward(7)",
+        "val receive : forall 'n. int('n) -> implicit('n)",
+        "function receive(n) = n",
+        "function wrong() -> int(8) = forward(7)",
+        "function uninferred() -> int = forward(())",
+    ]);
+    let program = declare(&defs);
+    for (position, (def, it)) in defs.iter().enumerate() {
+        let result = program.check_definition(def, it.clone(), position);
+        assert_eq!(
+            result.is_err(),
+            position >= 7,
+            "position {position}: {result:?}"
+        );
+    }
+}
+
+#[test]
 fn conditional_and_guard_facts_prove_constraints_with_borrowed_call_substitutions() {
     let mut sources = FLOW_DECLARATIONS.to_vec();
     sources.extend([

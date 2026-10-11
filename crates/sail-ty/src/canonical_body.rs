@@ -28,6 +28,8 @@ struct Type {
     scope: Arc<Scheme>,
     substitutions: Arc<BTreeMap<Symbol, Type>>,
     scalars: Arc<ScalarBindings>,
+    /// OCaml's implicit_to_int applies to function arguments, not returns.
+    implicit_argument: bool,
 }
 #[derive(Clone)]
 struct Scalar {
@@ -119,6 +121,7 @@ impl Type {
             path: vec![],
             substitutions: Arc::default(),
             scalars: Arc::default(),
+            implicit_argument: false,
         }
     }
     fn node(&self) -> &Typ {
@@ -141,6 +144,7 @@ impl Type {
     }
     fn child(&self, step: Step) -> Self {
         let mut child = self.clone();
+        child.implicit_argument = matches!(step, Step::Argument(_));
         child.path.push(step);
         child
     }
@@ -163,7 +167,13 @@ impl Type {
     fn name(&self) -> Option<&str> {
         match &self.node().kind {
             TypKind::Id(name) | TypKind::App { name, .. } => {
-                self.root.interner.resolve(name.symbol)
+                self.root.interner.resolve(name.symbol).map(|name| {
+                    if name == "implicit" && self.implicit_argument {
+                        "atom"
+                    } else {
+                        name
+                    }
+                })
             }
             _ => None,
         }
@@ -600,10 +610,8 @@ impl Checker<'_> {
                 }
             }
             match (&expected.node().kind, &found.node().kind) {
-                (TypKind::Id(a), TypKind::Id(b)) => {
-                    if expected.root.interner.resolve(a.symbol)
-                        != found.root.interner.resolve(b.symbol)
-                    {
+                (TypKind::Id(_), TypKind::Id(_)) => {
+                    if expected.name() != found.name() {
                         return Err(mismatch(span, &expected, &found));
                     }
                 }
@@ -619,9 +627,8 @@ impl Checker<'_> {
                         pairs.push((expected.child(Step::Tuple(i)), found.child(Step::Tuple(i))));
                     }
                 }
-                (TypKind::App { name: a, args: aa }, TypKind::App { name: b, args: ba })
-                    if expected.root.interner.resolve(a.symbol)
-                        == found.root.interner.resolve(b.symbol) =>
+                (TypKind::App { args: aa, .. }, TypKind::App { args: ba, .. })
+                    if expected.name() == found.name() =>
                 {
                     if aa.len() != ba.len() {
                         return Err(arity(span, aa.len(), ba.len()));
@@ -927,7 +934,7 @@ impl Checker<'_> {
                         ));
                     }
                 }
-                TypKind::App { name, args } => {
+                TypKind::App { args, .. } => {
                     if matches!(
                         (&actual.node().kind, actual.name(), formal.name()),
                         (TypKind::Id(_), Some("int"), Some("atom"))
@@ -944,16 +951,10 @@ impl Checker<'_> {
                         self.compatible(&actual, &formal, span)?;
                         continue;
                     }
-                    let TypKind::App {
-                        name: other,
-                        args: found,
-                    } = &actual.node().kind
-                    else {
+                    let TypKind::App { args: found, .. } = &actual.node().kind else {
                         return Err(unsupported(span, "synonym expansion during instantiation"));
                     };
-                    if formal.root.interner.resolve(name.symbol)
-                        != actual.root.interner.resolve(other.symbol)
-                    {
+                    if formal.name() != actual.name() {
                         return Err(mismatch(span, &formal, &actual));
                     }
                     if args.len() != found.len() {

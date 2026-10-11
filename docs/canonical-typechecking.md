@@ -70,6 +70,14 @@ incompatible returns are rejected. The parser infers binder kinds from argument
 annotations as well as returns. Header cleanup and tuple-pattern inference use
 explicit stacks, tested at 10,000 levels on a 128 KiB stack.
 
+Explicit `implicit('n)` parameters are viewed as `int('n)` in function argument
+positions, following OCaml's `implicit_to_int`. The view preserves the original
+scalar identity without copying its AST. Return positions are not converted:
+OCaml rejects `int('n)` as an `implicit('n)` result, and the regression does too.
+Omitted implicit arguments still require materialization. All 31 canonical
+tests pass under 128 MiB without swap (88.6 MiB peak); OCaml accepts the positive
+implicit fixture under 256 MiB without swap (30.8 MiB peak).
+
 Overload declarations retain source-position histories and append candidates in
 OCaml order. Nested lists expand iteratively with cycle detection. Calls check
 every argument, the expected return when available, and instantiated dependent
