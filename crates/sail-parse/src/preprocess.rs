@@ -61,7 +61,8 @@ impl Preprocessor {
     /// `load(includer, raw_argument)` receives `"relative.sail"` or
     /// `<library.sail>` and returns the resolved path and source, or `None`
     /// to retain the include explicitly. `emit` receives definitions in order,
-    /// with their original path and byte span. Errors stop immediately.
+    /// with their original path, borrowed source text and byte span. The source
+    /// can be sliced or streamed to disk without re-reading or retaining files. Errors stop immediately.
     pub fn process<L, S>(
         &mut self,
         path: &str,
@@ -71,7 +72,7 @@ impl Preprocessor {
     ) -> Result<(), PreprocessError>
     where
         L: FnMut(&str, &str) -> Result<Option<(String, String)>, String>,
-        S: FnMut(&str, SpannedDef) -> Result<(), String>,
+        S: FnMut(&str, &str, SpannedDef) -> Result<(), String>,
     {
         self.process_inner(path, source, &mut load, &mut emit, 0)
     }
@@ -81,7 +82,7 @@ impl Preprocessor {
         path: &str,
         source: &str,
         load: &mut dyn FnMut(&str, &str) -> Result<Option<(String, String)>, String>,
-        emit: &mut dyn FnMut(&str, SpannedDef) -> Result<(), String>,
+        emit: &mut dyn FnMut(&str, &str, SpannedDef) -> Result<(), String>,
         depth: usize,
     ) -> Result<(), PreprocessError> {
         let error = |span, message| PreprocessError {
@@ -180,17 +181,18 @@ impl Preprocessor {
                                 &included_path,
                                 &included_source,
                                 load,
-                                &mut |origin, def| {
+                                &mut |origin, origin_source, def| {
                                     if !started {
-                                        emit(path, marker("include_start"))?;
+                                        emit(path, source, marker("include_start"))?;
                                         started = true;
                                     }
-                                    emit(origin, def)
+                                    emit(origin, origin_source, def)
                                 },
                                 depth + 1,
                             )?;
                             if started {
-                                emit(path, marker("include_end")).map_err(|e| error(span, e))?;
+                                emit(path, source, marker("include_end"))
+                                    .map_err(|e| error(span, e))?;
                             }
                             continue;
                         }
@@ -209,7 +211,7 @@ impl Preprocessor {
                         }
                     }
                 }
-                emit(path, def).map_err(|e| error(span, e))?;
+                emit(path, source, def).map_err(|e| error(span, e))?;
             }
         }
         if let Some(top) = stack.first() {
@@ -228,7 +230,7 @@ mod tests {
             "test.sail",
             src,
             |_, _| Ok(None),
-            |_, def| {
+            |_, _, def| {
                 if let Def::Val { name, .. } = def.def {
                     names.push(name);
                 }
@@ -248,7 +250,7 @@ mod tests {
             "$include <guard.sail>\n$ifdef INCLUDED\nval after : int\n$endif\n$include <guard.sail>\n",
             |_, arg| { assert_eq!(arg, "<guard.sail>"); Ok(Some(("guard.sail".into(),
                 "$ifndef INCLUDED\n$define INCLUDED\nval inside : int\n$endif\n".into()))) },
-            |path, def| { if let Def::Val { name, .. } = def.def { names.push((path.to_string(), name)); } Ok(()) }
+            |path, _, def| { if let Def::Val { name, .. } = def.def { names.push((path.to_string(), name)); } Ok(()) }
         ).unwrap();
         assert_eq!(
             names,
@@ -296,7 +298,7 @@ mod tests {
                         },
                     )))
                 },
-                |path, def| {
+                |path, _, def| {
                     out.push((path.to_string(), def));
                     Ok(())
                 },

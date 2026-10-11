@@ -92,8 +92,21 @@ impl Resolver {
     #[must_use]
     pub fn resolve_program(mut self, ast: &Ast, it: &impl Interner) -> ResolvedProgram {
         for def in &ast.defs {
-            self.bind_def(def, it);
+            self.add_definition(def, it);
         }
+        self.finish()
+    }
+
+    /// Bind a definition and retain only exported names/linkage summaries.
+    /// The definition and its worker-local interner can be dropped afterwards;
+    /// symbol IDs from different shards never enter the global environment.
+    pub fn add_definition(&mut self, def: &Def, it: &impl Interner) {
+        self.bind_def(def, it);
+    }
+
+    /// Resolve cross-definition linkage after all declarations were streamed.
+    /// This shares the same checks as `resolve_program`.
+    pub fn finish(mut self) -> ResolvedProgram {
         self.check_pass();
         let warnings = self.collision_warnings();
         let ctor_renames = self.renames();

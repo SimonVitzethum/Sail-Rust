@@ -621,6 +621,16 @@ impl Definitions<'_> {
             ));
         }
         let def_start = sc.cur();
+        // Attributes wrap the following definition, including on the same
+        // line. Keep them in its exact source span rather than emitting an
+        // unrelated pragma or discarding the rest of that line.
+        while sc.peek() == Some(b'$') && sc.peek_at(1) == Some(b'[') {
+            parse_pragma(sc)?;
+            sc.skip_trivia_all()?;
+            if sc.eof() {
+                return Err(sc.err(def_start, sc.cur(), "attribute without a following definition"));
+            }
+        }
         if sc.peek() == Some(b'$') {
             let (def, end) = parse_pragma(sc)?;
             return Ok(SpannedDef::new(def, sc.span(def_start, end)));
@@ -688,12 +698,6 @@ fn parse_pragma(sc: &mut Scanner<'_>) -> Result<(Def, Cur), ParseError> {
             let to = sc.cur();
             return Err(sc.err(from, to, "empty `$[]` attribute"));
         }
-        let end = sc.cur();
-        // Skip rest of line.
-        while matches!(sc.peek(), Some(c) if c != b'\n') {
-            sc.bump(1);
-        }
-        let _ = end;
         return Ok((
             Def::Pragma { name, arg: PragmaArg::Structured(rest) },
             sc.cur(),

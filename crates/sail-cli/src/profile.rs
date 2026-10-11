@@ -67,12 +67,12 @@ impl Profiler {
     }
 
     /// Misst `f` als Phase `phase` und speichert das Sample.
-    pub fn phase<F>(&mut self, phase: &'static str, f: F)
+    pub fn phase<T, F>(&mut self, phase: &'static str, f: F) -> T
     where
-        F: FnOnce(),
+        F: FnOnce() -> T,
     {
         let start = Instant::now();
-        f();
+        let result = f();
         self.samples.push(PhaseSample {
             phase,
             wall_s: start.elapsed().as_secs_f64(),
@@ -80,6 +80,7 @@ impl Profiler {
             smt_calls: 0,
             smt_s: 0.0,
         });
+        result
     }
 
     /// Simulierte Phase (fuer `--dry-run`: Format bleibt testbar, ohne Arbeit).

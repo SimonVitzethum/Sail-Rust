@@ -68,6 +68,43 @@ pub static PRELUDE_FILES: &[PreludeFile] = &[
 /// matching OCaml `Frontend.load_files` and `Corelib_sail.path`.
 pub static CORE_LIBRARY: PreludeFile = prelude_file!("core/corelib.sail");
 
+/// Nested concurrency and floating-point libraries used by includes.
+/// Kept separate from the top-level inventory for compatibility.
+pub static AUXILIARY_FILES: &[PreludeFile] = &[
+    prelude_file!("concurrency_interface/barrier.sail"),
+    prelude_file!("concurrency_interface/cache_op.sail"),
+    prelude_file!("concurrency_interface/common.sail"),
+    prelude_file!("concurrency_interface/emulator_memory.sail"),
+    prelude_file!("concurrency_interface/exception.sail"),
+    prelude_file!("concurrency_interface/read_write.sail"),
+    prelude_file!("concurrency_interface/read_write_v1.sail"),
+    prelude_file!("concurrency_interface/read_write_v2.sail"),
+    prelude_file!("concurrency_interface/sysreg.sail"),
+    prelude_file!("concurrency_interface/tlbi.sail"),
+    prelude_file!("concurrency_interface/translation.sail"),
+    prelude_file!("float/add.sail"),
+    prelude_file!("float/arith_internal.sail"),
+    prelude_file!("float/classify.sail"),
+    prelude_file!("float/common.sail"),
+    prelude_file!("float/eq.sail"),
+    prelude_file!("float/ge.sail"),
+    prelude_file!("float/ge_quiet.sail"),
+    prelude_file!("float/gt.sail"),
+    prelude_file!("float/gt_quiet.sail"),
+    prelude_file!("float/inf.sail"),
+    prelude_file!("float/interface.sail"),
+    prelude_file!("float/le.sail"),
+    prelude_file!("float/le_quiet.sail"),
+    prelude_file!("float/lt.sail"),
+    prelude_file!("float/lt_quiet.sail"),
+    prelude_file!("float/nan.sail"),
+    prelude_file!("float/ne.sail"),
+    prelude_file!("float/normal.sail"),
+    prelude_file!("float/rounding.sail"),
+    prelude_file!("float/sign.sail"),
+    prelude_file!("float/zero.sail"),
+];
+
 /// File names in [`PRELUDE_FILES`] order.
 pub fn names() -> impl Iterator<Item = &'static str> {
     PRELUDE_FILES.iter().map(|f| f.name)
@@ -77,6 +114,7 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 pub fn get(name: &str) -> Option<&'static PreludeFile> {
     PRELUDE_FILES.iter().find(|f| f.name == name)
         .or_else(|| (name == CORE_LIBRARY.name).then_some(&CORE_LIBRARY))
+        .or_else(|| AUXILIARY_FILES.iter().find(|f| f.name == name))
 }
 
 /// Minimal empty-model skeleton: a stub Sail model that only pulls in

@@ -152,8 +152,7 @@ fn pragma_shard_markers_preserved() {
             "pragma", // file_start
             "pragma", // $include_start
             "function",
-            "pragma", // $[no_enum_number_conversions]
-            "type",
+            "type", // wrapped in $[no_enum_number_conversions]
             "pragma", // $opt { ... }
             "scattered",
             "scattered",
@@ -198,9 +197,9 @@ fn pragma_shard_markers_preserved() {
         other => panic!("expected structured pragma, got {other:?}"),
     }
 
-    // `$[...]` attribute preserved as pragma node.
-    assert!(pf.defs.iter().any(|d| matches!(&d.def,
-        Def::Pragma { name, .. } if name == "no_enum_number_conversions")));
+    // `$[...]` attribute wraps the following definition in its source span.
+    let attributed = pf.defs.iter().find(|d| matches!(&d.def, Def::Type { name, .. } if name == "E")).unwrap();
+    assert!(src[attributed.span.start as usize..attributed.span.end as usize].starts_with("$[no_enum_number_conversions]"));
 }
 
 #[test]
@@ -312,4 +311,14 @@ fn definition_iterator_is_lazy_and_fused_after_errors() {
     assert!(defs.next().unwrap().is_err());
     assert!(defs.next().is_none());
     assert!(defs.next().is_none());
+}
+
+#[test]
+fn same_line_attributes_keep_the_following_definition() {
+    let src = "$[never_fold] val x : int\n";
+    let file = parse_file("attribute.sail", src).unwrap();
+    assert_eq!(file.defs.len(), 3);
+    assert!(matches!(&file.defs[1].def, Def::Val { name, .. } if name == "x"));
+    assert_eq!(file.defs[1].span.start, 0);
+    assert!(parse_file("bad", "$[never_fold]").is_err());
 }

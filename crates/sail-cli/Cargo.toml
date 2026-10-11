@@ -18,3 +18,9 @@ sail-lean = { path = "../sail-lean" }
 sail-lake = { path = "../sail-lake" }
 sail-regs = { path = "../sail-regs" }
 sail-prelude = { path = "../sail-prelude" }
+sail-ast = { path = "../sail-ast" }
+sail-shard = { path = "../sail-shard" }
+sail-ooc = { path = "../sail-ooc" }
+sail-resolve = { path = "../sail-resolve" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

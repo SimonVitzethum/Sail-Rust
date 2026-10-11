@@ -49,12 +49,12 @@ fn run_one(rel: &str, src: &str) -> FileReport {
     let mut preprocessor = sail_parse::preprocess::Preprocessor::new(Some("lean".into()));
     // Library fragments need the same implicit builtins as model inputs.
     // Provide a default order explicitly so vector.sail's guard is exercised.
-    preprocessor.process("defaults", "default Order dec\n", |_, _| Ok(None), |_, _| Ok(())).unwrap();
+    preprocessor.process("defaults", "default Order dec\n", |_, _| Ok(None), |_, _, _| Ok(())).unwrap();
     preprocessor.process(sail_prelude::CORE_LIBRARY.name,
         sail_prelude::CORE_LIBRARY.contents, |_, _| Ok(None),
-        |_, def| { parsed.defs.push(def); Ok(()) }).unwrap();
+        |_, _, def| { parsed.defs.push(def); Ok(()) }).unwrap();
     let preprocessed = preprocessor.process(rel, src, |_, _| Ok(None),
-        |_, def| { parsed.defs.push(def); Ok(()) });
+        |_, _, def| { parsed.defs.push(def); Ok(()) });
     let bridged = match preprocessed.map(|()| sail_parse::bridge_parsed(&parsed)) {
         Ok(b) => b,
         Err(e) => {

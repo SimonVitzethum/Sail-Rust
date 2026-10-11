@@ -64,6 +64,12 @@ impl RealParser {
         }
     }
 
+    /// Start an independent definition parser with a snapshot of the
+    /// compilation-order fixities. Used by parallel, disk-backed drivers.
+    pub fn with_fixities(fixities: crate::infix::FixityEnv) -> Self {
+        Self { fixities, ..Self::new() }
+    }
+
     #[must_use]
     pub fn interner(&self) -> &SimpleInterner {
         &self.interner

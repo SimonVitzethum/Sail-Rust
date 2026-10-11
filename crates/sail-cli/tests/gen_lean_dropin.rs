@@ -162,14 +162,16 @@ fn require_version_violation_exits_1() {
 }
 
 #[test]
-fn real_stub_run_writes_prefixed_lean_file() {
-    let dir = temp_dir("stub");
+fn ordinary_lean_run_rejects_missing_stages_without_stub_output() {
+    let dir = temp_dir("incomplete");
     let input = dir.join("mini.sail");
-    std::fs::write(&input, "function foo() -> int = 1\n").unwrap();
+    std::fs::write(&input, "val foo : unit -> int\nfunction foo() = 1\n").unwrap();
     let outdir = dir.join("lean");
     let out = Command::new(binary())
         .args([
             "--lean",
+            "--no-core",
+            "-dprofile",
             "--lean-output-dir",
             outdir.to_str().unwrap(),
             "--lean-force-output",
@@ -177,16 +179,85 @@ fn real_stub_run_writes_prefixed_lean_file() {
             "armv9",
             input.to_str().unwrap(),
         ])
+        .env_remove("SAIL_RS_DRY_RUN")
         .output()
         .unwrap();
     assert_eq!(
         out.status.code(),
-        Some(0),
-        "stderr: {}",
+        Some(1),
+        "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let lean_file = outdir.join("Armv9").join("Armv9.lean");
-    assert!(lean_file.is_file(), "Stub fehlt: {}", lean_file.display());
-    let content = std::fs::read_to_string(&lean_file).unwrap();
-    assert!(content.contains("Lane-38 frontend stub"));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("frontend converted 2 definitions"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("compilation incomplete"), "{stderr}");
+    assert!(stderr.contains("phase=\"frontend\""), "{stderr}");
+    assert!(
+        !outdir.exists(),
+        "incomplete compiler published an output project"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn just_check_rejects_invalid_sail_and_unresolved_includes() {
+    for (label, source, message) in [
+        ("syntax", "function bad() = `bad`\n", "unexpected character"),
+        (
+            "include",
+            "$include <missing-library.sail>\n",
+            "unavailable",
+        ),
+        ("condition", "$else\n", "$else without conditional"),
+    ] {
+        let dir = temp_dir(label);
+        let input = dir.join("bad.sail");
+        std::fs::write(&input, source).unwrap();
+        let out = Command::new(binary())
+            .args(["--just-check", "--no-core", input.to_str().unwrap()])
+            .env_remove("SAIL_RS_DRY_RUN")
+            .env_remove("SAIL_RS_LIBDIR")
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1), "{label}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(message), "{label}: {stderr}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[test]
+fn includes_macros_attributes_and_fixities_keep_order_across_workers() {
+    let dir = temp_dir("ordered-includes");
+    let input = dir.join("main.sail");
+    std::fs::write(
+        dir.join("ops.sail"),
+        "$define ENABLE\ninfixl 6 %%\n$[never_fold] val f : unit -> int\n",
+    )
+    .unwrap();
+    std::fs::write(&input,
+        "$include \"ops.sail\"\n$ifdef ENABLE\nfunction f() = 1 %% 2\n$else\nfunction ignored() = 0\n$endif\n").unwrap();
+    for workers in ["1", "4"] {
+        let out = Command::new(binary())
+            .args(["--just-check", "--no-core", input.to_str().unwrap()])
+            .env_remove("SAIL_RS_DRY_RUN")
+            .env("SAIL_RS_THREADS", workers)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("frontend converted 5 definitions from 2 files"),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("using {workers} workers")),
+            "{stderr}"
+        );
+        assert!(stderr.contains("compilation incomplete"), "{stderr}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }

@@ -111,6 +111,31 @@ fn happy_path_no_errors_no_renames() {
 }
 
 #[test]
+fn streamed_definitions_with_independent_interners_match_whole_program_resolution() {
+    let mut shared = SimpleInterner::new();
+    let ast = Ast::new(vec![
+        struct_def(&mut shared, "Result"),
+        union_def(&mut shared, "Outcome", &["Result", "Ok"]),
+        valspec_def(&mut shared, "f"),
+    ]);
+    let expected = resolve(&ast, &shared);
+    let mut streamed = sail_resolve::resolve::Resolver::new();
+    {
+        let mut local = SimpleInterner::new();
+        streamed.add_definition(&struct_def(&mut local, "Result"), &local);
+    }
+    {
+        let mut local = SimpleInterner::new();
+        streamed.add_definition(&union_def(&mut local, "Outcome", &["Result", "Ok"]), &local);
+    }
+    {
+        let mut local = SimpleInterner::new();
+        streamed.add_definition(&valspec_def(&mut local, "f"), &local);
+    }
+    assert_eq!(streamed.finish(), expected);
+}
+
+#[test]
 fn collision_typename_equals_ctorname() {
     // Mirrors the Lean-backend failure: `union U { ... }` where a ctor
     // is also a type name.

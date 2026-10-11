@@ -1,16 +1,11 @@
-//! `sail-rs`-CLI: OCaml-kompatibles Frontend fuer den Lean-Pfad (Lane 38).
-//!
-//! Reines Rust, `#![forbid(unsafe_code)]`. Implementiert Flag-Parsing,
-//! `--help`/`-v`, Exit-Codes, bounded `--memo-z3`-Config und das
-//! `-dprofile`-Timings-Log. Die eigentliche Sail-Elaboration (Parser,
-//! Typechecker, Lean-Emitter) landet mit den Lanes 01-12; bis dahin schreibt
-//! der Lean-Pfad einen klar markierten Stub und ist per `--dry-run`
-//! vollstaendig ohne Ein-/Ausgaben testbar (Drop-in fuer
-//! `arm-v9.4-a/Makefile gen_lean`).
+//! Rust Sail CLI. Ordinary compilation runs real preprocessing and bounded
+//! grammar/AST conversion. Missing checking or emission stages return errors;
+//! a frontend placeholder must never be reported as a successful build.
 #![forbid(unsafe_code)]
 
 mod args;
 mod e2e;
+mod frontend;
 mod memo;
 mod ooc;
 mod profile;
@@ -46,15 +41,6 @@ fn check_require_version(opts: &Options) -> Result<(), CliError> {
         }
     }
     Ok(())
-}
-
-/// Erster Buchstabe gross (OCaml: `-o armv9` -> `Armv9/Armv9.lean`).
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
 }
 
 fn verbose_log(opts: &Options, msg: &str) {
@@ -96,12 +82,7 @@ fn run_dry_run(opts: &Options, profiler: &mut Profiler) {
 /// Stat-Ergebnisse werden im bounded Memo-Cache abgelegt, sodass doppelt
 /// genannte Eingaben kein zweites I/O kosten (echte Solver-Memoisierung
 /// folgt mit Lane 06).
-fn check_inputs(
-    opts: &Options,
-    memo: &mut BoundedMemoCache,
-    profiler: &mut Profiler,
-) -> Result<(), CliError> {
-    profiler.phase("parse", || {});
+fn check_inputs(opts: &Options, memo: &mut BoundedMemoCache) -> Result<(), CliError> {
     if opts.inputs.is_empty() {
         return Err(CliError {
             exit_code: EXIT_ERROR,
@@ -130,77 +111,16 @@ fn check_inputs(
     Ok(())
 }
 
-/// Lean-Pfad: Ausgabeverzeichnis vorbereiten + Stub schreiben.
-/// Die volle Emission folgt mit Lanes 10-12; der Stub ist als solcher markiert.
-fn run_lean(opts: &Options, profiler: &mut Profiler) -> Result<(), CliError> {
-    let outdir = opts
-        .lean_output_dir
-        .clone()
-        .unwrap_or_else(|| ".".to_string());
-    let prefix = opts
-        .output_prefix
-        .clone()
-        .unwrap_or_else(|| "sail_model".to_string());
-    let stem = capitalize_first(&prefix);
-
-    profiler.phase("typecheck", || {});
-    profiler.phase("rewrite", || {});
-
-    std::fs::create_dir_all(&outdir).map_err(|e| {
-        CliError::fatal(format!(
-            "sail-rs: error: cannot create output directory '{outdir}': {e}"
-        ))
-    })?;
-
-    // Beobachtetes OCaml-Verhalten (0.20.3): nicht-leeres Verzeichnis ohne
-    // `--lean-force-output` ist kein Fehler; wir warnen und machen weiter,
-    // damit der Drop-in nie an Rest-Artefakten scheitert.
-    let non_empty = std::fs::read_dir(&outdir)
-        .map(|mut entries| entries.any(|e| e.is_ok()))
-        .unwrap_or(false);
-    if non_empty && !opts.lean_force_output {
-        eprintln!(
-            "sail-rs: warning: output directory '{outdir}' is non-empty \
-             (use --lean-force-output to request a clean directory)"
-        );
-    }
-
-    let model_dir = std::path::Path::new(&outdir).join(&stem);
-    std::fs::create_dir_all(&model_dir).map_err(|e| {
-        CliError::fatal(format!(
-            "sail-rs: error: cannot create model directory '{}': {e}",
-            model_dir.display()
-        ))
-    })?;
-    let lean_file = model_dir.join(format!("{stem}.lean"));
-    let mut content = String::new();
-    content.push_str(&format!(
-        "-- sail-rs Lane-38 frontend stub (OCaml-compat {COMPAT_SAIL_VERSION}).\n\
-         -- Full Lean emission lands with Lanes 10-12; this file only proves the\n\
-         -- CLI drop-in (`--lean`, `-o {prefix}`, `--lean-output-dir {outdir}`).\n\
-         -- Inputs:\n"
-    ));
-    for input in &opts.inputs {
-        content.push_str(&format!("--   {input}\n"));
-    }
-    content.push_str(&format!(
-        "-- Options: line_width={:?} extern_types={:?} imports={:?}\n",
-        opts.lean_line_width, opts.lean_extern_types, opts.lean_import_files
-    ));
-    std::fs::write(&lean_file, content).map_err(|e| {
-        CliError::fatal(format!(
-            "sail-rs: error: cannot write '{}': {e}",
-            lean_file.display()
-        ))
-    })?;
-
-    profiler.phase("lean-emit", || {});
-    eprintln!(
-        "sail-rs: warning: lean emission is a frontend stub (Lane 38); \
-         full backend follows with Lanes 10-12"
-    );
-    verbose_log(opts, &format!("wrote {}", lean_file.display()));
-    Ok(())
+/// Run the real disk-backed frontend before rejecting missing compiler stages.
+/// No generated Lean project is published until every required stage exists.
+fn run_compiler(opts: &Options, profiler: &mut Profiler) -> Result<(), CliError> {
+    let summary = profiler.phase("frontend", || frontend::run(opts))?;
+    eprintln!("sail-rs: frontend converted {} definitions from {} files using {} workers; {} AST bytes spooled",
+        summary.definitions, summary.files, summary.workers, summary.ast_bytes);
+    Err(CliError {
+        exit_code: EXIT_ERROR,
+        message: "sail-rs: compilation incomplete: full Sail typechecking, rewrite integration and Lean body emission are not implemented; frontend conversion is not a successful model build".into(),
+    })
 }
 
 /// E2E-Tiny-Arm-Treiber (Lane 116 verdrahtet den Lane-45-Einstieg `e2e::run`
@@ -240,7 +160,7 @@ fn run_e2e(
         }
         return Ok(());
     }
-    check_inputs(opts, memo, profiler)?;
+    check_inputs(opts, memo)?;
     verbose_log(
         opts,
         &format!("e2e input={} outdir={}", args.input, args.out_dir),
@@ -341,34 +261,24 @@ fn run(opts: &Options) -> Result<(), CliError> {
         return Ok(());
     }
 
-    check_inputs(opts, &mut _memo, &mut profiler)?;
+    check_inputs(opts, &mut _memo)?;
 
-    if opts.lean {
-        run_lean(opts, &mut profiler)?;
-    } else if opts.just_check {
-        profiler.phase("typecheck", || {});
-        profiler.phase("rewrite", || {});
-        verbose_log(opts, "check complete");
+    let compilation = if opts.lean || opts.just_check {
+        run_compiler(opts, &mut profiler)
     } else if !opts.passthrough_bool.is_empty() || !opts.passthrough_value.is_empty() {
-        // Fremdes Backend angefordert (z.B. `-c`): akzeptiert, aber nicht
-        // implementiert — kein stiller Erfolg mit falschen Artefakten.
-        return Err(CliError {
+        Err(CliError {
             exit_code: EXIT_ERROR,
-            message: "sail-rs: error: only the lean target and --just-check are \
-                      implemented by this frontend (other backend flags are accepted \
-                      for parsing but cannot emit)"
-                .to_string(),
-        });
+            message: "sail-rs: error: requested backend is not implemented".into(),
+        })
     } else {
-        // Wie OCaml ohne Target: pruefen und beenden.
-        profiler.phase("typecheck", || {});
-        profiler.phase("rewrite", || {});
-    }
+        run_compiler(opts, &mut profiler)
+    };
 
     profiler.finish_total();
     if opts.dprofile {
         profiler.emit_stderr();
     }
+    compilation?;
     let (entries, hits, misses, evictions) = _memo.stats();
     verbose_log(
         opts,
@@ -399,16 +309,5 @@ fn main() {
             let _ = writeln!(std::io::stderr(), "{}", e.message);
             std::process::exit(e.exit_code.max(EXIT_ERROR));
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::capitalize_first;
-
-    #[test]
-    fn prefix_capitalization_matches_ocaml() {
-        assert_eq!(capitalize_first("armv9"), "Armv9");
-        assert_eq!(capitalize_first(""), "");
     }
 }
