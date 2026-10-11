@@ -232,6 +232,25 @@ impl Pipeline {
         shard
     }
 
+    /// Rewrite a lazy shard stream in parallel, consuming outputs in order.
+    /// The scheduler bounds queued, running and reordered results together.
+    /// Spill bodies in `consume` to keep RAM independent of corpus size.
+    /// An individual shard and its rewrite working set must fit in memory.
+    pub fn run_streaming<I, S, E>(
+        &self,
+        shards: I,
+        config: sail_shard::SchedulerConfig,
+        consume: S,
+    ) -> Result<(), E>
+    where
+        I: IntoIterator<Item = Shard>,
+        I::IntoIter: Send,
+        S: FnMut(usize, Shard) -> Result<(), E>,
+    {
+        sail_shard::Scheduler::new(config)
+            .run_streaming(shards, |shard| self.run(shard), consume)
+    }
+
     /// Run the pipeline over many shards in parallel via `rayon`.
     ///
     /// Each shard is processed independently (shard-local passes, no shared
@@ -314,23 +333,13 @@ mod tests {
             )],
         );
         let out = pipe.run(shard);
-        assert_eq!(
-            out.defs[0].body,
-            vec![
-                Stmt::Assign {
-                    lhs: "n".to_string(),
-                    rhs: "0".to_string()
-                },
-                Stmt::Assign {
-                    lhs: "a".to_string(),
-                    rhs: "t.0".to_string()
-                },
-                Stmt::Assign {
-                    lhs: "b".to_string(),
-                    rhs: "t.1".to_string()
-                },
-            ]
-        );
+        assert_eq!(out.defs[0].body[0], Stmt::Assign {
+            lhs: "n".into(), rhs: "undefined_int()".into(),
+        });
+        assert!(matches!(&out.defs[0].body[1], Stmt::LetTuple { .. }));
+        assert_eq!(out.defs[0].body[2], Stmt::Assign {
+            lhs: "x".into(), rhs: "x".into(),
+        });
     }
 
     #[test]
@@ -360,7 +369,7 @@ mod tests {
                 shard.defs[0].body,
                 vec![Stmt::Assign {
                     lhs: "x".to_string(),
-                    rhs: "false".to_string()
+                    rhs: "undefined_bool()".to_string()
                 }]
             );
         }

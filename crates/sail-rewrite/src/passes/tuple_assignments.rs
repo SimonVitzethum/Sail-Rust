@@ -1,69 +1,72 @@
-//! `tuple_assignments` pass: desugar tuple destructuring assignments.
-//!
-//! OCaml equivalent: `("tuple_assignments", [])` in `lean_rewrites`
-//! (`sail_plugin_lean.ml`). The Lean backend cannot emit a multi-target
-//! assignment directly, so `(a, b) = rhs` must become separate assignments.
-//!
-//! Lowering: `(t0, t1, ..) = rhs` becomes
-//! `t0 = rhs.0; t1 = rhs.1; ..` (tuple field projection), preserving order.
-//! A single-element tuple degrades to a plain assignment; an empty tuple
-//! becomes a bare effect statement. Shard-local, no cross-def state.
+//! Tuple assignment lowering, matching `rewrite_tuple_assignments` in
+//! `sail/src/lib/rewrites.ml`: bind every RHS component before writing any
+//! target. Repeated projections of the original RHS duplicate effects and
+//! break swaps when earlier assignments mutate later components.
 
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeSet;
 use crate::ast::{Shard, Stmt};
 use crate::pass::Pass;
 
-/// Desugar [`Stmt::TupleAssign`] into per-target [`Stmt::Assign`]s.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TupleAssignments;
 
 impl Pass for TupleAssignments {
-    fn name(&self) -> &'static str {
-        "tuple_assignments"
-    }
+    fn name(&self) -> &'static str { "tuple_assignments" }
 
     fn run(&self, mut shard: Shard) -> Shard {
         for def in &mut shard.defs {
-            def.body = rewrite_body(std::mem::take(&mut def.body));
+            let mut used = BTreeSet::new();
+            collect_identifiers(&def.body, &mut used);
+            let mut next = 0;
+            rewrite_body(&mut def.body, &mut used, &mut next);
         }
         shard
     }
 }
 
-/// Rewrite one statement list, expanding tuple assignments in place.
-fn rewrite_body(body: Vec<Stmt>) -> Vec<Stmt> {
-    // Tuple expansion grows the list; reserve a little headroom.
-    let mut out = Vec::with_capacity(body.len() + 2);
+fn collect_identifiers(body: &[Stmt], used: &mut BTreeSet<String>) {
+    fn text(src: &str, used: &mut BTreeSet<String>) {
+        used.extend(src.split(|c: char| !c.is_alphanumeric() && c != '_')
+            .filter(|s| !s.is_empty()).map(str::to_owned));
+    }
+    for stmt in body {
+        match stmt {
+            Stmt::Assign { lhs, rhs } => { text(lhs, used); text(rhs, used); }
+            Stmt::TupleAssign { targets, rhs } => {
+                for target in targets { text(target, used); }
+                text(rhs, used);
+            }
+            Stmt::LetTuple { bindings, rhs, body } => {
+                for binding in bindings { text(binding, used); }
+                text(rhs, used);
+                collect_identifiers(body, used);
+            }
+            Stmt::Undefined { target, ty } => { text(target, used); text(ty, used); }
+            Stmt::Expr(src) | Stmt::Return(src) => text(src, used),
+        }
+    }
+}
+
+fn rewrite_body(body: &mut [Stmt], used: &mut BTreeSet<String>, next: &mut usize) {
     for stmt in body {
         match stmt {
             Stmt::TupleAssign { targets, rhs } => {
-                expand_tuple(&mut out, targets, rhs);
+                let bindings: Vec<String> = targets.iter().map(|_| loop {
+                    let name = format!("__sail_tuple_{}", *next);
+                    *next += 1;
+                    if used.insert(name.clone()) { break name; }
+                }).collect();
+                let assignments = std::mem::take(targets).into_iter()
+                    .zip(bindings.iter().cloned())
+                    .map(|(lhs, rhs)| Stmt::Assign { lhs, rhs }).collect();
+                *stmt = Stmt::LetTuple {
+                    bindings, rhs: std::mem::take(rhs), body: assignments,
+                };
             }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-/// Push the expansion of one tuple assignment onto `out`.
-fn expand_tuple(out: &mut Vec<Stmt>, targets: Vec<String>, rhs: String) {
-    match targets.len() {
-        0 => {
-            // `() = rhs` keeps only the effect of evaluating rhs.
-            out.push(Stmt::Expr(rhs));
-        }
-        1 => {
-            let lhs = targets.into_iter().next().unwrap_or_default();
-            out.push(Stmt::Assign { lhs, rhs });
-        }
-        _ => {
-            for (i, target) in targets.into_iter().enumerate() {
-                out.push(Stmt::Assign {
-                    lhs: target,
-                    rhs: format!("{rhs}.{i}"),
-                });
-            }
+            Stmt::LetTuple { body, .. } => rewrite_body(body, used, next),
+            _ => {}
         }
     }
 }
@@ -74,80 +77,50 @@ mod tests {
     use crate::ast::{Def, DefKind};
 
     fn run_body(body: Vec<Stmt>) -> Vec<Stmt> {
-        let p = TupleAssignments;
-        let shard = Shard::new(0, vec![Def::new("f", DefKind::Function, body)]);
-        p.run(shard).defs.swap_remove(0).body
+        TupleAssignments.run(Shard::new(0,
+            vec![Def::new("f", DefKind::Function, body)])).defs.swap_remove(0).body
     }
 
     #[test]
-    fn expands_pair_into_projections() {
+    fn binds_effectful_rhs_once_before_assigning_any_target() {
         let out = run_body(vec![Stmt::TupleAssign {
-            targets: vec!["a".to_string(), "b".to_string()],
-            rhs: "call()".to_string(),
+            targets: vec!["a".into(), "b".into()], rhs: "call()".into(),
         }]);
-        assert_eq!(
-            out,
-            vec![
-                Stmt::Assign {
-                    lhs: "a".to_string(),
-                    rhs: "call().0".to_string()
-                },
-                Stmt::Assign {
-                    lhs: "b".to_string(),
-                    rhs: "call().1".to_string()
-                },
-            ]
-        );
+        assert_eq!(out, vec![Stmt::LetTuple {
+            bindings: vec!["__sail_tuple_0".into(), "__sail_tuple_1".into()],
+            rhs: "call()".into(),
+            body: vec![
+                Stmt::Assign { lhs: "a".into(), rhs: "__sail_tuple_0".into() },
+                Stmt::Assign { lhs: "b".into(), rhs: "__sail_tuple_1".into() },
+            ],
+        }]);
     }
 
     #[test]
-    fn single_target_becomes_plain_assign() {
-        let out = run_body(vec![Stmt::TupleAssign {
-            targets: vec!["a".to_string()],
-            rhs: "e".to_string(),
-        }]);
-        assert_eq!(
-            out,
-            vec![Stmt::Assign {
-                lhs: "a".to_string(),
-                rhs: "e".to_string()
-            }]
-        );
+    fn zero_and_one_component_still_use_tuple_binding() {
+        for targets in [vec![], vec!["x".into()]] {
+            let out = run_body(vec![Stmt::TupleAssign {
+                targets: targets.clone(), rhs: "effect()".into(),
+            }]);
+            let Stmt::LetTuple { bindings, rhs, body } = &out[0] else { panic!("missing binding") };
+            assert_eq!(bindings.len(), targets.len());
+            assert_eq!(body.len(), targets.len());
+            assert_eq!(rhs, "effect()");
+        }
     }
 
     #[test]
-    fn empty_tuple_keeps_effect_only() {
-        let out = run_body(vec![Stmt::TupleAssign {
-            targets: vec![],
-            rhs: "e".to_string(),
-        }]);
-        assert_eq!(out, vec![Stmt::Expr("e".to_string())]);
-    }
-
-    #[test]
-    fn preserves_statement_order_and_others() {
-        let out = run_body(vec![
-            Stmt::Expr("first".to_string()),
-            Stmt::TupleAssign {
-                targets: vec!["x".to_string(), "y".to_string()],
-                rhs: "t".to_string(),
-            },
-            Stmt::Return("x".to_string()),
-        ]);
-        assert_eq!(
-            out,
-            vec![
-                Stmt::Expr("first".to_string()),
-                Stmt::Assign {
-                    lhs: "x".to_string(),
-                    rhs: "t.0".to_string()
-                },
-                Stmt::Assign {
-                    lhs: "y".to_string(),
-                    rhs: "t.1".to_string()
-                },
-                Stmt::Return("x".to_string()),
-            ]
-        );
+    fn avoids_capture_and_preserves_surrounding_statements() {
+        let first = Stmt::Expr("__sail_tuple_0".into());
+        let last = Stmt::Return("a".into());
+        let out = run_body(vec![first.clone(), Stmt::TupleAssign {
+            targets: vec!["a".into(), "__sail_tuple_1".into()],
+            rhs: "(__sail_tuple_1, a)".into(),
+        }, last.clone()]);
+        assert_eq!(out[0], first);
+        assert_eq!(out[2], last);
+        let Stmt::LetTuple { bindings, .. } = &out[1] else { panic!("missing binding") };
+        assert_eq!(bindings, &["__sail_tuple_2", "__sail_tuple_3"]);
+        assert_eq!(run_body(out.clone()), out, "pass must be idempotent");
     }
 }

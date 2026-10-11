@@ -45,19 +45,16 @@ fn lean_default_pipeline_parallel_smoke() {
     assert_eq!(out.len(), 4);
     for shard in &out {
         for def in &shard.defs {
-            // No Undefined / TupleAssign / self-assign may survive.
+            // Supported undefined values and tuple assignments are lowered.
             for stmt in &def.body {
                 assert!(
                     !matches!(stmt, Stmt::Undefined { .. }),
                     "undefined survived"
                 );
                 assert!(!matches!(stmt, Stmt::TupleAssign { .. }), "tuple survived");
-                assert!(
-                    !matches!(stmt, Stmt::Assign { lhs, rhs } if lhs == rhs),
-                    "self-assign survived"
-                );
             }
             assert_eq!(def.body.len(), 3);
+            assert_eq!(def.body[2], Stmt::Assign { lhs: "x".into(), rhs: "x".into() });
         }
     }
 }

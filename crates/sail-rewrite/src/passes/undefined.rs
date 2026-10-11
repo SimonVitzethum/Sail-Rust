@@ -1,84 +1,66 @@
-//! `undefined` pass: eliminate `undefined`-typed placeholders.
-//!
-//! OCaml equivalent: `("undefined", [Bool_arg true])` in `lean_rewrites`
-//! (`sail_plugin_lean.ml`). The OCaml rewrite fills in unspecified values so
-//! the Lean backend never emits a bare `undefined`; here we lower
-//! [`Stmt::Undefined`] to a concrete default assignment per declared type.
-//!
-//! Shard-local: each definition is rewritten independently, no cross-def state.
+//! Type-directed undefined values, following `undefined_of_typ` in OCaml
+//! `sail/src/lib/ast_util.ml`. Undefined is a helper call, not an arbitrary
+//! literal: zero may violate ranges and a one-bit literal has the wrong width.
+//! Unsupported type applications remain explicit until a typed AST is used.
 
 #![forbid(unsafe_code)]
 
 use crate::ast::{DefKind, Shard, Stmt};
 use crate::pass::Pass;
 
-/// Eliminate [`Stmt::Undefined`] placeholders.
-///
-/// `let x : ty = undefined;` becomes `x = <default(ty)>;` where the default
-/// is picked by [`default_for_ty`]. Non-`Undefined` statements pass through
-/// unchanged. `Valspec` defs (no body semantics) are left untouched.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Undefined;
 
 impl Pass for Undefined {
-    fn name(&self) -> &'static str {
-        "undefined"
-    }
-
+    fn name(&self) -> &'static str { "undefined" }
     fn run(&self, mut shard: Shard) -> Shard {
         for def in &mut shard.defs {
-            if def.kind == DefKind::Valspec {
-                continue;
-            }
-            def.body = rewrite_body(std::mem::take(&mut def.body));
+            if def.kind != DefKind::Valspec { rewrite_body(&mut def.body); }
         }
         shard
     }
 }
 
-/// Rewrite one statement list, expanding `Undefined` in place.
-fn rewrite_body(body: Vec<Stmt>) -> Vec<Stmt> {
-    let mut out = Vec::with_capacity(body.len());
+fn rewrite_body(body: &mut [Stmt]) {
     for stmt in body {
         match stmt {
             Stmt::Undefined { target, ty } => {
-                let rhs = default_for_ty(&ty);
-                out.push(Stmt::Assign { lhs: target, rhs });
+                if let Some(rhs) = default_for_ty(ty) {
+                    *stmt = Stmt::Assign { lhs: std::mem::take(target), rhs };
+                }
             }
-            other => out.push(other),
+            Stmt::LetTuple { body, .. } => rewrite_body(body),
+            _ => {}
         }
     }
-    out
 }
 
-/// Pick a concrete default expression for a declared type.
-///
-/// Mirrors the spirit of the OCaml `undefined` rewrite (which inserts a
-/// type-directed unspecified value): small inhabited defaults per type shape,
-/// falling back to a `0`-literal-ish placeholder for unknown types.
+/// Render the OCaml helper for types representable without a type environment.
+/// Names are case sensitive. `None` preserves the unresolved placeholder;
+/// guessing a value for an unsupported type would silently change semantics.
 #[must_use]
-pub fn default_for_ty(ty: &str) -> String {
-    let t = ty.trim().to_ascii_lowercase();
-    if t == "bool" {
-        return "false".to_string();
+pub fn default_for_ty(ty: &str) -> Option<String> {
+    let t = ty.trim();
+    if !t.is_empty() && t.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        && t.chars().all(|c| c.is_alphanumeric() || c == '_')
+    {
+        return Some(format!("undefined_{t}()"));
     }
-    if t == "string" {
-        return "\"\"".to_string();
+    // Lean's undefined rewrite enables machine words. Keep symbolic widths
+    // via sizeof, exactly as undefined_of_typ_args does for numeric arguments.
+    for name in ["bits", "bitvector", "atom"] {
+        if let Some(arg) = t.strip_prefix(name).map(str::trim)
+            .and_then(|s| s.strip_prefix('(')).and_then(|s| s.strip_suffix(')'))
+        {
+            if arg.trim().is_empty() || arg.contains(',') { return None; }
+            return Some(if name == "atom" {
+                format!("sizeof({})", arg.trim())
+            } else {
+                format!("undefined_bitvector(sizeof({}))", arg.trim())
+            });
+        }
     }
-    if t == "real" {
-        return "0.0".to_string();
-    }
-    if t.starts_with("bits(") || t.starts_with("bitvector") || t == "bits" {
-        return "0b0".to_string();
-    }
-    if t.starts_with("vector(") || t.starts_with("list(") || t.ends_with(" list") {
-        return "[]".to_string();
-    }
-    if t == "unit" || t == "()" {
-        return "()".to_string();
-    }
-    // int, nat, integer, range(..), enum names, unknown: zero literal.
-    "0".to_string()
+    None
 }
 
 #[cfg(test)]
@@ -86,67 +68,33 @@ mod tests {
     use super::*;
     use crate::ast::{Def, DefKind};
 
-    fn shard_of(body: Vec<Stmt>) -> Shard {
-        Shard::new(0, vec![Def::new("f", DefKind::Function, body)])
+    #[test]
+    fn calls_type_directed_helpers_instead_of_guessing_literals() {
+        assert_eq!(default_for_ty("bool").as_deref(), Some("undefined_bool()"));
+        assert_eq!(default_for_ty("string").as_deref(), Some("undefined_string()"));
+        assert_eq!(default_for_ty("MyEnum").as_deref(), Some("undefined_MyEnum()"));
+        assert_eq!(default_for_ty("bits(8)").as_deref(), Some("undefined_bitvector(sizeof(8))"));
+        assert_eq!(default_for_ty("bits('n + 1)").as_deref(), Some("undefined_bitvector(sizeof('n + 1))"));
+        assert_eq!(default_for_ty("atom(5)").as_deref(), Some("sizeof(5)"));
+        assert_eq!(default_for_ty("vector(4, int)"), None);
+        assert_eq!(default_for_ty("range(1, 10)"), None);
+        assert_eq!(default_for_ty("int -> int"), None);
     }
 
     #[test]
-    fn replaces_undefined_with_typed_default() {
-        let p = Undefined;
-        let out = p.run(shard_of(vec![
-            Stmt::Undefined {
-                target: "x".to_string(),
-                ty: "bool".to_string(),
-            },
-            Stmt::Undefined {
-                target: "n".to_string(),
-                ty: "int".to_string(),
-            },
-        ]));
-        assert_eq!(
-            out.defs[0].body,
-            vec![
-                Stmt::Assign {
-                    lhs: "x".to_string(),
-                    rhs: "false".to_string()
-                },
-                Stmt::Assign {
-                    lhs: "n".to_string(),
-                    rhs: "0".to_string()
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn leaves_other_statements_and_valspecs_alone() {
-        let p = Undefined;
-        let shard = Shard::new(
-            0,
-            vec![
-                Def::new(
-                    "sig",
-                    DefKind::Valspec,
-                    vec![Stmt::Undefined {
-                        target: "x".to_string(),
-                        ty: "int".to_string(),
-                    }],
-                ),
-                Def::new("f", DefKind::Function, vec![Stmt::Expr("skip".to_string())]),
-            ],
-        );
-        let out = p.run(shard);
-        // Valspec untouched (still Undefined), Expr untouched.
-        assert!(matches!(out.defs[0].body[0], Stmt::Undefined { .. }));
-        assert_eq!(out.defs[1].body, vec![Stmt::Expr("skip".to_string())]);
-    }
-
-    #[test]
-    fn default_table() {
-        assert_eq!(default_for_ty("bool"), "false");
-        assert_eq!(default_for_ty("string"), "\"\"");
-        assert_eq!(default_for_ty("bits(8)"), "0b0");
-        assert_eq!(default_for_ty("vector(4, int)"), "[]");
-        assert_eq!(default_for_ty("mystery_enum"), "0");
+    fn preserves_unsupported_types_and_valspecs_and_visits_scopes() {
+        let unknown = Stmt::Undefined { target: "v".into(), ty: "vector(4, int)".into() };
+        let known = Stmt::Undefined { target: "x".into(), ty: "int".into() };
+        let shard = Shard::new(0, vec![
+            Def::new("sig", DefKind::Valspec, vec![known.clone()]),
+            Def::new("f", DefKind::Function, vec![unknown.clone(), Stmt::LetTuple {
+                bindings: vec![], rhs: "effect()".into(), body: vec![known.clone()],
+            }]),
+        ]);
+        let out = Undefined.run(shard);
+        assert_eq!(out.defs[0].body, vec![known]);
+        assert_eq!(out.defs[1].body[0], unknown);
+        let Stmt::LetTuple { body, .. } = &out.defs[1].body[1] else { panic!("scope") };
+        assert_eq!(body, &[Stmt::Assign { lhs: "x".into(), rhs: "undefined_int()".into() }]);
     }
 }

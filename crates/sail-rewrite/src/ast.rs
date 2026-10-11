@@ -48,10 +48,13 @@ impl Shard {
     #[must_use]
     pub fn chunk(defs: Vec<Def>, chunk_size: usize) -> Vec<Shard> {
         let chunk_size = chunk_size.max(1);
-        defs.chunks(chunk_size)
-            .enumerate()
-            .map(|(id, c)| Shard::new(id, c.to_vec()))
-            .collect()
+        let mut defs = defs.into_iter().peekable();
+        let mut shards = Vec::new();
+        while defs.peek().is_some() {
+            let chunk = defs.by_ref().take(chunk_size).collect();
+            shards.push(Shard::new(shards.len(), chunk));
+        }
+        shards
     }
 
     /// Number of definitions in this shard.
@@ -124,6 +127,13 @@ pub enum Stmt {
         targets: Vec<String>,
         /// Right-hand side expression text.
         rhs: String,
+    },
+    /// Evaluate `rhs` once, bind its tuple components simultaneously, then
+    /// execute `body` within the lexical scope of the immutable bindings.
+    LetTuple {
+        bindings: Vec<String>,
+        rhs: String,
+        body: Vec<Stmt>,
     },
     /// `let x : ty = undefined;` placeholder (OCaml `undefined` rewrite input).
     Undefined {
