@@ -223,6 +223,17 @@ fn errors_carry_spans() {
 }
 
 #[test]
+fn existential_signature_does_not_consume_its_following_function() {
+    let source = "val f : forall 'n, 'n >= 0. int('n) -> {'m, 'm >= 0. int('m)}\n\nfunction f(x) = x\n";
+    let parsed = parse_file("exist.sail", source).unwrap();
+    assert_eq!(parsed.defs.len(), 4);
+    assert!(matches!(&parsed.defs[1].def, Def::Val { sig_src, .. }
+        if !sig_src.contains("function")));
+    assert!(matches!(parsed.defs[2].def, Def::Fundef { .. }));
+    assert!(parse_file("broken.sail", "val f : {'n, 'n >= 0. int('n)\n").is_err());
+}
+
+#[test]
 fn parallel_matches_sequential() {
     let a = fixture("fundefs.sail");
     let b = fixture("registers_types.sail");

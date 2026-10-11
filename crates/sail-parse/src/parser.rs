@@ -339,14 +339,6 @@ impl<'a> Scanner<'a> {
         self.capture_header_inner(true)
     }
 
-    /// Like [`Scanner::capture_header`], but never stops at `=`/`{`: only
-    /// at end-of-line (with next-definition lookahead) or EOF. Used for
-    /// the tail of `val` signatures after an embedded `{...}` block
-    /// (backend attributes, `in {0,1}` constraint sets).
-    fn capture_sig_rest(&mut self) -> Result<String, ParseError> {
-        Ok(self.capture_header_inner(false)?.0)
-    }
-
     fn capture_header_inner(&mut self, stop_at_eq_brace: bool) -> Result<(String, HeaderEnd), ParseError> {
         let start = self.pos;
         let mut paren: u32 = 0;
@@ -455,7 +447,12 @@ impl<'a> Scanner<'a> {
         let mut at_line_start = false;
         loop {
             match self.peek() {
-                None => return Ok(self.slice(start, end).trim_end().to_owned()),
+                None => {
+                    if paren != 0 || bracket != 0 || brace != 0 {
+                        return Err(self.err(Cur { byte: start }, self.cur(), "unterminated definition delimiters"));
+                    }
+                    return Ok(self.slice(start, end).trim_end().to_owned());
+                }
                 Some(b'"') => {
                     self.skip_string()?;
                     end = self.pos;
@@ -744,8 +741,12 @@ fn parse_keyword_def(
             let name_start = sc.pos;
             let name = sc.read_definition_name()?;
             let name_src = sc.slice(name_start, sc.pos).to_owned();
-            let (head, end_kind) = sc.capture_header()?;
-            let sig_src = finish_val_sig(sc, format!("{name_src} {head}"), end_kind)?;
+            // A signature may end in an existential {...}, contain backend
+            // blocks or span blank lines. Scan it with the common depth-aware
+            // definition boundary mechanism instead of treating its first
+            // brace as a body and consuming the following function.
+            let rest = sc.capture_until_next_def()?;
+            let sig_src = format!("{name_src} {}", rest.trim());
             Ok((Def::Val { name, sig_src }, sc.cur()))
         }
         "function" | "mapping" | "impl" => {
@@ -903,69 +904,6 @@ fn parse_keyword_def(
             Err(ParseError::new(to_byte_span(sc, to), format!("unhandled definition keyword `{kw}`")))
         }
     }
-}
-
-/// Build the `val` signature: header already captured; if it ended at `=`
-/// (val-with-default? rare) append the body, else done. Multi-line handled
-/// by [`Scanner::capture_header`].
-fn finish_val_sig(sc: &mut Scanner<'_>, head: String, end_kind: HeaderEnd) -> Result<String, ParseError> {
-    match end_kind {
-        HeaderEnd::Eq => {
-            sc.bump(1);
-            sc.skip_trivia_all()?;
-            if sc.peek() == Some(b'{') || sc.peek() == Some(b'p') && peek_word(sc, "pure") {
-                // Backend-attribute block `{ ... }` (optionally after `pure`):
-                // the type ascription `: ...` follows on later lines.
-                let mut sig = format!("{head} = ");
-                if peek_word(sc, "pure") {
-                    while sc.peek().is_some_and(is_ident_char) {
-                        sc.bump(1);
-                    }
-                    sig.push_str("pure ");
-                }
-                sc.skip_trivia_all()?;
-                if sc.peek() == Some(b'{') {
-                    sig.push_str(sc.capture_balanced_braces()?);
-                    sc.skip_trivia_all()?;
-                    if sc.peek() == Some(b':') {
-                        let rest = sc.capture_sig_rest()?;
-                        if !rest.trim().is_empty() {
-                            sig.push_str(&rest);
-                        }
-                    }
-                    return Ok(sig);
-                }
-                // `pure` without a block (should not happen): fall through.
-                let body = sc.capture_until_next_def()?;
-                sig.push_str(&body);
-                return Ok(sig);
-            }
-            let body = sc.capture_until_next_def()?;
-            Ok(format!("{head} = {body}"))
-        }
-        HeaderEnd::Brace => {
-            let raw = sc.capture_balanced_braces()?.to_owned();
-            // The `{...}` was embedded in the signature (e.g. `'n in
-            // {0,1}` or a backend block): the signature continues.
-            sc.skip_trivia_all()?;
-            let rest = sc.capture_sig_rest()?;
-            if rest.trim().is_empty() {
-                Ok(format!("{head} {raw}"))
-            } else {
-                Ok(format!("{head} {raw}{rest}"))
-            }
-        }
-        HeaderEnd::Eol | HeaderEnd::Eof => Ok(head),
-    }
-}
-
-/// True if the identifier at the cursor is exactly `word`.
-fn peek_word(sc: &Scanner<'_>, word: &str) -> bool {
-    let mut q = sc.pos;
-    while q < sc.bytes.len() && is_ident_char(sc.bytes[q]) {
-        q += 1;
-    }
-    &sc.src[sc.pos..q] == word
 }
 
 /// After a header capture, consume the `=`-body (if any). Returns
