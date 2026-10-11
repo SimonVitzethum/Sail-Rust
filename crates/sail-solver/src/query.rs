@@ -41,6 +41,9 @@ pub enum Constraint {
     False,
     /// Opake normalisierte Formel (S-Expr aus Lane 04/05).
     Atom(String),
+    /// Validated, flat canonical-AST query. Its assertion is a counterexample;
+    /// only an UNSAT response establishes validity.
+    SmtLib(crate::canonical::CanonicalQuery),
     /// Negation.
     Not(Box<Constraint>),
     /// Konjunktion.
@@ -119,6 +122,7 @@ impl Constraint {
             Constraint::True => "true".to_owned(),
             Constraint::False => "false".to_owned(),
             Constraint::Atom(s) => format!("(atom {s})"),
+            Constraint::SmtLib(q) => format!("(smtlib {})", q.script()),
             Constraint::Not(c) => format!("(not {})", c.cache_key()),
             Constraint::And(cs) => {
                 let mut k = String::from("(and");

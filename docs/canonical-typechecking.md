@@ -27,8 +27,25 @@ Enum patterns are constants, register shadowing is rejected, and union
 constructors have generated canonical function signatures. Recursive record
 and union types are rejected, matching OCaml's `forbid_recursive_types`.
 
+Constrained type constructors now retain their canonical quantifiers and prove
+every instantiated condition. Simultaneous Int/Bool substitutions target the
+caller's rigid scope; scheme, existential and preceding global constraints
+provide assumptions. Existential shadowing creates fresh proof identities and
+restores the previous assumptions on exit. Annotation interners retain the
+function's binder identities. Unknown obligations are errors.
+
+The solver bridge emits flat, validated SMT-LIB with an explicit work stack;
+decimal constants retain arbitrary precision. It reuses the existing exclusive
+solver pool and bounded 128-entry memo cache. Each active solver owns a persistent
+Z3 subprocess, reset before every request. Parsing errors, timeouts, missing Z3
+and broken processes cannot prove an obligation. A separate I/O thread allows
+the driver to kill a stalled child, including during a blocked write. All child
+processes inherit the compiler's systemd memory and swap limits. Z3 must be on
+PATH. Powers, general numeric/constraint applications and type-valued equality
+currently require further elaboration and fail explicitly at this bridge.
+
 Unknown expression rules, dependent call solving, general refinement proofs,
-constrained constructor applications, synonym expansion,
+synonym expansion,
 mappings and scattered definitions fail explicitly. This is a partial checker:
 it does not yet produce the complete typed AST required by the rewrite and Lean
 backend passes. Successful checking of the supported subset still ends with
@@ -53,13 +70,15 @@ The script requires the expected counts, a workload larger than the memory
 limit and the explicit missing-backend failure. It does not accept this partial
 compilation as ARM or Lean success.
 
-The current full ARM gate reaches an explicit missing proof during declaration
-checking: `Mem_read_request` in
-`concurrency_interface/read_write_v1.sail`. Its constructor conditions must be
-instantiated and discharged from the calling scheme's assumptions. Kind/scope
-checking alone cannot establish this, so the checker rejects it until the
-canonical dependent solver bridge exists. The latest full-model invocation
-still exits 1, peaks at 1.3 GiB under the 16 GiB limit and never reaches Lake.
+The latest full ARM gate passes the declaration phase, including the constructor
+conditions of `Mem_read_request` and `Mem_write_request`. It now stops in a
+`flow.sail` function body at dependent call instantiation. The run takes 44.12 s,
+peaks at 1.3 GiB under the 16 GiB/no-swap limit and still exits 1 before Lean/Lake.
+The focused solver/typechecker/CLI suite has 196 passing tests under 128 MiB per
+binary. A further 16-test canonical gate includes source-position global
+assumptions and cross-interner annotations (71.5 MiB peak). The solver bridge also
+handles 10,000 nested numeric nodes on a 128 KiB stack and rejects an SMT-injection
+literal. These remain partial compiler results.
 
 The memory bound is the resident declaration tables plus a bounded number of
 loaded definitions, local scopes and worker temporaries. A single definition
@@ -68,5 +87,5 @@ grow with exported signatures; synthesis caching is local to one loaded body.
 Retaining signatures and annotation types still uses canonical AST `Clone`;
 deep type copying and other recursive compiler paths require a further audit.
 Full ARM acceptance remains Sail to executable
-Lean followed by a successful `lake build` under 16 GiB without swap (28 GiB
-fallback).
+Lean followed by a successful `lake build` and an elaborated no-sorry check under
+16 GiB without swap (28 GiB fallback).

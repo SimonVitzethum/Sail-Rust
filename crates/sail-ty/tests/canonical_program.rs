@@ -294,9 +294,112 @@ fn constrained_type_applications_require_a_proof_instead_of_kind_only_success() 
         .declare(&defs[1].0, defs[1].1.clone(), 1)
         .unwrap_err();
     assert!(
-        matches!(error.kind, TypeErrorKind::Unsupported(_)),
+        matches!(error.kind, TypeErrorKind::ConstraintNotProved(_)),
         "{error}"
     );
+}
+
+#[test]
+fn constructor_constraints_are_substituted_and_proved_from_rigid_assumptions() {
+    let defs = parse(&[
+        "struct Sized('n : Int), 'n > 0 = { field : bitvector('n) }",
+        "val positive : forall ('k : Int), 'k > 0. Sized('k) -> unit",
+        "val shifted : forall ('k : Int), 'k >= 0. Sized('k + 1) -> unit",
+        "val huge : Sized(340282366920938463463374607431768211456) -> unit",
+        "val existential : { ('k : Int), 'k > 0. Sized('k) } -> unit",
+        "val bad : Sized(0) -> unit",
+        "val missing : forall ('k : Int). Sized('k) -> unit",
+    ]);
+    let mut program = Program::new();
+    for position in 0..5 {
+        program
+            .declare(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap();
+    }
+    for position in 5..defs.len() {
+        let error = program
+            .declare(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap_err();
+        assert!(
+            matches!(error.kind, TypeErrorKind::ConstraintNotProved(_)),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn constructor_substitution_is_simultaneous_and_boolean_sorted() {
+    let defs = parse(&[
+        "struct Ordered('n : Int, 'm : Int), 'n < 'm = { field : unit }",
+        "struct Enabled('b : Bool), 'b = { field : unit }",
+        "val swapped : forall ('n 'm : Int), 'm < 'n. Ordered('m, 'n) -> unit",
+        "val enabled : Enabled(true) -> unit",
+        "val bool_scope : forall ('b : Bool), 'b. Enabled('b) -> unit",
+        "val bad_swap : forall ('n 'm : Int), 'm < 'n. Ordered('n, 'm) -> unit",
+        "val disabled : Enabled(false) -> unit",
+    ]);
+    let mut program = Program::new();
+    for position in 0..5 {
+        program
+            .declare(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap();
+    }
+    for position in 5..defs.len() {
+        let error = program
+            .declare(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap_err();
+        assert!(
+            matches!(error.kind, TypeErrorKind::ConstraintNotProved(_)),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn existential_shadowing_never_reuses_outer_proof_binders_or_leaks_assumptions() {
+    let defs = parse(&[
+        "struct Sized('n : Int), 'n > 0 = { field : bitvector('n) }",
+        "val good : forall ('n : Int), 'n < 0. { ('n : Int), 'n > 0. Sized('n) } -> unit",
+        "val shadow : forall ('n : Int), 'n > 0. { ('n : Int), true. Sized('n) } -> unit",
+        "val leak : forall ('n : Int). ({ ('k : Int), 'k > 0. Sized('k) }, Sized('n)) -> unit",
+    ]);
+    let mut program = Program::new();
+    for position in 0..2 {
+        program
+            .declare(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap();
+    }
+    for position in 2..defs.len() {
+        let error = program
+            .declare(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap_err();
+        assert!(
+            matches!(error.kind, TypeErrorKind::ConstraintNotProved(_)),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn proofs_use_only_earlier_global_constraints_and_keep_annotation_scopes() {
+    let defs = parse(&[
+        "struct Sized('n : Int), 'n > 0 = { field : bitvector('n) }",
+        "type N : Int",
+        "val before : Sized(N) -> unit",
+        "constraint N > 0",
+        "val after : Sized(N) -> unit",
+        "val f : forall ('n : Int), 'n > 0. Sized('n) -> Sized('n)",
+        "function f(x) = (x : Sized('n))",
+    ]);
+    let mut program=Program::new();
+    for (position,(def,it)) in defs.iter().enumerate() {
+        let result=program.declare(def,it.clone(),position);
+        if position==2 { assert!(matches!(result.unwrap_err().kind,TypeErrorKind::ConstraintNotProved(_))); }
+        else {result.unwrap();}
+    }
+    program.check_definition(&defs[6].0,defs[6].1.clone(),6).unwrap();
+    // Source-position views remain valid after the later assumption exists.
+    assert!(program.check_scheme(match &defs[2].0.kind {DefKind::Val(v)=>&v.typschm,_=>panic!()},&defs[2].1,2).is_err());
 }
 
 #[test]

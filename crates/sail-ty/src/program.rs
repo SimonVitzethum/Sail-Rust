@@ -5,6 +5,10 @@
 
 use crate::error::{TypeError, TypeErrorKind, TypeResult};
 use sail_ast::*;
+use sail_solver::{
+    canonical::{CanonicalQuery, Context, Substitution, View},
+    SmtLibSolver, Solver, SolverPool, SolverQuery,
+};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -22,7 +26,12 @@ struct Binding<T> {
 struct Constructor {
     args: Vec<Kind>,
     result: Kind,
-    requires_proof: bool,
+    proof: Option<Arc<ConstructorProof>>,
+}
+#[derive(Debug)]
+struct ConstructorProof {
+    quant: Vec<QuantItem>,
+    interner: Arc<SimpleInterner>,
 }
 #[derive(Clone, Debug)]
 struct Value {
@@ -32,11 +41,23 @@ struct Value {
 
 /// Canonical declaration tables, frozen before parallel body checking. Only
 /// signatures/type definitions belong here, never function bodies.
-#[derive(Default)]
 pub struct Program {
     constructors: BTreeMap<String, Vec<Binding<Constructor>>>,
     values: BTreeMap<String, Vec<Binding<Value>>>,
     registers: BTreeMap<String, Vec<Binding<Arc<Scheme>>>>,
+    constraints: Vec<Binding<(Arc<Constraint>, Arc<SimpleInterner>)>>,
+    solvers: SolverPool<SmtLibSolver>,
+}
+impl Default for Program {
+    fn default() -> Self {
+        Self {
+            constructors: BTreeMap::new(),
+            values: BTreeMap::new(),
+            registers: BTreeMap::new(),
+            constraints: Vec::new(),
+            solvers: SolverPool::with_default_cache(SmtLibSolver::new),
+        }
+    }
 }
 
 fn at<T>(history: &[Binding<T>], position: usize) -> Option<&T> {
@@ -57,7 +78,7 @@ fn constructor(args: &[Kind], result: Kind) -> Constructor {
     Constructor {
         args: args.to_vec(),
         result,
-        requires_proof: false,
+        proof: None,
     }
 }
 fn builtin(name: &str) -> Option<Constructor> {
@@ -148,7 +169,7 @@ impl Program {
                 let signature = Constructor {
                     args: quant_args(quant),
                     result,
-                    requires_proof: quant.iter().any(|item| matches!(item, QuantItem::Constraint(c) if !matches!(c.kind, ConstraintKind::True))),
+                    proof: quant.iter().any(|item| matches!(item, QuantItem::Constraint(c) if !matches!(c.kind, ConstraintKind::True))).then(|| Arc::new(ConstructorProof {quant:quant.to_vec(),interner:it.clone()})),
                 };
                 // OCaml's forbid_recursive_types checks record/union payloads
                 // before inserting their constructor into the environment.
@@ -315,7 +336,12 @@ impl Program {
                 Ok(())
             }
             DefKind::Constraint(constraint) => {
-                WellFormed::new(self, &it, position).run(vec![Task::Constraint(constraint)])
+                WellFormed::new(self, &it, position).run(vec![Task::Constraint(constraint)])?;
+                self.constraints.push(Binding {
+                    position,
+                    value: (Arc::new(constraint.clone()), it),
+                });
+                Ok(())
             }
             // Bodies and definitions requiring inference are checked by the
             // body pass; accepting their header does not accept the body.
@@ -351,6 +377,18 @@ impl Program {
                         text(scope.interner.as_ref(), binder.kid, typ.span)?.to_owned(),
                         binder.kind,
                     );
+                    checker.bind_proof_name(
+                        text(scope.interner.as_ref(), binder.kid, typ.span)?.to_owned(),
+                    );
+                }
+            }
+            for item in &scope.typschm.quant {
+                if let QuantItem::Constraint(c) = item {
+                    checker.assumptions.push(Assumption {
+                        constraint: c,
+                        interner: &scope.interner,
+                        variables: checker.proof_vars.clone(),
+                    });
                 }
             }
         }
@@ -401,8 +439,15 @@ enum Task<'a> {
     Arg(&'a TypArg, Kind),
     NExp(&'a NExp),
     Constraint(&'a Constraint),
+    Assume(&'a Constraint),
     Range(&'a IndexRange),
-    Restore(Vec<(Symbol, Option<Kind>)>),
+    Discharge(&'a Name, &'a [TypArg], Constructor),
+    Restore(Vec<(Symbol, Option<Kind>)>, BTreeMap<String, u64>, usize),
+}
+struct Assumption<'a> {
+    constraint: &'a Constraint,
+    interner: &'a SimpleInterner,
+    variables: BTreeMap<String, u64>,
 }
 struct WellFormed<'a> {
     program: &'a Program,
@@ -411,6 +456,9 @@ struct WellFormed<'a> {
     vars: BTreeMap<Symbol, Kind>,
     outer: BTreeMap<String, Kind>,
     in_existential: bool,
+    proof_vars: BTreeMap<String, u64>,
+    next_proof_var: u64,
+    assumptions: Vec<Assumption<'a>>,
 }
 impl<'a> WellFormed<'a> {
     fn new(program: &'a Program, it: &'a SimpleInterner, position: usize) -> Self {
@@ -421,11 +469,20 @@ impl<'a> WellFormed<'a> {
             vars: BTreeMap::new(),
             outer: BTreeMap::new(),
             in_existential: false,
+            proof_vars: BTreeMap::new(),
+            next_proof_var: 0,
+            assumptions: Vec::new(),
         }
+    }
+    fn bind_proof_name(&mut self, name: String) {
+        let id = self.next_proof_var;
+        self.next_proof_var += 1;
+        self.proof_vars.insert(name, id);
     }
     fn quant(&mut self, quant: &'a [QuantItem]) -> TypeResult<()> {
         for item in quant {
             if let QuantItem::Id(binder) = item {
+                self.bind_proof_name(text(self.it, binder.kid, Span::DUMMY)?.to_owned());
                 if self.vars.insert(binder.kid, binder.kind).is_some() {
                     return Err(failure(
                         Span::DUMMY,
@@ -445,7 +502,17 @@ impl<'a> WellFormed<'a> {
                     QuantItem::Constraint(c) => Some(Task::Constraint(c)),
                 })
                 .collect(),
-        )
+        )?;
+        for item in quant {
+            if let QuantItem::Constraint(c) = item {
+                self.assumptions.push(Assumption {
+                    constraint: c,
+                    interner: self.it,
+                    variables: self.proof_vars.clone(),
+                });
+            }
+        }
+        Ok(())
     }
     fn variable(&self, symbol: Symbol, expected: Kind, span: Span) -> TypeResult<()> {
         let name = text(self.it, symbol, span)?;
@@ -482,15 +549,93 @@ impl<'a> WellFormed<'a> {
                 },
             });
         }
-        if signature.requires_proof {
-            return Err(TypeError {
-                span: name.span,
-                kind: TypeErrorKind::Unsupported(format!(
-                    "constraint discharge for type constructor '{name_text}'"
-                )),
-            });
-        }
         Ok(signature)
+    }
+    fn discharge(&self, name: &Name, args: &[TypArg], signature: &Constructor) -> TypeResult<()> {
+        let Some(proof) = &signature.proof else {
+            return Ok(());
+        };
+        let context = Context {
+            interner: self.it,
+            variables: &self.proof_vars,
+        };
+        let substitution = Substitution {
+            arguments: proof
+                .quant
+                .iter()
+                .filter_map(|q| {
+                    if let QuantItem::Id(k) = q {
+                        Some(k.kid)
+                    } else {
+                        None
+                    }
+                })
+                .zip(args)
+                .collect(),
+            context,
+        };
+        let empty = BTreeMap::new();
+        let mut assumptions: Vec<_> = self
+            .assumptions
+            .iter()
+            .map(|a| View {
+                constraint: a.constraint,
+                context: Context {
+                    interner: a.interner,
+                    variables: &a.variables,
+                },
+            })
+            .collect();
+        assumptions.extend(
+            self.program
+                .constraints
+                .iter()
+                .filter(|b| b.position <= self.position)
+                .map(|b| View {
+                    constraint: &b.value.0,
+                    context: Context {
+                        interner: &b.value.1,
+                        variables: &empty,
+                    },
+                }),
+        );
+        for item in &proof.quant {
+            let QuantItem::Constraint(c) = item else {
+                continue;
+            };
+            let query = CanonicalQuery::implication(
+                &assumptions,
+                View {
+                    constraint: c,
+                    context: Context {
+                        interner: &proof.interner,
+                        variables: &empty,
+                    },
+                },
+                Some(&substitution),
+            )
+            .map_err(|reason| TypeError {
+                span: name.span,
+                kind: TypeErrorKind::Unsupported(reason),
+            })?;
+            let query = SolverQuery::new(sail_solver::Constraint::SmtLib(query)).with_timeout(3000);
+            let cache = self.program.solvers.cache();
+            let verdict = cache.lookup(&query).unwrap_or_else(|| {
+                let verdict = self.program.solvers.checkout().prove(&query);
+                cache.store(&query, verdict);
+                verdict
+            });
+            if !verdict.is_valid() {
+                return Err(TypeError::constraint_not_proved(
+                    name.span,
+                    format!(
+                        "type constructor {} ({verdict:?})",
+                        text(self.it, name.symbol, name.span)?
+                    ),
+                ));
+            }
+        }
+        Ok(())
     }
     fn run(&mut self, mut work: Vec<Task<'a>>) -> TypeResult<()> {
         while let Some(task) = work.pop() {
@@ -511,7 +656,8 @@ impl<'a> WellFormed<'a> {
                         return Err(failure(typ.span, "unresolved type placeholder"))
                     }
                     TypKind::Id(name) => {
-                        self.application(name, 0, Kind::Type)?;
+                        let signature = self.application(name, 0, Kind::Type)?;
+                        self.discharge(name, &[], &signature)?;
                     }
                     TypKind::Var(symbol) => self.variable(*symbol, Kind::Type, typ.span)?,
                     TypKind::Fn { args, ret } => {
@@ -525,6 +671,7 @@ impl<'a> WellFormed<'a> {
                     TypKind::Tuple(items) => work.extend(items.iter().map(Task::Typ)),
                     TypKind::App { name, args } => {
                         let signature = self.application(name, args.len(), Kind::Type)?;
+                        work.push(Task::Discharge(name, args, signature.clone()));
                         work.extend(
                             args.iter()
                                 .zip(signature.args)
@@ -547,12 +694,18 @@ impl<'a> WellFormed<'a> {
                             return Err(failure(typ.span, "duplicate existential binder"));
                         }
                         self.in_existential = true;
+                        let old_vars = self.proof_vars.clone();
+                        let old_assumptions = self.assumptions.len();
+                        for binder in binders {
+                            self.bind_proof_name(text(self.it, binder.kid, typ.span)?.to_owned());
+                        }
                         let restored = binders
                             .iter()
                             .map(|binder| (binder.kid, self.vars.insert(binder.kid, binder.kind)))
                             .collect();
-                        work.push(Task::Restore(restored));
+                        work.push(Task::Restore(restored, old_vars, old_assumptions));
                         work.push(Task::Typ(typ));
+                        work.push(Task::Assume(constraint));
                         work.push(Task::Constraint(constraint));
                     }
                 },
@@ -571,10 +724,19 @@ impl<'a> WellFormed<'a> {
                     NExpKind::Constant(_) => {}
                     NExpKind::Var(symbol) => self.variable(*symbol, Kind::Int, n.span)?,
                     NExpKind::Id(name) => {
-                        self.application(name, 0, Kind::Int)?;
+                        let signature = self.application(name, 0, Kind::Int)?;
+                        self.discharge(name, &[], &signature)?;
                     }
                     NExpKind::App { func, args } => {
                         let signature = self.application(func, args.len(), Kind::Int)?;
+                        if signature.proof.is_some() {
+                            return Err(TypeError {
+                                span: func.span,
+                                kind: TypeErrorKind::Unsupported(
+                                    "constrained numeric application".into(),
+                                ),
+                            });
+                        }
                         if signature.args.iter().any(|kind| *kind != Kind::Int) {
                             return Err(failure(
                                 n.span,
@@ -601,7 +763,8 @@ impl<'a> WellFormed<'a> {
                 Task::Constraint(c) => match &c.kind {
                     ConstraintKind::True | ConstraintKind::False => {}
                     ConstraintKind::Id(name) => {
-                        self.application(name, 0, Kind::Bool)?;
+                        let signature = self.application(name, 0, Kind::Bool)?;
+                        self.discharge(name, &[], &signature)?;
                     }
                     ConstraintKind::Var(symbol) => self.variable(*symbol, Kind::Bool, c.span)?,
                     ConstraintKind::Equal(a, b) | ConstraintKind::NotEqual(a, b) => {
@@ -624,6 +787,7 @@ impl<'a> WellFormed<'a> {
                     ConstraintKind::Not(c) => work.push(Task::Constraint(c)),
                     ConstraintKind::App { func, args } => {
                         let signature = self.application(func, args.len(), Kind::Bool)?;
+                        work.push(Task::Discharge(func, args, signature.clone()));
                         work.extend(
                             args.iter()
                                 .zip(signature.args)
@@ -631,7 +795,15 @@ impl<'a> WellFormed<'a> {
                         );
                     }
                 },
-                Task::Restore(vars) => {
+                Task::Assume(constraint) => self.assumptions.push(Assumption {
+                    constraint,
+                    interner: self.it,
+                    variables: self.proof_vars.clone(),
+                }),
+                Task::Discharge(name, args, signature) => self.discharge(name, args, &signature)?,
+                Task::Restore(vars, proof_vars, assumptions) => {
+                    self.proof_vars = proof_vars;
+                    self.assumptions.truncate(assumptions);
                     self.in_existential = false;
                     for (symbol, previous) in vars.into_iter().rev() {
                         if let Some(kind) = previous {

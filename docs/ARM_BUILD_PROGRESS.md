@@ -117,12 +117,18 @@ expressions** with **16 workers under 128 MiB without swap**. It processes
 run 10.42 s. It deliberately requires the missing-backend error after checking.
 It demonstrates actual disk-backed body checking, not complete ARM compilation.
 
-The latest full ARM invocation under 16 GiB still converts all 31,267
-definitions and then rejects the missing constraint discharge for
-`Mem_read_request` in `concurrency_interface/read_write_v1.sail`. The run peaks
-at 1.3 GiB without swap (53.11 s). Connecting canonical parameter substitution,
-scheme assumptions and the prover is required before these declarations can
-pass. No full ARM body check or Lake build has succeeded.
+The latest full ARM invocation under 16 GiB converts all 31,267 definitions and
+passes canonical declaration checking, including the constrained memory-request
+types. Constructor obligations now use simultaneous parameter substitution,
+rigid scope identities, scheme/existential/source-position global assumptions,
+and actual Z3 proofs through an iterative SMT-LIB bridge. Persistent subprocesses
+share the compiler cgroup; a bounded memo cache and exclusive solver pool reuse
+the existing solver architecture. Proof timeouts/errors fail closed.
+The run now stops in a `flow.sail` body at missing dependent call instantiation;
+it takes 44.12 s and peaks at 1.3 GiB without swap. The focused solver/typechecker/
+CLI suite passes 196 tests with each binary limited to 128 MiB, followed by a
+16-test canonical gate (71.5 MiB peak) covering global-assumption history and
+annotation scopes. No full ARM body check or Lake build has succeeded.
 
 Full kind/type elaboration, all expression/mapping conversions, complete
 annotation handling, typed rewrites and executable Lean body emission remain incomplete.

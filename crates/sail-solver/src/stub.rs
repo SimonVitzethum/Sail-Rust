@@ -31,7 +31,7 @@ impl StubSolver {
         match c {
             Constraint::True => Some(true),
             Constraint::False => Some(false),
-            Constraint::Atom(_) => None,
+            Constraint::Atom(_) | Constraint::SmtLib(_) => None,
             Constraint::Not(inner) => Self::fold(inner).map(|b| !b),
             Constraint::And(cs) => {
                 let mut any_unknown = false;

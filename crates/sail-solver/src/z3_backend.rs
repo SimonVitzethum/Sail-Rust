@@ -146,9 +146,7 @@ fn typarg_eq_bool(a: &TypArg, b: &TypArg) -> Bool {
             Ast::eq(&nconstraint_to_bool(x), &nconstraint_to_bool(y))
         }
         (TypArg::Typ(x), TypArg::Typ(y)) if x == y => Bool::from_bool(true),
-        (TypArg::Typ(_, _), TypArg::Typ(_, _)) => {
-            Bool::fresh_const("sail_nconstraint_typarg_eq")
-        }
+        (TypArg::Typ(_, _), TypArg::Typ(_, _)) => Bool::fresh_const("sail_nconstraint_typarg_eq"),
         _ => Bool::fresh_const("sail_nconstraint_typarg_eq_mixed"),
     }
 }
@@ -174,7 +172,10 @@ fn int_literal(v: i128) -> Int {
     // `((l3*B + l2)*B + l1)*B + l0`, exakt per Konstruktion.
     let mut acc = Int::from_u64(limb(96));
     for shift in [64, 32, 0] {
-        acc = Int::add(&[Int::mul(&[acc, Int::from_u64(BASE)]), Int::from_u64(limb(shift))]);
+        acc = Int::add(&[
+            Int::mul(&[acc, Int::from_u64(BASE)]),
+            Int::from_u64(limb(shift)),
+        ]);
     }
     if neg {
         acc.unary_minus()
@@ -221,6 +222,9 @@ impl Z3Solver {
             // stub-Aera; strukturierte Formeln bitte ueber
             // `prove_nconstraint` beweisen).
             Constraint::Atom(s) => Bool::new_const(s.as_str()),
+            // This backend's structured bridge does not consume SMT-LIB.
+            // A fresh atom conservatively preserves Unknown here.
+            Constraint::SmtLib(_) => Bool::fresh_const("canonical_query"),
             Constraint::Not(inner) => Self::build_ast(inner).not(),
             Constraint::And(cs) => {
                 let parts: Vec<Bool> = cs.iter().map(Self::build_ast).collect();
@@ -274,7 +278,10 @@ fn is_unsat(ast: &Bool, timeout: Option<u64>) -> bool {
 
 impl Solver for Z3Solver {
     fn prove(&self, query: &SolverQuery) -> SolverVerdict {
-        check_valid(&Self::build_ast(&query.constraint), self.effective_timeout(query))
+        check_valid(
+            &Self::build_ast(&query.constraint),
+            self.effective_timeout(query),
+        )
     }
 
     fn name(&self) -> &'static str {
