@@ -313,6 +313,36 @@ fn bidirectional_mappings_preserve_both_patterns_and_guards() {
 }
 
 #[test]
+fn outcome_bodies_are_retained_and_their_fixities_stay_local() {
+    let mut parser = RealParser::new();
+    let out = parser.parse_def("outcome read : int -> int with 'a : Type = {\ninfixl 6 %%\nval helper : (int, int) -> int\nimpl emulator(x) = x %% x\n}", sail_ast::Span::DUMMY).unwrap();
+    let DefKind::Outcome { defs, .. } = &out.kind else { panic!("{out:?}"); };
+    assert_eq!(defs.len(), 3);
+    assert!(matches!(defs[1].kind, DefKind::Val(_)));
+    assert!(matches!(&defs[2].kind, DefKind::Impl(clause)
+        if matches!(&clause.arm.kind, sail_ast::PExpKind::PatExp { body, .. }
+            if matches!(body.kind, ExpKind::App { .. }))));
+    assert!(parser.parse_exp("x %% y", sail_ast::Span::DUMMY).is_err());
+}
+
+#[test]
+fn nat_quantifiers_retain_nonnegative_constraints_and_finite_types_elaborate() {
+    let out = parse_def("val f : forall ('n : Nat). int('n) -> int('n)").unwrap();
+    let DefKind::Val(spec) = &out.value.kind else { panic!("{:?}", out.value); };
+    assert!(matches!(&spec.typschm.quant[0], sail_ast::QuantItem::Id(kopt) if kopt.kind == sail_ast::Kind::Int));
+    assert!(matches!(&spec.typschm.quant[1], sail_ast::QuantItem::Constraint(nc)
+        if matches!(&nc.kind, sail_ast::ConstraintKind::Ge(_, zero)
+            if matches!(&zero.kind, sail_ast::NExpKind::Constant(value) if value == "0"))));
+    let out = parse_typ("{32, 64}").unwrap();
+    let TypKind::Exist { binders, constraint, typ } = &out.value.kind else { panic!("{:?}", out.value); };
+    assert_eq!(binders.len(), 1);
+    assert!(matches!(&constraint.kind, sail_ast::ConstraintKind::Set { members, .. } if members == &["32", "64"]));
+    assert!(matches!(&typ.kind, TypKind::App { name, args }
+        if out.interner.resolve(name.symbol) == Some("atom") && matches!(&args[0].kind,
+            TypArgKind::NExp(n) if matches!(n.kind, sail_ast::NExpKind::Var(kid) if kid == binders[0].kid))));
+}
+
+#[test]
 fn function_domain_tuple_becomes_multiple_arguments() {
     let out = parse_def("val f : (int, bool) -> int").unwrap();
     assert!(matches!(&out.value.kind, DefKind::Val(spec)

@@ -546,6 +546,7 @@ impl Bridge {
             span,
             DefKind::Outcome {
                 name,
+                defs: Vec::new(),
                 typschm: TypSchm {
                     quant: Vec::new(),
                     typ,

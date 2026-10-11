@@ -589,6 +589,8 @@ pub enum DefKind {
         name: Name,
         typschm: TypSchm,
         quant: Vec<QuantItem>,
+        #[serde(default)]
+        defs: Vec<Def>,
     },
     Instantiation {
         name: Name,

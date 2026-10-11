@@ -492,6 +492,7 @@ fn meta_defs_recorded_without_errors() {
         }),
         Node::dummy(DefKind::Outcome {
             name: nm(&mut it, "outcome"),
+            defs: Vec::new(),
             typschm: TypSchm { quant: Vec::new(), typ: unknown_typ() },
             quant: Vec::new(),
         }),

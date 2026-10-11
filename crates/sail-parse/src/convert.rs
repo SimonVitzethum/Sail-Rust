@@ -194,6 +194,15 @@ fn conv_quant_items(c: &mut Ctx, span: Span, q: &Option<g::TypQuant>) -> Result<
                 kid: c.interner.intern(kid),
             }));
         }
+        if matches!(kopt.kind, Some(g::Kind::Nat)) {
+            for kid in &kopt.kids {
+                let kid = c.interner.intern(kid);
+                let variable = c.node(span, NExpKind::Var(kid));
+                let zero = c.node(span, NExpKind::Constant("0".into()));
+                let constraint = c.node(span, ConstraintKind::Ge(variable, zero));
+                out.push(QuantItem::Constraint(constraint));
+            }
+        }
     }
     if let Some(t) = &q.constraint {
         out.push(QuantItem::Constraint(conv_constraint(c, span, t)?));
@@ -313,10 +322,25 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
                 typ: Box::new(conv_typ(c, span, body)?),
             }
         }
+        g::Typ::NSet(members) => {
+            // OCaml to_ast_typ: a finite integer type is an existential
+            // atom constrained to the listed members. The binder is local
+            // to this generated type and cannot capture outer variables.
+            let kid = c.interner.intern("'n");
+            let variable = c.node(span, NExpKind::Var(kid));
+            let constraint = c.node(span, ConstraintKind::Set { nexp: variable, members: members.clone() });
+            let variable = c.node(span, NExpKind::Var(kid));
+            let argument = c.node(span, TypArgKind::NExp(variable));
+            let name = c.name(span, "atom");
+            let typ = c.node(span, TypKind::App { name, args: vec![argument] });
+            TypKind::Exist {
+                binders: vec![KOpt { kind: Kind::Int, kid }],
+                constraint: Box::new(constraint), typ: Box::new(typ),
+            }
+        }
         g::Typ::Lit(_)
         | g::Typ::Dec
         | g::Typ::Inc
-        | g::Typ::NSet(_)
         | g::Typ::If(..)
         | g::Typ::Infix(_) => {
             return Err("type form needs elaboration, no sail-ast core node (see ADAPTER.md)".to_owned());
@@ -1547,10 +1571,18 @@ fn conv_defaux(c: &mut Ctx, span: Span, d: &g::DefAux) -> Result<DefKind, String
         }),
         g::DefAux::Val(v) => Ok(DefKind::Val(conv_valspec(c, span, v)?)),
         g::DefAux::Outcome(spec, defs) => {
-            if !defs.is_empty() {
-                return Err("outcome bodies have no sail-ast core slot".to_owned());
-            }
+            // Outcome-local declarations and implementations remain nested;
+            // local fixities must not escape into subsequent global code.
+            let saved_fixities = c.fixities.clone();
+            let nested = (|| {
+                defs.iter().map(|def| {
+                    let kind = conv_def(c, span, def)?;
+                    Ok(c.node(span, kind))
+                }).collect::<Result<Vec<_>, String>>()
+            })();
+            *c.fixities = saved_fixities;
             Ok(DefKind::Outcome {
+                defs: nested?,
                 name: c.name(span, &spec.name),
                 typschm: conv_typschm(c, span, &spec.typschm)?,
                 quant: conv_quant_items(c, span, &spec.param)?,
