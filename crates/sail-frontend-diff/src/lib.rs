@@ -21,7 +21,7 @@
 //! `ulimit`+`timeout`, same convention as `sail-oracle`); the Rig run itself
 //! happens later (E3: this lane ships code + plan, no executions).
 //!
-//! Known limits (see `FRONTEND_DIFF_PLAN.md`):
+//! Known limits (see `ARCHITECTURE.md`):
 //! - The OCaml dump sifters are heuristic: the exact `--ddump-initial-ast`
 //!   / `--ddump-tc-ast` line shapes are **to verify at the first Rig run**
 //!   against Sail 0.20.3 output. Sifter mismatches must surface as

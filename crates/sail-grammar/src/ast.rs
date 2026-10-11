@@ -3,7 +3,7 @@
 //! Mirrors the syntactic categories of `sail/src/lib/parser.mly`
 //! (`Typ`/`Pat`/`Exp`/`Def` …) but stores raw surface syntax only:
 //! no source locations, no desugaring, no deprecation handling.
-//! Deviations from Menhir behaviour are listed in `GRAMMAR.md`.
+//! Deviations from Menhir behaviour are listed in `ARCHITECTURE.md`.
 
 #![forbid(unsafe_code)]
 

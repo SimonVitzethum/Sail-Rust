@@ -10,7 +10,7 @@
 //! [`crate::SolverPool`].
 //!
 //! ## NExp/NConstraint-Mapping (vollstaendig, siehe Operator-Tabelle in
-//! `docs/nexp-solver-operators.md`)
+//! `ARCHITECTURE.md`)
 //!
 //! - Exakt: Konstanten (beliebig gross, Horner-Basis `2^32`),
 //!   `+`/`-`/`*`/unary `-`, Vergleiche, `=`/`!=` ueber `(NExp, NExp)`

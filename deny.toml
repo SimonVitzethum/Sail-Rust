@@ -3,17 +3,17 @@
 # Prueft: Advisories (RustSec), Lizenzen, Bans, Sources.
 # Aufruf lokal:  cargo deny check advisories licenses bans sources
 # CI-Einbau: Job `deny-audit` in .github/workflows/ci.yml (Lane 91, vorerst
-# warnend per `continue-on-error: true`, bis AUDIT.md-Aktionen A1–A5 stehen).
+# warnend per `continue-on-error: true`, bis WORK_STATE.md-Aktionen A1–A5 stehen).
 #
 # Hinweis: Das Repo checkt derzeit KEIN Cargo.lock ein. `cargo deny check`
 # braucht ein Lockfile (cargo generate-lockfile genuegt, kein Build).
-# Stand Lane 113 (lesend, E3): A2–A5 per Review geschlossen (s. AUDIT.md
+# Stand Lane 113 (lesend, E3): A2–A5 per Review geschlossen (s. WORK_STATE.md
 # Nachtrag), A1 (Lockfile) offen — `deny-audit`-Job in ci.yml bleibt bis
 # dahin warnend (`continue-on-error: true`).
 
 [graph]
 # Alle Targets pruefen (auch Tests/Benches), alle Features aufloesen,
-# damit die optionale z3-Abhaengigkeit (s. AUDIT.md, RUSTSEC-2026-0295)
+# damit die optionale z3-Abhaengigkeit (s. WORK_STATE.md, RUSTSEC-2026-0295)
 # ebenfalls erfasst wird.
 all-features = true
 targets = [
@@ -37,7 +37,7 @@ notice = "warn"
 ignore = []
 # Ohne eingechecktes Cargo.lock keine Version-Pins: cargo-deny nutzt das
 # jeweils frisch aufgeloeste Lockfile. Sobald Cargo.lock eingecheckt ist,
-# gilt der Audit gegen exakt diese Pins (s. AUDIT.md Aktion A1).
+# gilt der Audit gegen exakt diese Pins (s. WORK_STATE.md Aktion A1).
 
 [licenses]
 version = 2

@@ -3,10 +3,10 @@
 //! Lane 01 (`sail-ast`) has not landed yet, so this crate defines the
 //! smallest definition-level AST that lets the parser preserve all
 //! information Lane 11 (sharding) and later lanes need. See
-//! `crates/sail-parse/AST_NEEDED.md` for the expected `sail-ast`
+//! `ARCHITECTURE.md` for the expected `sail-ast`
 //! interface and the migration path.
 //!
-//! Lane 61 status (MIGRATION.md #4–#7): [`Def`]/[`ParsedFile`]/
+//! Lane 61 status (ARCHITECTURE.md #4–#7): [`Def`]/[`ParsedFile`]/
 //! [`SpannedDef`]/[`PragmaArg`] are retained — bodies are raw source
 //! text and only a real expression/type grammar (Lane 02) can lower
 //! them onto `sail_ast::DefKind` with genuine `Exp`/`Typ` nodes, and

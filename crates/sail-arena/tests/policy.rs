@@ -169,7 +169,7 @@ fn unknown_handles_are_rejected() {
 }
 
 // ---------------------------------------------------------------------------
-// Peak-Vergleich vorher/nachher (Fixture, siehe ARENA_REPORT.md)
+// Peak-Vergleich vorher/nachher (Fixture, siehe ARCHITECTURE.md)
 // ---------------------------------------------------------------------------
 
 /// 32-Byte-Nutzlast (steht fuer einen AST-Knoten mit Span + IDs).

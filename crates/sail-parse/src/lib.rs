@@ -8,7 +8,7 @@
 //!
 //! Because Lane 01 (`sail-ast`) has not landed, the AST lives in
 //! [`mini_ast`]; the expected `sail-ast` interface and migration path are
-//! documented in `crates/sail-parse/AST_NEEDED.md`.
+//! documented in `ARCHITECTURE.md`.
 
 #![forbid(unsafe_code)]
 

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Concurrency-interface mirror V1/V2 (`sail-archsem`, Lane 29).
 //!
-//! # Single-Master-Regel (bindend, `DECISIONS.md` E1)
+//! # Single-Master-Regel (bindend, `ARCHITECTURE.md` E1)
 //!
 //! Lean ist Master (mit Beweisen), Rust ist Spiegel: diese Crate definiert
 //! **keine eigene Speichermodell-Semantik**. Jede Abbildung hier spiegelt

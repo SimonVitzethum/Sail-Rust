@@ -25,7 +25,7 @@
 //!
 //! Operator coverage for every backend (`eval`, `simplify`,
 //! sign analysis, Lean kinds, Z3 mapping) is tabulated in
-//! `docs/nexp-solver-operators.md` (Lane 80).
+//! `ARCHITECTURE.md` (Lane 80).
 //!
 //! There is deliberately no solver backend here: every predicate is
 //! conservative (it only answers `true` when the fact follows

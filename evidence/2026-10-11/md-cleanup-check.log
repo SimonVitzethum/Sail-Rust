@@ -1,0 +1,7 @@
+Running as unit: run-p560333-i575869.service
+PASS: exactly five root Markdown files; local links resolve; eight logs and two source fixtures unchanged; existing compiler work preserved; touched shell scripts parse.
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 163ms
+             CPU time consumed: 148ms
+                   Memory peak: 10.3M (swap: 0B)

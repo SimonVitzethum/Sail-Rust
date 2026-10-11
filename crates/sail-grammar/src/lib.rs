@@ -2,7 +2,7 @@
 //!
 //! Pure Rust (`#![forbid(unsafe_code)]`). This crate provides the skeletal
 //! AST ([`ast`]), the hand-written lexer ([`lexer`]), and the LALRPOP
-//! grammar (`src/sail.lalrpop`, E3c/E4 conflict fixes — see `GRAMMAR.md`),
+//! grammar (`src/sail.lalrpop`, E3c/E4 conflict fixes — see `ARCHITECTURE.md`),
 //! compiled to tables by `build.rs` (`lalrpop::process_root()`,
 //! `lalrpop` 0.22 build-dep) and wired up via `lalrpop_mod!(sail)` below.
 //! The `parse_*` entry points tokenize their input and run the generated

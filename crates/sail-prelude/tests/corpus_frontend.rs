@@ -6,7 +6,7 @@
 //! und resolvt mit `sail_resolve::resolve` (Lane 03). Fehler → katalogisiert
 //! als [`sail_prelude::corpus::FileReport`] (Stufe + Meldung); deferred
 //! Bridge-Reste sind KEIN Fehler, nur Lücke mit Owner aus
-//! [`sail_prelude::corpus::CORPUS_FILES`] (siehe `LIB_COVERAGE.md`).
+//! [`sail_prelude::corpus::CORPUS_FILES`] (siehe `WORK_STATE.md`).
 //!
 //! Scope:
 //! - Immer: die 26 vendored Dateien aus `sail_prelude::PRELUDE_FILES`.
@@ -128,7 +128,7 @@ fn report_failures(reports: &[FileReport]) -> String {
 }
 
 /// Vendored Gate: alle 26 `PRELUDE_FILES` müssen parse- + resolve-ok sein
-/// (deferred-Rest erlaubt, mit Owner in `LIB_COVERAGE.md`).
+/// (deferred-Rest erlaubt, mit Owner in `WORK_STATE.md`).
 #[test]
 fn corpus_vendored_frontend_gate() {
     assert_eq!(PRELUDE_FILES.len(), 26, "vendored inventory must be 26 files");

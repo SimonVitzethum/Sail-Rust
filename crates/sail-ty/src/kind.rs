@@ -50,7 +50,7 @@ impl std::fmt::Display for Kind {
 
 /// Kind environment: maps level variables to their kinds.
 ///
-/// Retained (MIGRATION.md #23, Lane 72 decision: kept local, see
+/// Retained (ARCHITECTURE.md #23, Lane 72 decision: kept local, see
 /// [`crate::ast_env`]): a pure binding map, not an AST node;
 /// `sail-ast` has no kind-context type (`Env.t` is checker state, not data).
 /// [`Kind`] itself erases onto `sail_ast::Kind` (see [`crate::conv`]).

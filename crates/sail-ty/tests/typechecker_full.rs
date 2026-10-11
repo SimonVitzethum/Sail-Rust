@@ -3,7 +3,7 @@
 //! E3 — no builds/tests in this lane).
 //!
 //! Every test corresponds to one or more [`sail_ty::RULE_TABLE`] rows; see
-//! `crates/sail-ty/RULES.md`. `rule_table_complete` pins the table ↔ test
+//! `ARCHITECTURE.md`. `rule_table_complete` pins the table ↔ test
 //! mapping so the catalogue cannot drift from the code.
 
 use sail_ty::{

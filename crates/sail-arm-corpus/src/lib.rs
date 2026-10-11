@@ -3,7 +3,7 @@
 //!
 //! Bildet `sail-arm/arm-v9.4-a/src/*.sail` (26 Dateien) auf
 //! `ok-shard` / `defizit-mit-Owner` ab. Die Tabelle ist in
-//! `ARM_COVERAGE.md` (Worktree-Root) festgehalten; dieser Treiber hält
+//! `WORK_STATE.md` (Worktree-Root) festgehalten; dieser Treiber hält
 //! dieselbe Tabelle als Code, damit der Integrator sie außerhalb des
 //! E3-Moratoriums per Test verifizieren kann — **hier wird nichts
 //! ausgeführt** (`cargo`/`lake`-Läufe sind in dieser Lane verboten).
@@ -11,9 +11,9 @@
 //! Methode (lesend, E3-konform): `wc -l` + `grep -nE` auf den
 //! Originaldateien (Top-Level-Köpfe, `throw`/`foreach`/`forall`/
 //! `instantiation`/etc.), abgeglichen mit den Shard-Berichten der
-//! Lanes 31 (`SHARD_REPORT.md`), 32 (`FAILURES_SVE_SME.md`) und 33
-//! (`CORE_REPORT.md`) sowie der Lane-45-Fail-Liste
-//! (`lanes/45-e2e-tiny-arm-fails.md`). Alle Owner sind je genau eine
+//! Lanes 31 (`WORK_STATE.md`), 32 (`WORK_STATE.md`) und 33
+//! (`WORK_STATE.md`) sowie der Lane-45-Fail-Liste
+//! (`WORK_STATE.md`). Alle Owner sind je genau eine
 //! Lane (Spec-Vorgabe); `ok-shard` heißt: Definitions-Split/Scan ist
 //! per Shard-Bericht belegt, volles Lowering bleibt dort verowned.
 
@@ -92,7 +92,7 @@ pub const fn str_eq(a: &str, b: &str) -> bool {
     true
 }
 
-/// Klassifikation je Datei (Spiegel von `ARM_COVERAGE.md`).
+/// Klassifikation je Datei (Spiegel von `WORK_STATE.md`).
 #[must_use]
 pub const fn classify(name: &str) -> Option<FileStatus> {
     // `const fn` mit String-Match: Byte-Vergleich über Schleife ist in

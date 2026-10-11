@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 /// 1-based source position for hard errors: the canonical `sail-ast`
-/// span (Lane 61 unification of MIGRATION.md #41; previously a
+/// span (Lane 61 unification of ARCHITECTURE.md #41; previously a
 /// line/col-only local copy, removed).
 pub use sail_ast::{FileId, Span};
 

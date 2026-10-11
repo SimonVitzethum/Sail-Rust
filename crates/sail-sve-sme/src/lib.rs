@@ -4,7 +4,7 @@
 //! independent shards: definition-level split, vector-pattern/loop catalog
 //! ([`patterns`]), shard report ([`shard`]). No full build, no typecheck —
 //! constructs this stage cannot lower are reported as [`patterns::Fail`]
-//! entries with exact spans (see `FAILURES_SVE_SME.md`).
+//! entries with exact spans (see `WORK_STATE.md`).
 //!
 //! The definition-level scanner (`lexer`, `mini_ast`, `parser`, `span`) is
 //! **not** vendored here: Lane 115 dedup — one truth, one import. These

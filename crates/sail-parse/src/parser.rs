@@ -6,7 +6,7 @@
 //! (parens/brackets/braces, comments and strings respected); bodies are
 //! either brace-balanced blocks or run until the next definition start.
 //! Bodies stay raw source text — full expression/type grammars are later
-//! lanes (see `AST_NEEDED.md`).
+//! lanes (see `ARCHITECTURE.md`).
 //!
 //! Properties:
 //! * streaming per file: O(1) auxiliary state besides the emitted `Def`s;

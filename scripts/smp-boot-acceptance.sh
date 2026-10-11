@@ -82,7 +82,7 @@ fi
 
 note "Lane-50 SMP-Boot-Abnahme ($MODE): smp=$SMP mem=$MEM image=$IMAGE dtb=$DTB"
 note "Erfolgskriterien: K1 Kernel-Einstieg / K2 Secondaries online / K3 Userspace / K4 keine PSCI-GIC-Fehler / K5 2x deterministisch"
-note "Messpunkte (nur Integrator): M1 Wallclock t_boot/t_smp_up/t_userspace, M2 Peak-RSS vs perf/BUDGETS.md, M3 Binary-Groesse, M4 Trace-Groesse"
+note "Messpunkte (nur Integrator): M1 Wallclock t_boot/t_smp_up/t_userspace, M2 Peak-RSS vs TESTING.md, M3 Binary-Groesse, M4 Trace-Groesse"
 
 if [ "$MODE" = "dry-run" ]; then
     check_dtb

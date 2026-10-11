@@ -13,7 +13,7 @@
 //! Memos). Alles andere liegt warm (Datei, OS-Page-Cache) oder kalt
 //! (Disk-Cache, Content-Hash-Key). Cross-Shard-Wissen tragen nur Summaries.
 //!
-//! # Zustaende (Diagramm s. `crates/sail-ooc/DRIVER.md`)
+//! # Zustaende (Diagramm s. `ARCHITECTURE.md`)
 //!
 //! ```text
 //! Idle ── holen/begin ──▶ Hot(Fetch|Typecheck|Rewrite) ── seal ──▶ Sealed

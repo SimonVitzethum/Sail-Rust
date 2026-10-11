@@ -1,10 +1,10 @@
 //! Shard driver (Lane 32): parse + analyze the real SVE/SME shards and
-//! print the `FAILURES_SVE_SME.md` document to stdout.
+//! print the `WORK_STATE.md` document to stdout.
 //!
 //! Usage:
 //! ```sh
 //! cargo run --example shard_sve_sme -- <instrs64_sve.sail> <instrs64_sme.sail> \
-//!   > FAILURES_SVE_SME.md
+//!   > WORK_STATE.md
 //! ```
 //! Peak RSS (`VmHWM`) is reported to stderr and embedded in the document.
 //! Reads the inputs read-only; never writes beside stdout.

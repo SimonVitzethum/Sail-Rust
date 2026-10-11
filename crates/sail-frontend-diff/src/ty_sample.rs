@@ -3,7 +3,7 @@
 //! `--ddump-tc-ast` excerpts for a deterministic per-file sample.
 //!
 //! Full type-AST equality is out of scope (Rust `sail-ty` works on local
-//! minimals; see `TY_NEEDED.md`): instead each sampled definition contributes
+//! minimals; see `ARCHITECTURE.md`): instead each sampled definition contributes
 //! one normalized scheme string, and sampling is deterministic (first `N`
 //! eligible `val`/`register`/`function` definitions in source order) so Rig
 //! runs are reproducible.

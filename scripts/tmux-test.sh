@@ -33,7 +33,7 @@
 #   - "$@" wird als Array durchgereicht, nie re-quotet (ein %q-Join hat -c-Skripte
 #     zerlegt -> Fenster starben instant, Server ohne Fenster beendet sich).
 #
-# Reattach / Bedienung (siehe auch docs/TEST-RIG.md):
+# Reattach / Bedienung (siehe auch TESTING.md):
 #   tmux attach -t SESSION        # anhaengen
 #   Ctrl-b d                      # abhaengen (Run laeuft weiter)
 #   tmux ls                       # Sessions auflisten
@@ -135,7 +135,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
 fi
 
 if ! command -v tmux >/dev/null 2>&1; then
-    echo "FEHLER: tmux nicht gefunden (tmux -V prüfen, siehe docs/TEST-RIG.md)" >&2
+    echo "FEHLER: tmux nicht gefunden (tmux -V prüfen, siehe TESTING.md)" >&2
     exit 1
 fi
 

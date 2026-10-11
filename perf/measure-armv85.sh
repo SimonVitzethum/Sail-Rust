@@ -5,7 +5,7 @@
 # periodisch /proc/<pid>/status (VmHWM = Peak-RSS des Prozesses) ab und
 # schreibt einen JSONL-Record im Lane-14-Format
 # ({"phase","wall_ms","peak_rss_kb","note"}, vgl. sail_perf::PhaseRecord,
-#  lesbar via read_records; siehe perf/BUDGETS.md "Timings-Log").
+#  lesbar via read_records; siehe TESTING.md "Timings-Log").
 #
 # Warum ein zweiter Wrapper neben perf/measure.sh?
 # measure.sh misst exakt (GNU time -v / getrusage) den Peak EINES Kind-

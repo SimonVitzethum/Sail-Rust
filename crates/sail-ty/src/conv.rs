@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 //! Bridges between the local minimal types and the canonical `sail-ast`
-//! nodes (Lane 61 unification, MIGRATION.md §6 steps 2–3).
+//! nodes (Lane 61 unification, ARCHITECTURE.md §6 steps 2–3).
 //!
-//! Mapping (MIGRATION.md #17/#18/#22):
+//! Mapping (ARCHITECTURE.md #17/#18/#22):
 //! - `Nexp::{Const,Var,Add,Sub,Mul,Neg,Exp,If}` map 1:1 onto
 //!   `NExpKind::{Constant,Var,Sum,Minus,Times,Neg,Exp,If}` (`Const` is
 //!   `i128` here vs decimal `String` there; `Var` is `String` here vs
@@ -291,7 +291,7 @@ pub fn constraint_from_ast(c: &Constraint, it: &impl Interner) -> Option<NConstr
 }
 
 // ---------------------------------------------------------------------------
-// Types, schemes, expressions (MIGRATION.md #19-#21)
+// Types, schemes, expressions (ARCHITECTURE.md #19-#21)
 // ---------------------------------------------------------------------------
 // Lowerings for `MiniTyp`/`TypQuant`/`MiniExp` onto the `Typ`/`TypSchm`/
 // `Exp` families. Structural cases are exact; multi-argument application

@@ -10,7 +10,7 @@
 //! assert_eq!(sail_release_meta::version_prefix(), "sail-rs");
 //! ```
 
-/// Präfix, das `sail-rs --version` laut `docs/CLI_NEEDED.md` ausgeben muss.
+/// Präfix, das `sail-rs --version` laut `ARCHITECTURE.md` ausgeben muss.
 #[must_use]
 pub fn version_prefix() -> &'static str {
     "sail-rs"

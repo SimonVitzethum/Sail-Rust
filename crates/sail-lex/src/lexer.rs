@@ -2,7 +2,7 @@
 //! Hand-written Sail2 lexer: bytes in, [`Token`] stream plus [`LexError`]s out.
 //!
 //! Reference behaviour is `sail/src/lib/lexer.mll` (OCaml). Deliberate
-//! deviations are listed in `LEXER_NEEDED.md`.
+//! deviations are listed in `ARCHITECTURE.md`.
 //!
 //! Error policy (fault tolerance): the lexer never fails. Recoverable
 //! problems are pushed to [`LexResult::errors`]; depending on the case an

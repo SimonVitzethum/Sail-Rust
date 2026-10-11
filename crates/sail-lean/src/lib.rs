@@ -55,7 +55,7 @@ pub mod conv;
 pub mod pats;
 
 /// Source position for hard errors: the canonical `sail-ast` span
-/// (Lane 61 unification of MIGRATION.md #28; previously a line/col-only
+/// (Lane 61 unification of ARCHITECTURE.md #28; previously a line/col-only
 /// local copy, removed).
 pub use sail_ast::{FileId, Span};
 

@@ -13,8 +13,8 @@
 //! - [`peak`]: Peak-Messung (live-Set + optional echte Peak-RSS via
 //!   `/proc/self/status`, nur std, nur Linux).
 //!
-//! Messergebnisse stehen in `ARENA_REPORT.md`, Hinweise zur Binaergroesse
-//! (`cargo bloat`) in `BLOAT.md`.
+//! Messergebnisse stehen in `ARCHITECTURE.md`, Hinweise zur Binaergroesse
+//! (`cargo bloat`) in `ARCHITECTURE.md`.
 
 #![forbid(unsafe_code)]
 

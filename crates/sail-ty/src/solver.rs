@@ -10,7 +10,7 @@
 //! -> ProveResult`, `Send + Sync`) ist die Lane-05-lokale Sicht auf den
 //! *gleichen* Vertrag ueber den lokalen Minimaltypen
 //! (`crate::nexp::Nexp`/`NConstraint` mit `String`-Vars, siehe
-//! `TY_NEEDED.md`): gleiche Formel = gleiche Antwort, immer
+//! `ARCHITECTURE.md`): gleiche Formel = gleiche Antwort, immer
 //! terminierend, `Unknown` ist immer sound.
 //!
 //! Abbildung: `Proved <-> Valid`, `Refuted <-> Invalid`,

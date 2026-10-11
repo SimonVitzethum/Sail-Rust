@@ -33,7 +33,7 @@ pub use ops::BitvecOp;
 pub use pat::{
     Pat, check_concat_width, is_bitvector_pat, match_keyword, render_pat, render_vector_concat,
 };
-/// Canonical source spans (Lane 61 unification of MIGRATION.md #44/#45:
+/// Canonical source spans (Lane 61 unification of ARCHITECTURE.md #44/#45:
 /// previously a dependency-free copy of the `sail-ast` shape in
 /// `src/span.rs`, removed).
 pub use sail_ast::{FileId, Span};

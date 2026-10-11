@@ -2,7 +2,7 @@
 //!
 //! NOTE (E3): this test is written as code but NOT executed in this lane —
 //! no local `cargo` runs. Verification happens later via the Test-Rig
-//! (`docs/TEST-RIG.md`, e.g. `scripts/limited-run.sh`), which runs
+//! (`TESTING.md`, e.g. `scripts/limited-run.sh`), which runs
 //! `cargo test -p sail-grammar`. The test parses every `.sail` file in
 //! `crates/sail-prelude/sail-lib` with [`sail_grammar::parse_file`] and
 //! fails listing per-file errors, so Rig output directly shows:

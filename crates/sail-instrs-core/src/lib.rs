@@ -11,7 +11,7 @@
 //! - [`measure`]: vermisst Funktionsrümpfe (Zeilen, Match-Arme `=>`, `if`s).
 //!
 //! Kein Full-Build: Diese Crate parst niemals das Gesamtmodell, sondern immer
-//! nur eine Datei als Strom. Details und Messwerte stehen in `CORE_REPORT.md`.
+//! nur eine Datei als Strom. Details und Messwerte stehen in `WORK_STATE.md`.
 #![forbid(unsafe_code)]
 
 pub mod dispatch;

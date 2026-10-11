@@ -12,7 +12,7 @@
 //!   `insert_scattered`/`lookup_scattered`); der Checker sieht nur
 //!   geschlossene Schemes via `add_val`. Dieser Test haelt fest, dass
 //!   `TypeEnv` dafuer bewusst keine API anbietet (val/register reicht).
-//!   Details: `ENV_COVERAGE.md` (Repo-Root).
+//!   Details: `WORK_STATE.md` (Repo-Root).
 
 use sail_ty::kind::KindEnv;
 use sail_ty::{Kind, MiniTyp, TypeEnv, TypQuant};

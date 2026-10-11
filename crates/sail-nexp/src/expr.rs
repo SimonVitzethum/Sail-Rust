@@ -17,7 +17,7 @@ use sail_ast::Symbol;
 /// one table entry. Build one via an [`Interner`][sail_ast::Interner] and
 /// resolve it back with
 /// [`resolve`][sail_ast::Interner::resolve]. (`Id`/`App` operator names stay
-/// plain `String`s — see `docs/payload-intern-contract.md`.)
+/// plain `String`s — see `ARCHITECTURE.md`.)
 pub type Kid = Symbol;
 
 /// Numeric type-level expression.

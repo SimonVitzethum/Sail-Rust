@@ -32,7 +32,7 @@ pub struct Handle {
 /// Shard-groessenabhaengig dimensionierte Arena ueber `GenArena`s.
 ///
 /// `T` ist nur der Nutzdaten-Typ; die Policy (`budget`, Zaehler) ist
-/// nicht-generisch gehalten (bloat-arm, siehe `BLOAT.md`).
+/// nicht-generisch gehalten (bloat-arm, siehe `ARCHITECTURE.md`).
 #[derive(Clone, Debug, Default)]
 pub struct ShardArena<T> {
     shards: Vec<ShardSlot<T>>,

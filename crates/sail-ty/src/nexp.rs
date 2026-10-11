@@ -4,7 +4,7 @@
 //! These mirror the *shape* of `sail/src/libsail/ast.ml`
 //! (`typ`, `nexp`, `n_constraint`, `typquant`) without copying any logic.
 //! Once `sail-ast` (Lane 01) and `sail-nexp` (Lane 04) exist, replace these
-//! with the real types — see `TY_NEEDED.md` for the field-by-field mapping.
+//! with the real types — see `ARCHITECTURE.md` for the field-by-field mapping.
 //!
 //! Lane 127 bestaetigt: kanonische `NExp`-Wahrheit ist `sail-nexp`
 //! (`NExp`/`NConstraint`/`TypArg`/`NTyp`, internierte `Kid`s); die
@@ -473,7 +473,7 @@ impl TypQuant {
 ///
 /// Lane-127-Notiz (Checker-Minimal, keine Logik-Aenderung): Wahrheit
 /// ist `sail_loops::LoopKind`; dieses Minimal bleibt bis Lane 47
-/// (Typvereinheitlichung, siehe `TY_NEEDED.md`) bestehen.
+/// (Typvereinheitlichung, siehe `ARCHITECTURE.md`) bestehen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MiniLoop {
     While,

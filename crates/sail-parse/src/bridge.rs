@@ -2,7 +2,7 @@
 //!
 //! Stand: Lane 02 liefert nur ein Definitions-Skelett (Header + Rohtext),
 //! Lane 17 (`sail-grammar`) ist Skelett ohne generierte Tabellen (siehe
-//! `crates/sail-grammar/GRAMMAR.md`); die Vollgrammatik für `Exp`/`Typ`
+//! `ARCHITECTURE.md`); die Vollgrammatik für `Exp`/`Typ`
 //! fehlt also. Diese Brücke löst die Lane-61-Blockaden #4–#7
 //! (`Val`/`Fundef`/`Mapdef`/`Scattered`) trotzdem minimalinvasiv auf:
 //! Namen, `rec`-Flag, Fixity-, Overload-, Default- und Pragma-Metadaten
@@ -26,7 +26,7 @@
 //! Platzhalter-Arms nutzen `PatKind::Wild` + `ExpKind::Undef`; es wird nie
 //! Semantik erfunden (leere Klausel-Listen statt Fake-Klauseln bei `Mapdef`,
 //! ein Skelett-`Funcl` pro `Fundef`-Knoten wie bisher ein Knoten pro
-//! `and`-Kette, vgl. `AST_NEEDED.md`).
+//! `and`-Kette, vgl. `ARCHITECTURE.md`).
 
 use sail_ast::{
     Ast, ConstraintKind, DecSpec, Def, DefKind, Exp, ExpKind, FileId, Fixity as AstFixity,

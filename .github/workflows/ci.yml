@@ -12,15 +12,14 @@
 # - unsafe-verbot (BLOCKIEREND, Lane 15): `cargo geiger --forbid-only`
 #   (eigener Code + Deps) plus expliziter unsafe-Token-Grep ueber crates/.
 # - perf-budget (WARNEND, Lane 14): vergleicht die Peaks aus
-#   perf/timings.jsonl gegen perf/BUDGETS.md (kleinstes Budget:
+#   perf/timings.jsonl gegen TESTING.md (kleinstes Budget:
 #   aarch64_small 4 GiB). `continue-on-error: true` — warnt per
 #   ::warning::-Annotation, blockiert aber nicht, bis echte Modell-Peaks
-#   stabil gemessen sind (Tabelle in BUDGETS.md noch ⏳).
+#   stabil gemessen sind (aktueller Stand in WORK_STATE.md).
 # - deny-audit (WARNEND, Lane 91): `cargo deny check advisories licenses
 #   bans sources` gegen deny.toml. `continue-on-error: true` — warnt,
-#   blockiert aber nicht, bis AUDIT.md-Aktionen A1–A5 umgesetzt sind
-#   (Lizenzen/z3 fallen derzeit rot aus). Danach scharf schalten
-#   (`continue-on-error` entfernen).
+#   blockiert derzeit nicht. Vor einer Aktivierung die Ergebnisse neu prüfen;
+#   die Jobdefinition ist kein Nachweis eines aktuellen grünen Audits.
 name: ci
 
 on:
@@ -111,15 +110,15 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Budget-Schranke gegen perf/BUDGETS.md (warnend)
+      - name: Budget-Schranke gegen TESTING.md (warnend)
         run: |
           # Budgets (Lane 14): aarch64_small <4 GiB, arm-v8.5-a <16 GiB,
-          # arm-v9.4-a <24 GiB. Hier gilt die schwaechste Schranke (4 GiB),
+          # arm-v9.4-a <16 GiB. Hier gilt die schwaechste Schranke (4 GiB),
           # solange echte Modell-Peaks ausstehen — Ueberschreitung heisst
           # Shard verkleinern oder Pass in Lane 07/09 zurueckweisen.
           BUDGET_KB=4194304
-          if [ ! -f perf/BUDGETS.md ]; then
-            echo "::warning::perf/BUDGETS.md fehlt — Budget ungeprueft"
+          if [ ! -f TESTING.md ]; then
+            echo "::warning::TESTING.md fehlt — Budget ungeprueft"
             exit 0
           fi
           if [ ! -f perf/timings.jsonl ]; then
@@ -144,9 +143,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.75.0
       - run: cargo check --workspace --all-targets
 
-  # Lane 91, Supply-Chain-Job (WARNEND): Aktionen A1–A5 aus AUDIT.md stehen
-  # noch aus (Lizenzen/z3 fallen rot aus), daher zunaechst warnend.
-  # Sobald A1–A5 umgesetzt sind: `continue-on-error` entfernen (scharf).
+  # Supply-Chain-Job: warnend. Ergebnisse vor einer Verschärfung neu prüfen.
   deny-audit:
     runs-on: ubuntu-latest
     continue-on-error: true

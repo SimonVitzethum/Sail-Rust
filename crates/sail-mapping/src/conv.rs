@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! Bridge between the local mapping fragment and canonical `sail-ast`
-//! nodes (Lane 61 unification, MIGRATION.md #35–#40).
+//! nodes (Lane 61 unification, ARCHITECTURE.md #35–#40).
 //!
 //! Mapping (all lowerings synthesize `NodeId::DUMMY`/`Span::DUMMY` and
 //! intern names through the caller's interner):

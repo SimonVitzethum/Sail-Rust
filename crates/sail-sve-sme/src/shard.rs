@@ -1,5 +1,5 @@
 //! Shard report: renders [`crate::patterns::FileReport`]s as the
-//! `FAILURES_SVE_SME.md` fail list (counts + span-annotated samples).
+//! `WORK_STATE.md` fail list (counts + span-annotated samples).
 
 use crate::patterns::{FailKind, FileReport, PatternKind};
 use std::fmt::Write as _;
@@ -169,7 +169,7 @@ pub fn render_failures_md(
     let _ = writeln!(md, "```sh");
     let _ = writeln!(
         md,
-        "cargo run --example shard_sve_sme -- <path-to>/instrs64_sve.sail <path-to>/instrs64_sme.sail > FAILURES_SVE_SME.md"
+        "cargo run --example shard_sve_sme -- <path-to>/instrs64_sve.sail <path-to>/instrs64_sme.sail > WORK_STATE.md"
     );
     let _ = writeln!(md, "```");
     md

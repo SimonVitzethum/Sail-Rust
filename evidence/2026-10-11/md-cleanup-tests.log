@@ -1,0 +1,100 @@
+Running as unit: run-p560164-i568488.service
+   Compiling sail-ast v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ast)
+   Compiling sail-grammar v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-grammar)
+   Compiling sail-lex v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-lex)
+   Compiling sail-parse v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-parse)
+   Compiling sail-resolve v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-resolve)
+   Compiling sail-prelude v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-prelude)
+   Compiling sail-diag v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-diag)
+    Finished `ci` profile [optimized] target(s) in 1m 12s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 1min 12.800s
+             CPU time consumed: 2min 24.405s
+                   Memory peak: 882.8M (swap: 0B)
+Running as unit: run-p560688-i540580.service
+
+running 3 tests
+test catalog_covers_every_variant_exactly_once ... ok
+test catalog_lines_match_ocaml_failwith_sites ... ok
+test every_row_is_explain_ready ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 23ms
+             CPU time consumed: 12ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p560696-i568518.service
+
+running 2 tests
+test corpus_full_lib_frontend_gate ... ok
+test corpus_vendored_frontend_gate ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 32ms
+             CPU time consumed: 19ms
+                   Memory peak: 2.6M (swap: 0B)
+Running as unit: run-p560703-i540585.service
+
+running 5 tests
+test empty_model_skeleton_check ... ok
+test embedding_present_and_consistent ... ok
+test lookup_unknown_returns_none ... ok
+test inventory_matches_sail_lib ... ok
+test version_is_pinned_to_dune_project ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 24ms
+             CPU time consumed: 10ms
+                   Memory peak: 2.3M (swap: 0B)
+Running as unit: run-p560713-i568519.service
+
+running 14 tests
+test code::tests::codes_are_unique_and_wellformed ... ok
+test error::tests::display_contains_code_span_pass_and_hint ... ok
+test code::tests::explain_str_roundtrips_all_codes ... ok
+test code::tests::format_explain_mentions_code_and_workaround ... ok
+test error::tests::from_entry_takes_hint_from_catalog ... ok
+test error::tests::render_attaches_source_line ... ok
+test error::tests::render_dummy_or_oob_yields_no_snippet ... ok
+test exit::tests::backend_limit_maps_to_4_and_internal_to_101 ... ok
+test exit::tests::batch_picks_worst_code ... ok
+test exit::tests::exit_numbers_are_stable ... ok
+test span::tests::merge_across_files_is_dummy ... ok
+test pass::tests::pass_names_roundtrip ... ok
+test span::tests::merge_covers_both_spans ... ok
+test span::tests::display_dummy_and_ranged ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 18ms
+             CPU time consumed: 13ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p560732-i568534.service
+
+running 7 tests
+test corpus::tests::inventory_paths_unique_and_suffixed ... ok
+test corpus::tests::summary_folds_reports ... ok
+test corpus::tests::owner_lookup_falls_back_to_parser ... ok
+test corpus::tests::inventory_counts_match ... ok
+test corpus::tests::vendored_matches_prelude_inventory ... ok
+test tests::version_is_pinned ... ok
+test tests::empty_model_skeleton_is_present ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 22ms
+             CPU time consumed: 11ms
+                   Memory peak: 2.7M (swap: 0B)

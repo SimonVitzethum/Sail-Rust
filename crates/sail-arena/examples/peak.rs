@@ -1,4 +1,4 @@
-//! Fixture-Runner fuer `ARENA_REPORT.md`: `phased-temps`-Workload.
+//! Fixture-Runner fuer `ARCHITECTURE.md`: `phased-temps`-Workload.
 //!
 //! Aufruf:
 //! ```sh

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! Bridge from canonical `sail-ast` nodes onto the printer subset
-//! (Lane 61 unification, MIGRATION.md #29–#31).
+//! (Lane 61 unification, ARCHITECTURE.md #29–#31).
 //!
 //! This is the future printer input path: canonical nodes lower onto
 //! [`Nexp`][crate::Nexp]/[`Typ`][crate::Typ]/[`TypArg`][crate::TypArg]

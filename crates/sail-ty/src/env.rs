@@ -5,7 +5,7 @@
 //! open/`impl`/`end` state. Open/close linkage lives in `sail-resolve`
 //! (`scattered_functions/_mappings/_variants/_enums` + `insert_scattered` /
 //! `lookup_scattered`); the checker only ever sees *closed* schemes via
-//! [`TypeEnv::add_val`] after resolution. See `ENV_COVERAGE.md` (root).
+//! [`TypeEnv::add_val`] after resolution. See `WORK_STATE.md` (root).
 
 use crate::nexp::{MiniTyp, TypQuant};
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ struct SharedTables {
 /// Cloning is cheap: the program-wide tables are [`Arc`]-shared, only the
 /// locals map is copied.
 ///
-/// Retained (MIGRATION.md #24, Lane 72 decision: kept local, see
+/// Retained (ARCHITECTURE.md #24, Lane 72 decision: kept local, see
 /// [`crate::ast_env`]): `sail-ast` has no `Env.t`; the val/register/local
 /// tables stay here until that lane lands. Schemes lower onto
 /// `sail_ast::TypSchm` (see [`crate::conv`]).

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! Bridge between the local [`NExp`][crate::nexp::NExp] fragment and the
-//! canonical `sail-ast` nodes (Lane 61 unification, MIGRATION.md #34).
+//! canonical `sail-ast` nodes (Lane 61 unification, ARCHITECTURE.md #34).
 //!
 //! Mapping: `Constant/Var/Add/Sub/Mul/Neg` map 1:1 onto
 //! `NExpKind::{Constant,Var,Sum,Minus,Times,Neg}` (`Constant` is `i128`

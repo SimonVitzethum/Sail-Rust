@@ -17,7 +17,7 @@
 //! `#42`-meta (`Impl`, `Fixity`, `Overload`, `Default`, `Pragma`) carry
 //! real names. All of these resolve fully here; expression/type interiors
 //! stay `Unknown`/`Undef` placeholders until Lane 02 (see
-//! `RESOLVE_GAPS.md`).
+//! `ARCHITECTURE.md`).
 
 #![forbid(unsafe_code)]
 
@@ -660,7 +660,7 @@ fn rec_is_rec(rec: &RecOpt) -> bool {
 /// and type-level binders (`TypPat::Var`) are not value bindings and are
 /// skipped. Expression interiors (`ExpKind::Let/Var/For`, guards, bodies)
 /// are *not* walked: bodies are `Undef` placeholders until the Lane-02
-/// grammar lands (see `RESOLVE_GAPS.md`).
+/// grammar lands (see `ARCHITECTURE.md`).
 pub fn pat_names(pat: &Pat, it: &impl Interner) -> Vec<(String, Span)> {
     let mut out = Vec::new();
     let mut pending = vec![pat];

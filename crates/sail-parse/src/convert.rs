@@ -210,7 +210,7 @@ fn conv_kind(k: &g::Kind) -> Result<Kind, String> {
     match k {
         g::Kind::Int => Ok(Kind::Int),
         // `Nat` existiert im Core nicht; beide sind Int-Sorte mit
-        // Nichtnegativitäts-Invariante (siehe ADAPTER.md).
+        // Nichtnegativitäts-Invariante (siehe ARCHITECTURE.md).
         g::Kind::Nat => Ok(Kind::Int),
         g::Kind::Type => Ok(Kind::Type),
         g::Kind::Bool => Ok(Kind::Bool),
@@ -368,7 +368,7 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
         | g::Typ::Inc
         | g::Typ::If(..)
         | g::Typ::Infix(_) => {
-            return Err("type form needs elaboration, no sail-ast core node (see ADAPTER.md)".to_owned());
+            return Err("type form needs elaboration, no sail-ast core node (see ARCHITECTURE.md)".to_owned());
         }
     };
     Ok(c.node(span, kind))
@@ -430,7 +430,7 @@ fn conv_nexp(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<NExp, String> {
             then_branch: Box::new(conv_nexp(c, span, th)?),
             else_branch: Box::new(conv_nexp(c, span, el)?),
         },
-        _ => return Err("not a numeric expression (see ADAPTER.md)".to_owned()),
+        _ => return Err("not a numeric expression (see ARCHITECTURE.md)".to_owned()),
     };
     Ok(c.node(span, kind))
 }
@@ -503,7 +503,7 @@ fn conv_constraint(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Constraint, St
             }
         }
         g::Typ::Infix(chain) => return infix_constraint(c, span, chain),
-        _ => return Err("not a constraint form (see ADAPTER.md)".to_owned()),
+        _ => return Err("not a constraint form (see ARCHITECTURE.md)".to_owned()),
     };
     Ok(c.node(span, kind))
 }
@@ -627,7 +627,7 @@ fn conv_pat(c: &mut Ctx, span: Span, p: &g::Pat) -> Result<Pat, String> {
         },
         g::Pat::Infix(head, tail) => return infix_pat(c, span, head, tail),
         // Oberflächen-`as` trägt einen `Typ`; nur Namen/Variablen sind als
-        // Bindung darstellbar (siehe ADAPTER.md).
+        // Bindung darstellbar (siehe ARCHITECTURE.md).
         g::Pat::As(q, t) => match t {
             g::Typ::Id(s) | g::Typ::Var(s) => PatKind::As {
                 pat: Box::new(conv_pat(c, span, q)?),
@@ -679,7 +679,7 @@ fn infix_pat(
 }
 
 fn conv_mpat(c: &mut Ctx, span: Span, p: &g::MPat) -> Result<Pat, String> {
-    // Mapping-Muster senken auf Wert-Muster (Approximation, ADAPTER.md).
+    // Mapping-Muster senken auf Wert-Muster (Approximation, ARCHITECTURE.md).
     let kind = match p {
         g::MPat::Lit(l) => PatKind::Lit(c.lit(span, l)),
         g::MPat::Id(s) => PatKind::Id(c.name(span, s)),
@@ -863,7 +863,7 @@ fn folded_lexp(c: &mut Ctx, span: Span, tree: &Folded<&g::Exp>) -> Result<LExp, 
 fn conv_fexp_field(c: &mut Ctx, span: Span, f: &g::FieldExp, ready: &mut ExpResults) -> Result<FExp, String> {
     match f {
         // Annahme: erstes Element ist der Feld-Designator (Id), zweites
-        // der Wert (siehe ADAPTER.md).
+        // der Wert (siehe ARCHITECTURE.md).
         g::FieldExp::Field(designator, value) => {
             let g::Exp::Id(n) = &**designator else {
                 return Err("computed struct field has no sail-ast core node".to_owned());
@@ -895,7 +895,7 @@ fn conv_patexp(c: &mut Ctx, span: Span, mut p: &g::PatExp, mut ready: Option<&mu
     while let g::PatExp::Attr(_, inner) = p { p = inner; }
     let kind = match p {
         // Annahme: Tupel-Reihenfolge ist (Muster, Rumpf) bzw.
-        // (Muster, Guard, Rumpf) (siehe ADAPTER.md).
+        // (Muster, Guard, Rumpf) (siehe ARCHITECTURE.md).
         g::PatExp::Exp(q, body) => PExpKind::PatExp {
             pat: conv_pat(c, span, q)?,
             body: match &mut ready { Some(ready) => take_exp(ready, body)?, None => conv_exp(c, span, body)? },
@@ -1348,13 +1348,13 @@ fn conv_tannot(
 
 fn conv_funcl(c: &mut Ctx, span: Span, f: &g::Funcl) -> Result<Funcl, String> {
     // Klausel-Annotationen (`private`/Attr/Doku) haben im Core keinen
-    // `Funcl`-Slot → entfallen (siehe ADAPTER.md).
+    // `Funcl`-Slot → entfallen (siehe ARCHITECTURE.md).
     let (pat, body_guard) = match &f.pat {
         g::GuardedPat::Plain(p) => (conv_pat(c, span, p)?, None),
         g::GuardedPat::Guarded(p, g) => (conv_pat(c, span, p)?, Some(conv_exp(c, span, g)?)),
     };
     let arm_kind = match &f.body {
-        // Annahme: `When` trägt (Guard, Rumpf) (siehe ADAPTER.md).
+        // Annahme: `When` trägt (Guard, Rumpf) (siehe ARCHITECTURE.md).
         g::PatExpBody::Exp(e) => match body_guard {
             None => PExpKind::PatExp {
                 pat,
@@ -1478,7 +1478,7 @@ fn conv_fundef_parts(
     f: &g::FunDef,
 ) -> Result<(RecOpt, TAnnotOpt, Vec<Funcl>), String> {
     // `function rec` ist im Grammatik-AST nicht repräsentiert (kein Flag);
-    // nur ein explizites Maß wird erkannt (siehe ADAPTER.md).
+    // nur ein explizites Maß wird erkannt (siehe ARCHITECTURE.md).
     let rec = match &f.rec_measure {
         None => RecOpt::NonRec,
         Some((p, e)) => RecOpt::Measure {
@@ -1813,7 +1813,7 @@ fn attr_data_string(d: &g::AttrData) -> String {
 fn conv_pragma(p: &g::Pragma) -> (String, String) {
     match p {
         g::Pragma::Line(k, v) => (k.clone(), v.clone()),
-        // Strukturierte Nutzdaten werden kompakt gerendert (ADAPTER.md).
+        // Strukturierte Nutzdaten werden kompakt gerendert (ARCHITECTURE.md).
         g::Pragma::Structured(k, kvs) => {
             let inner: Vec<String> = kvs
                 .iter()
@@ -1957,7 +1957,7 @@ fn conv_def(c: &mut Ctx, span: Span, d: &g::Def) -> Result<DefKind, String> {
             }
             conv_defaux(c, span, a)
         }
-        // Hüllen entfallen (Core-Slots fehlen; siehe ADAPTER.md).
+        // Hüllen entfallen (Core-Slots fehlen; siehe ARCHITECTURE.md).
         g::Def::Private(inner) => conv_def(c, span, inner),
         g::Def::Attr(_, inner) => conv_def(c, span, inner),
         g::Def::Doc(_, inner) => conv_def(c, span, inner),

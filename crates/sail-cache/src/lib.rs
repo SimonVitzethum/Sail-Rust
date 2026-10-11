@@ -51,12 +51,12 @@ const MAX_ID_LEN: usize = 128;
 /// `sail_shard::{Fingerprint, fingerprint}` (`sail-shard`, Lane 11:
 /// blake3-256 ueber `(pass_version, content)` mit Laengen-Prefix,
 /// 64-Hex, `fingerprint_all` parallel). Dieser Typ hier ist das
-/// FNV-1a-64-Minimal aus `CACHE_NEEDED.md` (16-Hex, Lane-36-lokal,
+/// FNV-1a-64-Minimal aus `ARCHITECTURE.md` (16-Hex, Lane-36-lokal,
 /// toolchain-stabil): Test-Vehikel, bis `sail-shard` echte Typen
 /// lieferte — was seit Lane 11 der Fall ist.
 ///
 /// Migrationsnotiz (Owner-Folgearbeit): `ShardFingerprint` durch
-/// `sail_shard::Fingerprint` ersetzen. Beachten: Der `CACHE_NEEDED.md`-
+/// `sail_shard::Fingerprint` ersetzen. Beachten: Der `ARCHITECTURE.md`-
 /// Hinweis "beide sind 16-Hex-FNV, kein Layout-Wechsel" ist ueberholt —
 /// blake3 liefert 64-Hex, d. h. der *Inhalt* der `fingerprint`-Datei im
 /// Eintrag wechselt (Cache-Invalidierung beim Wechsel, alte Eintraege
@@ -70,7 +70,7 @@ const MAX_ID_LEN: usize = 128;
 /// 16 Hex-Zeichen (FNV-1a 64, deterministisch, stabil über
 /// Toolchain-Wechsel hinweg — bewusst kein `DefaultHasher`).
 /// Wird durch den Shard-Fingerprint aus Lane 11 ersetzt, sobald
-/// `sail-shard` echte Typen liefert (siehe `CACHE_NEEDED.md`).
+/// `sail-shard` echte Typen liefert (siehe `ARCHITECTURE.md`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ShardFingerprint(String);
 

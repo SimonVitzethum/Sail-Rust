@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! Bridge from canonical `sail-ast` pattern nodes onto the local bitvector
-//! [`Pat`][crate::pat::Pat] (Lane 61 unification, MIGRATION.md #33).
+//! [`Pat`][crate::pat::Pat] (Lane 61 unification, ARCHITECTURE.md #33).
 //!
 //! One direction only: canonical nodes lower onto the `Wild/Lit/Id/Typ/
 //! Vector/VectorConcat` subset with spans taken from the nodes and widths

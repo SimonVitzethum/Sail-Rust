@@ -26,7 +26,7 @@
 //!   interprozeduralem Pass (Lane 74; Bodies auf Platte).
 //! * [`OocDriverLoop`]/[`DriverPhase`]/[`DriverState`]/[`DriverStats`]:
 //!   fahrtuechtige Driver-Schleife (Lane 83: holen → Phase → sealen →
-//!   spillen → weiter; Budgets je Phase, Zustaende s. `DRIVER.md`).
+//!   spillen → weiter; Budgets je Phase, Zustaende s. `ARCHITECTURE.md`).
 //!
 //! Auf Lane 11 ([`sail_shard`]) und Lane 36 ([`sail_cache`]) wird
 //! aufgesetzt (gelesen, nicht gedoppelt); Lane 37 liefert die

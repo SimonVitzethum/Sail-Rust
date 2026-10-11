@@ -5,7 +5,7 @@
 //! Lake-Skelett). Alles, was einen einheitlichen AST, echte Bodies oder
 //! Solver/Concurrency-Anbindung braucht, wird als [`E2eFail`] mit genau
 //! einem Owner-Lane zurückgegeben statt still zu fehlen — siehe auch
-//! `lanes/45-e2e-tiny-arm-fails.md`.
+//! `WORK_STATE.md`.
 //!
 //! Beachtung:
 //! - E1: Concurrency-`instantiation`s werden nur als Belegstellen
@@ -136,7 +136,7 @@ fn static_fails() -> Vec<E2eFail> {
             "lane-47",
             "sail-parse liefert mini_ast::ParsedFile mit body_src-Rohtext; sail-resolve/\
              sail-ty/sail-lower/sail-effects/sail-mapping haben je eigene Minimaltypen \
-             (je *_NEEDED.md). Blockiert: Resolver, BidirectionalChecker, MemoSolver, \
+             (siehe WORK_STATE.md). Blockiert: Resolver, BidirectionalChecker, MemoSolver, \
              effect_label, lower_shard, realize_mapping."
                 .to_string(),
         ),

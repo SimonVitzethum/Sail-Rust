@@ -7,7 +7,7 @@
 //! - Value patterns (`check_pat`)
 //! - Register type checking
 //! - Subsumption + numeric coercions ([`subsume`])
-//! - Rule catalogue ([`rules::RULE_TABLE`], mirrored in `RULES.md`)
+//! - Rule catalogue ([`rules::RULE_TABLE`], mirrored in `ARCHITECTURE.md`)
 //! - [`Solver`] trait (`prove(nc) -> ProveResult`) + [`StubSolver`] for tests
 //! - [`prove`]: solver context (`NC_set`/`NC_app` paths, kind environments,
 //!   `val`/`register` schemes and `scattered` clauses as assumptions —
@@ -16,7 +16,7 @@
 //! No Z3 binding here (Lane 06/80 implement [`Solver`] via their backends;
 //! rule `Z-TraitOnly`). Everything solver-dependent is generic over the
 //! trait, and `Unknown` answers are always sound (errors at proof sites).
-//! AST/nexp types are local minimals; see `TY_NEEDED.md` for the mapping to
+//! AST/nexp types are local minimals; see `ARCHITECTURE.md` for the mapping to
 //! the future `sail-ast` / `sail-nexp` crates.
 
 pub mod advanced;

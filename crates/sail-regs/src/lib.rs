@@ -9,11 +9,11 @@
 //!
 //! Lane-01 mapping: [`MinimalDef::Register`] mirrors
 //! `sail-ast` `DefKind::Register(DecSpec)` (`typ`, `name`,
-//! `init: Option<Exp>`); see `REGS_NEEDED.md`. The [`bridge`] module converts
+//! `init: Option<Exp>`); see `ARCHITECTURE.md`. The [`bridge`] module converts
 //! real `sail-ast` defs (migration entries #26/#27); the local minimal types
 //! below stay as the plain-data input surface.
 //!
-//! Lane 61 status (MIGRATION.md #26/#27): [`MinimalDef`]/[`SailTyp`] are
+//! Lane 61 status (ARCHITECTURE.md #26/#27): [`MinimalDef`]/[`SailTyp`] are
 //! retained — renderings (`bits(64)` spellings, optional init text) need
 //! the Lane-10 `TypKind` pretty-printer and a real expression grammar
 //! before they can lower onto `DecSpec{typ: Typ, init: Option<Exp>}`,
@@ -111,7 +111,7 @@ pub fn extract_registers(defs: &[MinimalDef]) -> Vec<RegisterDef> {
 /// Parse `register <name> : <typ> [= <init>]` lines out of Sail source.
 ///
 /// Tiny line-based helper for fixtures/tests; the real frontend feeds
-/// [`MinimalDef`] directly (see `REGS_NEEDED.md`). Lines starting with
+/// [`MinimalDef`] directly (see `ARCHITECTURE.md`). Lines starting with
 /// `//` and empty lines are skipped; trailing `//` comments are cut.
 #[must_use]
 pub fn parse_register_lines(src: &str) -> Vec<MinimalDef> {
@@ -462,7 +462,7 @@ impl RegisterInfo {
     /// (`initial_regstate` hook the backend emits next to the
     /// `reset.sail` functions).
     ///
-    /// E2 (`DECISIONS.md`): this crate never emits a `sorry` placeholder.
+    /// E2 (`ARCHITECTURE.md`): this crate never emits a `sorry` placeholder.
     /// Translating the Sail initializer expressions in
     /// [`Self::initial_values`] to Lean terms needs the Sail→Lean
     /// expression printer, which is not wired up here — so a non-empty

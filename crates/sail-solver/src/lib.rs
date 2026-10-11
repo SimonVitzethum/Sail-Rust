@@ -18,7 +18,7 @@
 //!   `#![forbid(unsafe_code)]`.
 //!
 //! Operator-Tabelle (`eval`/`simplify`/`provably_*`/Lean/Z3 je Operator):
-//! `docs/nexp-solver-operators.md` (Lane 80).
+//! `ARCHITECTURE.md` (Lane 80).
 
 mod cache;
 pub mod canonical;

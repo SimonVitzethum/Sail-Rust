@@ -2,7 +2,7 @@
 //! Error type with spans.
 //!
 //! Spans are the canonical `sail-ast` type (Lane 61 unification of
-//! MIGRATION.md #25; previously a divergent local copy with `file: u32`
+//! ARCHITECTURE.md #25; previously a divergent local copy with `file: u32`
 //! and a `0/0/0` DUMMY sentinel, removed).
 
 /// Canonical source span (re-exported from `sail-ast`).

@@ -15,7 +15,7 @@ pub struct CorpusFile {
     pub rel: &'static str,
     /// `true`, wenn in `sail-prelude/sail-lib/` vendored (Top-Level-26).
     pub vendored: bool,
-    /// Owner-Lane bei Lücke (Lane-Spec-Pfad).
+    /// Current work-state document for remaining gaps (legacy field name).
     pub owner: &'static str,
     /// Erwartete Lücke / Notiz (kurz, Rig verifiziert).
     pub note: &'static str,
@@ -24,68 +24,68 @@ pub struct CorpusFile {
 /// Alle 59 `.sail`-Dateien unter `sail/lib/` (Top-Level 26 + Unterverzeichnisse).
 pub static CORPUS_FILES: &[CorpusFile] = &[
     // --- Top-Level (26, vendored) ---
-    CorpusFile { rel: "arith.sail", vendored: true, owner: "lanes/07-rewrites-core.md", note: "Top-Level-`let` (smt/arith-Niveau) → Bridge-deferred, Lane 07" },
-    CorpusFile { rel: "asl_compat.sail", vendored: true, owner: "lanes/02-parser.md", note: "val/pragma only, voll gebridged erwartet" },
-    CorpusFile { rel: "concurrency_interface.sail", vendored: true, owner: "lanes/29-concurrency-archsem.md", note: "Deklarationshülle, voll gebridged erwartet" },
-    CorpusFile { rel: "dec_bits.sail", vendored: true, owner: "lanes/02-parser.md", note: "val/function, voll gebridged erwartet" },
-    CorpusFile { rel: "elf.sail", vendored: true, owner: "lanes/34-elfmain-executable.md", note: "val/pragma only, voll gebridged erwartet" },
-    CorpusFile { rel: "exception.sail", vendored: true, owner: "lanes/11-sharding-incremental.md", note: "`scattered union exception` → Bridge-deferred, Lane 11 (+28)" },
-    CorpusFile { rel: "exception_basic.sail", vendored: true, owner: "lanes/30-structs-enums-unions.md", note: "`union exception` → Bridge-deferred (Type), Lane 30" },
-    CorpusFile { rel: "exception_result.sail", vendored: true, owner: "lanes/28-early-return-except.md", note: "`union clause exception` → Bridge-deferred, Lane 28 (+11)" },
-    CorpusFile { rel: "float.sail", vendored: true, owner: "lanes/30-structs-enums-unions.md", note: "`type rounding_mode` → Bridge-deferred, Lane 30 (+24)" },
-    CorpusFile { rel: "flow.sail", vendored: true, owner: "lanes/30-structs-enums-unions.md", note: "`type bit` → Bridge-deferred, Lane 30" },
-    CorpusFile { rel: "generic_equality.sail", vendored: true, owner: "lanes/02-parser.md", note: "val/function/overload, voll gebridged erwartet" },
-    CorpusFile { rel: "hex_bits.sail", vendored: true, owner: "lanes/22-bitvector-semantics.md", note: "val/function, voll gebridged erwartet" },
-    CorpusFile { rel: "hex_bits_signed.sail", vendored: true, owner: "lanes/22-bitvector-semantics.md", note: "val/function, voll gebridged erwartet" },
-    CorpusFile { rel: "isla.sail", vendored: true, owner: "lanes/02-parser.md", note: "val/function, voll gebridged erwartet" },
-    CorpusFile { rel: "mapping.sail", vendored: true, owner: "lanes/20-mapping-encdec.md", note: "Mapdef gebridged, Body-Rohtext im Sidecar" },
-    CorpusFile { rel: "mono_rewrites.sail", vendored: true, owner: "lanes/07-rewrites-core.md", note: "function/val, voll gebridged erwartet" },
-    CorpusFile { rel: "option.sail", vendored: true, owner: "lanes/30-structs-enums-unions.md", note: "`union option` → Bridge-deferred, Lane 30" },
-    CorpusFile { rel: "prelude.sail", vendored: true, owner: "lanes/11-sharding-incremental.md", note: "nur `$include`-Pragmas → Pragma-Nodes, Lane 11" },
-    CorpusFile { rel: "real.sail", vendored: true, owner: "lanes/24-real-support.md", note: "val/function, voll gebridged erwartet" },
-    CorpusFile { rel: "result.sail", vendored: true, owner: "lanes/30-structs-enums-unions.md", note: "`union result` → Bridge-deferred, Lane 30" },
-    CorpusFile { rel: "reverse_endianness.sail", vendored: true, owner: "lanes/22-bitvector-semantics.md", note: "val/function, voll gebridged erwartet" },
-    CorpusFile { rel: "smt.sail", vendored: true, owner: "lanes/07-rewrites-core.md", note: "Top-Level-`let` → Bridge-deferred, Lane 07" },
-    CorpusFile { rel: "string.sail", vendored: true, owner: "lanes/02-parser.md", note: "val/overload/pragma, voll gebridged erwartet" },
-    CorpusFile { rel: "vector.sail", vendored: true, owner: "lanes/30-structs-enums-unions.md", note: "`type bits` → Bridge-deferred, Lane 30 (+22)" },
-    CorpusFile { rel: "vector_dec.sail", vendored: true, owner: "lanes/11-sharding-incremental.md", note: "nur `$include <vector.sail>`, Lane 11" },
-    CorpusFile { rel: "vector_inc.sail", vendored: true, owner: "lanes/11-sharding-incremental.md", note: "nur `$include <vector.sail>`, Lane 11" },
+    CorpusFile { rel: "arith.sail", vendored: true, owner: "WORK_STATE.md", note: "Top-Level-`let` (smt/arith-Niveau) → Bridge-deferred, Lane 07" },
+    CorpusFile { rel: "asl_compat.sail", vendored: true, owner: "WORK_STATE.md", note: "val/pragma only, voll gebridged erwartet" },
+    CorpusFile { rel: "concurrency_interface.sail", vendored: true, owner: "WORK_STATE.md", note: "Deklarationshülle, voll gebridged erwartet" },
+    CorpusFile { rel: "dec_bits.sail", vendored: true, owner: "WORK_STATE.md", note: "val/function, voll gebridged erwartet" },
+    CorpusFile { rel: "elf.sail", vendored: true, owner: "WORK_STATE.md", note: "val/pragma only, voll gebridged erwartet" },
+    CorpusFile { rel: "exception.sail", vendored: true, owner: "WORK_STATE.md", note: "`scattered union exception` → Bridge-deferred, Lane 11 (+28)" },
+    CorpusFile { rel: "exception_basic.sail", vendored: true, owner: "WORK_STATE.md", note: "`union exception` → Bridge-deferred (Type), Lane 30" },
+    CorpusFile { rel: "exception_result.sail", vendored: true, owner: "WORK_STATE.md", note: "`union clause exception` → Bridge-deferred, Lane 28 (+11)" },
+    CorpusFile { rel: "float.sail", vendored: true, owner: "WORK_STATE.md", note: "`type rounding_mode` → Bridge-deferred, Lane 30 (+24)" },
+    CorpusFile { rel: "flow.sail", vendored: true, owner: "WORK_STATE.md", note: "`type bit` → Bridge-deferred, Lane 30" },
+    CorpusFile { rel: "generic_equality.sail", vendored: true, owner: "WORK_STATE.md", note: "val/function/overload, voll gebridged erwartet" },
+    CorpusFile { rel: "hex_bits.sail", vendored: true, owner: "WORK_STATE.md", note: "val/function, voll gebridged erwartet" },
+    CorpusFile { rel: "hex_bits_signed.sail", vendored: true, owner: "WORK_STATE.md", note: "val/function, voll gebridged erwartet" },
+    CorpusFile { rel: "isla.sail", vendored: true, owner: "WORK_STATE.md", note: "val/function, voll gebridged erwartet" },
+    CorpusFile { rel: "mapping.sail", vendored: true, owner: "WORK_STATE.md", note: "Mapdef gebridged, Body-Rohtext im Sidecar" },
+    CorpusFile { rel: "mono_rewrites.sail", vendored: true, owner: "WORK_STATE.md", note: "function/val, voll gebridged erwartet" },
+    CorpusFile { rel: "option.sail", vendored: true, owner: "WORK_STATE.md", note: "`union option` → Bridge-deferred, Lane 30" },
+    CorpusFile { rel: "prelude.sail", vendored: true, owner: "WORK_STATE.md", note: "nur `$include`-Pragmas → Pragma-Nodes, Lane 11" },
+    CorpusFile { rel: "real.sail", vendored: true, owner: "WORK_STATE.md", note: "val/function, voll gebridged erwartet" },
+    CorpusFile { rel: "result.sail", vendored: true, owner: "WORK_STATE.md", note: "`union result` → Bridge-deferred, Lane 30" },
+    CorpusFile { rel: "reverse_endianness.sail", vendored: true, owner: "WORK_STATE.md", note: "val/function, voll gebridged erwartet" },
+    CorpusFile { rel: "smt.sail", vendored: true, owner: "WORK_STATE.md", note: "Top-Level-`let` → Bridge-deferred, Lane 07" },
+    CorpusFile { rel: "string.sail", vendored: true, owner: "WORK_STATE.md", note: "val/overload/pragma, voll gebridged erwartet" },
+    CorpusFile { rel: "vector.sail", vendored: true, owner: "WORK_STATE.md", note: "`type bits` → Bridge-deferred, Lane 30 (+22)" },
+    CorpusFile { rel: "vector_dec.sail", vendored: true, owner: "WORK_STATE.md", note: "nur `$include <vector.sail>`, Lane 11" },
+    CorpusFile { rel: "vector_inc.sail", vendored: true, owner: "WORK_STATE.md", note: "nur `$include <vector.sail>`, Lane 11" },
     // --- core (1, extern) ---
-    CorpusFile { rel: "core/corelib.sail", vendored: false, owner: "lanes/02-parser.md", note: "val/function only, voll gebridged erwartet" },
+    CorpusFile { rel: "core/corelib.sail", vendored: false, owner: "WORK_STATE.md", note: "val/function only, voll gebridged erwartet" },
     // --- float (21, extern) ---
-    CorpusFile { rel: "float/add.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/arith_internal.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/classify.sail", vendored: false, owner: "lanes/30-structs-enums-unions.md", note: "`enum float_class` → Bridge-deferred, Lane 30 (+24)" },
-    CorpusFile { rel: "float/common.sail", vendored: false, owner: "lanes/19-register-model.md", note: "type/let/register/struct → deferred (30/07/19), Owner Register-Modell" },
-    CorpusFile { rel: "float/eq.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/ge.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/ge_quiet.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/gt.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/gt_quiet.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/inf.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/interface.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/le.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/le_quiet.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/lt.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/lt_quiet.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/nan.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/ne.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/normal.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/rounding.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/sign.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
-    CorpusFile { rel: "float/zero.sail", vendored: false, owner: "lanes/24-real-support.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/add.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/arith_internal.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/classify.sail", vendored: false, owner: "WORK_STATE.md", note: "`enum float_class` → Bridge-deferred, Lane 30 (+24)" },
+    CorpusFile { rel: "float/common.sail", vendored: false, owner: "WORK_STATE.md", note: "type/let/register/struct → deferred (30/07/19), Owner Register-Modell" },
+    CorpusFile { rel: "float/eq.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/ge.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/ge_quiet.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/gt.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/gt_quiet.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/inf.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/interface.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/le.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/le_quiet.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/lt.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/lt_quiet.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/nan.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/ne.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/normal.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/rounding.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/sign.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
+    CorpusFile { rel: "float/zero.sail", vendored: false, owner: "WORK_STATE.md", note: "float-Ops, gebridged erwartet" },
     // --- concurrency_interface (11, extern) ---
-    CorpusFile { rel: "concurrency_interface/barrier.sail", vendored: false, owner: "lanes/08-callgraph-effects.md", note: "`outcome sail_barrier` → Bridge-deferred, Lane 08 (+29)" },
-    CorpusFile { rel: "concurrency_interface/cache_op.sail", vendored: false, owner: "lanes/08-callgraph-effects.md", note: "`outcome sail_cache_op` → Bridge-deferred, Lane 08 (+29)" },
-    CorpusFile { rel: "concurrency_interface/common.sail", vendored: false, owner: "lanes/29-concurrency-archsem.md", note: "concurrency-Deklarationen, Lücke je Konstrukt (30/19/07/08)" },
-    CorpusFile { rel: "concurrency_interface/emulator_memory.sail", vendored: false, owner: "lanes/29-concurrency-archsem.md", note: "concurrency-Deklarationen, Lücke je Konstrukt" },
-    CorpusFile { rel: "concurrency_interface/exception.sail", vendored: false, owner: "lanes/08-callgraph-effects.md", note: "mehrere `outcome` → Bridge-deferred, Lane 08 (+29)" },
-    CorpusFile { rel: "concurrency_interface/read_write.sail", vendored: false, owner: "lanes/29-concurrency-archsem.md", note: "concurrency-Deklarationen, Lücke je Konstrukt" },
-    CorpusFile { rel: "concurrency_interface/read_write_v1.sail", vendored: false, owner: "lanes/30-structs-enums-unions.md", note: "struct/enum/union/register/let/outcome → deferred (30/19/07/08), Owner Typedef" },
-    CorpusFile { rel: "concurrency_interface/read_write_v2.sail", vendored: false, owner: "lanes/04-nexp-constraint.md", note: "struct/register/let/outcome/constraint → deferred, Owner NExp/Constraint" },
-    CorpusFile { rel: "concurrency_interface/sysreg.sail", vendored: false, owner: "lanes/08-callgraph-effects.md", note: "`outcome sail_sys_reg_*` → Bridge-deferred, Lane 08 (+29)" },
-    CorpusFile { rel: "concurrency_interface/tlbi.sail", vendored: false, owner: "lanes/08-callgraph-effects.md", note: "`outcome sail_tlbi` → Bridge-deferred, Lane 08 (+29)" },
-    CorpusFile { rel: "concurrency_interface/translation.sail", vendored: false, owner: "lanes/08-callgraph-effects.md", note: "`outcome sail_translation_*` → Bridge-deferred, Lane 08 (+29)" },
+    CorpusFile { rel: "concurrency_interface/barrier.sail", vendored: false, owner: "WORK_STATE.md", note: "`outcome sail_barrier` → Bridge-deferred, Lane 08 (+29)" },
+    CorpusFile { rel: "concurrency_interface/cache_op.sail", vendored: false, owner: "WORK_STATE.md", note: "`outcome sail_cache_op` → Bridge-deferred, Lane 08 (+29)" },
+    CorpusFile { rel: "concurrency_interface/common.sail", vendored: false, owner: "WORK_STATE.md", note: "concurrency-Deklarationen, Lücke je Konstrukt (30/19/07/08)" },
+    CorpusFile { rel: "concurrency_interface/emulator_memory.sail", vendored: false, owner: "WORK_STATE.md", note: "concurrency-Deklarationen, Lücke je Konstrukt" },
+    CorpusFile { rel: "concurrency_interface/exception.sail", vendored: false, owner: "WORK_STATE.md", note: "mehrere `outcome` → Bridge-deferred, Lane 08 (+29)" },
+    CorpusFile { rel: "concurrency_interface/read_write.sail", vendored: false, owner: "WORK_STATE.md", note: "concurrency-Deklarationen, Lücke je Konstrukt" },
+    CorpusFile { rel: "concurrency_interface/read_write_v1.sail", vendored: false, owner: "WORK_STATE.md", note: "struct/enum/union/register/let/outcome → deferred (30/19/07/08), Owner Typedef" },
+    CorpusFile { rel: "concurrency_interface/read_write_v2.sail", vendored: false, owner: "WORK_STATE.md", note: "struct/register/let/outcome/constraint → deferred, Owner NExp/Constraint" },
+    CorpusFile { rel: "concurrency_interface/sysreg.sail", vendored: false, owner: "WORK_STATE.md", note: "`outcome sail_sys_reg_*` → Bridge-deferred, Lane 08 (+29)" },
+    CorpusFile { rel: "concurrency_interface/tlbi.sail", vendored: false, owner: "WORK_STATE.md", note: "`outcome sail_tlbi` → Bridge-deferred, Lane 08 (+29)" },
+    CorpusFile { rel: "concurrency_interface/translation.sail", vendored: false, owner: "WORK_STATE.md", note: "`outcome sail_translation_*` → Bridge-deferred, Lane 08 (+29)" },
 ];
 
 /// Anzahl aller Korpus-Dateien (26 + 1 + 21 + 11 = 59).
@@ -120,9 +120,9 @@ impl GateStage {
     #[must_use]
     pub fn owner(self) -> &'static str {
         match self {
-            GateStage::Parse => "lanes/02-parser.md",
-            GateStage::Bridge => "lanes/63-parse-unblock.md",
-            GateStage::Resolve => "lanes/03-name-resolve.md",
+            GateStage::Parse => "WORK_STATE.md",
+            GateStage::Bridge => "WORK_STATE.md",
+            GateStage::Resolve => "WORK_STATE.md",
         }
     }
 }
@@ -296,8 +296,8 @@ mod tests {
 
     #[test]
     fn owner_lookup_falls_back_to_parser() {
-        assert_eq!(owner_for("arith.sail"), "lanes/07-rewrites-core.md");
-        assert_eq!(owner_for("float/common.sail"), "lanes/19-register-model.md");
+        assert_eq!(owner_for("arith.sail"), "WORK_STATE.md");
+        assert_eq!(owner_for("float/common.sail"), "WORK_STATE.md");
         assert_eq!(owner_for("nope.sail"), GateStage::Parse.owner());
     }
 

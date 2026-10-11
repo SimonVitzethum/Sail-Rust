@@ -8,7 +8,7 @@
 //! `sail_parse::parse_file` and normalizes via [`crate::norm_tree`].
 //!
 //! E3 note: this module is shipped as code; the Rig run happens later
-//! (see `FRONTEND_DIFF_PLAN.md`). Nothing here spawns processes at
+//! (see `ARCHITECTURE.md`). Nothing here spawns processes at
 //! import time — only [`run_frontend_case`] does, and only the Rig calls it.
 
 use std::path::{Path, PathBuf};

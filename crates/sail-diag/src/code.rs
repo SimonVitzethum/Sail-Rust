@@ -4,9 +4,9 @@
 //!
 //! Each site becomes one [`DiagCode`] variant with a stable `E35xx` code, a
 //! title, the OCaml location (`pretty_print_lean.ml:<line> (<fn>)`), the
-//! message pattern that site prints, a workaround hint, and the lane spec
-//! that owns the fix. Lane done-criterion: every error points at a lane
-//! spec plus a workaround — that is exactly what [`DiagEntry`] carries.
+//! message pattern that site prints, a workaround hint, and the current work
+//! document. Every error points at maintained documentation plus a
+//! workaround — that is exactly what [`DiagEntry`] carries.
 //!
 //! Categories: NExp (E3501) / Typ (E3502) / Pattern (E3503–E3505, E3517–E3518)
 //! / Loop+Match (E3506–E3510) / Assign (E3511) / Expression (E3512) / Fundef
@@ -60,7 +60,7 @@ pub struct DiagEntry {
     pub trigger: &'static str,
     /// What the user can do right now.
     pub workaround: &'static str,
-    /// Lane spec owning the fix, e.g. `"lanes/04-nexp-constraint.md"`.
+    /// Current documentation path; the legacy field name is kept for API compatibility.
     pub lane: &'static str,
     /// Severity class (exit-code mapping).
     pub kind: ErrorKind,
@@ -220,7 +220,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:267 (doc_nexp/atomic)",
         trigger: "NExp <con> <nexp> not translatable yet.",
         workaround: "Rewrite the type-level numeric expression with supported operators (literals, variables, +, -, *, unary -, 2^, if-then-else, div/mod/abs) or specialize it to a concrete nat literal.",
-        lane: "lanes/04-nexp-constraint.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::BackendLimit,
     },
     DiagEntry {
@@ -230,7 +230,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:340 (doc_typ)",
         trigger: "Type <con> <typ> not translatable yet.",
         workaround: "Restate the type with supported constructors (bitvector/bits/vector, int/nat/bool/string/unit, option/list/tuple, register, range over provably-nneg bounds, existentials). Bidirectional and internal-unknown types need a typechecker (Lane 05) or structs/enums (Lane 30) fix.",
-        lane: "lanes/05-typechecker.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::BackendLimit,
     },
     DiagEntry {
@@ -240,7 +240,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:565 (doc_pat)",
         trigger: "Doc Pattern <con> <pat> not translatable yet.",
         workaround: "Use plain pattern forms (wildcards, literals, tuples, vectors, struct/cons/app patterns, as-patterns). Exotic pattern constructors need Lane 21 (exhaustiveness) support.",
-        lane: "lanes/21-pattern-exhaustiveness.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::BackendLimit,
     },
     DiagEntry {
@@ -250,7 +250,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:580 (doc_vector_concat/doc_part P_id)",
         trigger: "Found subpattern with unclear width in bitvector pattern",
         workaround: "Give the bitvector variable an explicit width via a type ascription (P_typ) so the environment records a constant bitvector length.",
-        lane: "lanes/21-pattern-exhaustiveness.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -260,7 +260,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:584 (doc_vector_concat/doc_part)",
         trigger: "Unexpected pattern in match_bv vector_concat pattern <pat>",
         workaround: "Restrict match_bv vector-concat parts to bit literals (binary/hex), width-annotated identifiers, nested vectors, or type-ascribed patterns.",
-        lane: "lanes/21-pattern-exhaustiveness.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -270,7 +270,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:706 (doc_loop_var)",
         trigger: "Bad expression for variable in loop: <exp>",
         workaround: "Bind loop variables to plain identifiers or unit before the loop; move computed loop state into a tuple of identifiers (Lane 27).",
-        lane: "lanes/27-loops.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -280,7 +280,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:753 (doc_match_clause Pat_when)",
         trigger: "The Lean backend does not support 'when' clauses in patterns:",
         workaround: "Move the 'when' guard into the branch body as an if-expression, or switch the match to match_bv form where guards are supported.",
-        lane: "lanes/21-pattern-exhaustiveness.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::BackendLimit,
     },
     DiagEntry {
@@ -290,7 +290,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:779 (doc_loop)",
         trigger: "Unexpected number of arguments for loop combinator",
         workaround: "Internal desugaring error: the loop did not lower to 3 (cond/vars/body) or 4 (+measure) arguments. Minimize the Sail source and file it against Lane 27.",
-        lane: "lanes/27-loops.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -300,7 +300,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:897 (foreach loop-var search)",
         trigger: "Unable to find loop variable in <body>",
         workaround: "Name the foreach loop variable with a plain identifier pattern (optionally type-ascribed) directly bound by the loop body; avoid shadowing or nesting it inside other binders.",
-        lane: "lanes/27-loops.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -310,7 +310,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:917 (foreach combinator)",
         trigger: "Unexpected number of arguments for loop combinator",
         workaround: "Internal desugaring error in the foreach path. Minimize the Sail source and file it against Lane 27.",
-        lane: "lanes/27-loops.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -320,7 +320,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1048 (E_assign)",
         trigger: "assign <lexp> not implemented yet",
         workaround: "Assign only to plain registers (LE_id/LE_typ) or register references (LE_deref). Split field/vector/range updates into explicit temporaries or struct-update expressions (Lane 19).",
-        lane: "lanes/19-register-model.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::BackendLimit,
     },
     DiagEntry {
@@ -330,7 +330,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1077 (doc_exp)",
         trigger: "Expression <con> <exp> not translatable yet.",
         workaround: "Desugar the expression into supported forms (let/if/match/loops, struct ops, monadic combinators) or check the owning feature lane (extern/FFI Lane 25, early-return Lane 28, concurrency Lane 29).",
-        lane: "lanes/07-rewrites-core.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::BackendLimit,
     },
     DiagEntry {
@@ -340,7 +340,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1126 (doc_funcl_init)",
         trigger: "Function <id> does not have function type",
         workaround: "Compiler invariant: the value spec for this function is missing or not a function type. Check that the Sail definition typechecks (Lane 05) and file a reproducer if it does.",
-        lane: "lanes/05-typechecker.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -350,7 +350,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1250 (doc_fundef [])",
         trigger: "FD_function with empty function list",
         workaround: "Compiler invariant: a function definition arrived with no clauses. Check earlier passes (parser/Lane 17, rewrites/Lane 07) and file a reproducer.",
-        lane: "lanes/07-rewrites-core.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -360,7 +360,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1253 (doc_fundef multi)",
         trigger: "FD_function with more than one clause :",
         workaround: "Merge the clauses into a single clause with an explicit match on the argument (rewrites/Lane 07 will eventually do this automatically).",
-        lane: "lanes/07-rewrites-core.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::BackendLimit,
     },
     DiagEntry {
@@ -370,7 +370,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1342 (doc_typdef)",
         trigger: "Type definition <con> not translatable yet.",
         workaround: "Use variant/record/enum/abstract type definitions supported by Lane 30; bitfield and exotic definitions need Lane 30 support first.",
-        lane: "lanes/30-structs-enums-unions.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::BackendLimit,
     },
     DiagEntry {
@@ -380,7 +380,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1366 (doc_val)",
         trigger: "Pattern <con> <pat> not translatable yet.",
         workaround: "Bind top-level lets with a plain identifier (optionally type-ascribed) or an implicit-kid-compatible var pattern; destructure complex values inside the body instead.",
-        lane: "lanes/21-pattern-exhaustiveness.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::BackendLimit,
     },
     DiagEntry {
@@ -390,7 +390,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:200 (untuple_args_pat)",
         trigger: "Unexpected pattern/type combination",
         workaround: "Compiler invariant: function argument patterns do not match the declared argument types. Check that the definition typechecks (Lane 05) and file a reproducer if it does.",
-        lane: "lanes/05-typechecker.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -400,7 +400,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1411 (doc_defs_rec)",
         trigger: "this case of doc_defs_rec should be unreachable",
         workaround: "Compiler invariant: a non-function/non-let definition reached the printer dispatch. File it with the Sail source as reproducer (Lanes 12/38 track dispatch coverage).",
-        lane: "lanes/38-cli-frontend.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -410,7 +410,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1444 (collect_imports_rec)",
         trigger: "this case of collect_imports_rec should be unreachable",
         workaround: "Compiler invariant in the import-splitting walk (Lane 11/12). File it with the Sail source as reproducer.",
-        lane: "lanes/11-sharding-incremental.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -420,7 +420,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1658 (collect_import_files_aux)",
         trigger: "should not be reachable",
         workaround: "Compiler invariant: unbalanced include/file pragmas emptied the file stack. Check that every include_start/file_start has a matching end pragma, then file a reproducer.",
-        lane: "lanes/11-sharding-incremental.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -430,7 +430,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1666 (collect_import_files_aux)",
         trigger: "should not be reachable",
         workaround: "Compiler invariant: a definition was seen with an empty file stack. Same triage as E3521 — check pragma balance, then file a reproducer.",
-        lane: "lanes/11-sharding-incremental.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
     DiagEntry {
@@ -440,7 +440,7 @@ pub static ALL: &[DiagEntry] = &[
         ocaml_site: "pretty_print_lean.ml:1709 (pp_ast_lean)",
         trigger: "expected a single block of instantiation defs",
         workaround: "Compiler invariant in callgraph partitioning (Lane 08): instantiation definitions did not form one block. File it with the Sail source as reproducer.",
-        lane: "lanes/08-callgraph-effects.md",
+        lane: "WORK_STATE.md",
         kind: ErrorKind::Internal,
     },
 ];

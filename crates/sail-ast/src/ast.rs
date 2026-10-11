@@ -122,7 +122,7 @@ pub struct KOpt {
 /// through the caller's [`Interner`][crate::Interner]: repeated literals
 /// share one table entry instead of one `String` per occurrence (Lane 71
 /// payload-intern). JSON snapshots therefore carry numeric payloads (see
-/// `docs/payload-intern-contract.md`).
+/// `ARCHITECTURE.md`).
 pub type Lit = Node<LitKind>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

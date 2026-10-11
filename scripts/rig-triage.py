@@ -20,7 +20,7 @@ Erkannte Fehlerarten (Kind):
     generic-error sonstige Zeilen mit error/FAILED/failure (case-insensitiv)
 
 Cluster-Schluessel: (Art, Datei:Zeile, Meldungsnorm). Owner-Lane: aus
-`crates/<name>/` im Pfad via CRATE_LANES (Quelle: docs/ARCHITECTURE.md §2);
+`crates/<name>/` im Pfad via CRATE_LANES (Quelle: ARCHITECTURE.md §2);
 ohne Crate-Bezug: `-`.
 """
 import argparse
@@ -32,7 +32,7 @@ from collections import Counter
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(REPO, "logs")
 
-# Crate -> Owner-Lane (docs/ARCHITECTURE.md §2, Stand Lane 53).
+# Crate -> Owner-Lane (ARCHITECTURE.md §2, Stand Lane 53).
 CRATE_LANES = {
     "sail-ast": "01", "sail-parse": "02", "sail-resolve": "03",
     "sail-nexp": "04", "sail-ty": "05", "sail-solver": "06",

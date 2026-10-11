@@ -1,7 +1,7 @@
 //! `sail-resolve`: scope resolution and symbol tables for Sail.
 //!
 //! Input is the canonical [`sail_ast::Ast`] (Lane 61 unification,
-//! MIGRATION.md #9–#16; the former `mini_ast` stand-ins are removed).
+//! ARCHITECTURE.md #9–#16; the former `mini_ast` stand-ins are removed).
 //! Output is a [`ResolvedProgram`] containing symbol tables plus the pure
 //! [`compute_ctor_renames`](renames::compute_ctor_renames) map.
 //!

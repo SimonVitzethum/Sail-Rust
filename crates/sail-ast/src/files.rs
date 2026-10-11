@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Central driver file table: path + source text + line resolution (Lane 72).
 //!
-//! Lane-61 rest item (MIGRATION.md #3, #25): spans are bare byte ranges
+//! Lane-61 rest item (ARCHITECTURE.md #3, #25): spans are bare byte ranges
 //! (`FileId` + `[start, end)`), while paths lived on
 //! `sail-parse::ParsedFile` and every diagnostic site recomputed line/column
 //! itself (e.g. `sail-diag::SailError::render`, the `sail-sve-sme` line

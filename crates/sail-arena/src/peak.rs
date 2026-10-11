@@ -4,7 +4,7 @@
 //!
 //! - Logischer Peak: maximale Anzahl gleichzeitig lebender Eintraege mal
 //!   [`core::mem::size_of`]. Das ist allocator-unabhaengig, deterministisch
-//!   und damit die Vergleichsgroesse fuer vorher/nachher (`ARENA_REPORT.md`).
+//!   und damit die Vergleichsgroesse fuer vorher/nachher (`ARCHITECTURE.md`).
 //! - Echte Peak-RSS: `VmHWM` aus `/proc/self/status` (Linux only, sonst
 //!   `None`). Informativ, nicht deterministisch — dokumentiert den
 //!   tatsaechlichen Speichereffekt der Drop-Punkte.
@@ -12,7 +12,7 @@
 /// Geschaetzte Bytes des live-Sets: `live * size_of::<T>()`.
 ///
 /// Absichtlich eine freie, nicht-generische Funktion ueber `elem_size`:
-/// So landet genau eine Kopie im Binaer (siehe `BLOAT.md`), statt einer
+/// So landet genau eine Kopie im Binaer (siehe `ARCHITECTURE.md`), statt einer
 /// Monomorphisierung pro `T`.
 #[must_use]
 pub fn live_bytes_estimate(live: usize, elem_size: usize) -> u64 {

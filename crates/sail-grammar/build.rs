@@ -15,7 +15,7 @@ fn main() {
         eprintln!("       grammar: crates/sail-grammar/src/sail.lalrpop");
         eprintln!("       cause: {err}");
         eprintln!("help: sail.lalrpop must stay LALR(1)-conflict-free; see");
-        eprintln!("      crates/sail-grammar/GRAMMAR.md (E3c/E4 designs) and fix the");
+        eprintln!("      ARCHITECTURE.md (E3c/E4 designs) and fix the");
         eprintln!("      reported state instead of working around it.");
         std::process::exit(1);
     }

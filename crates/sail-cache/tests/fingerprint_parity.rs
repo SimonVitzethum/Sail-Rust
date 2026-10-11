@@ -3,7 +3,7 @@
 //!
 //! Wahrheit: `sail_shard::{Fingerprint, fingerprint}` (blake3-256,
 //! 64-Hex). `sail_cache::{ShardFingerprint, fingerprint}` ist das
-//! FNV-1a-64-Minimal (16-Hex) aus `CACHE_NEEDED.md`. Beide teilen die
+//! FNV-1a-64-Minimal (16-Hex) aus `ARCHITECTURE.md`. Beide teilen die
 //! Laengen-Prefix-Trennschaerfe (`("ab","c") != ("a","bc")`), beide sind
 //! stabil und versions-sensitiv; Formate (16 vs 64 Hex) sind bewusst
 //! verschieden (Migration invalidiert alte `fingerprint`-Dateien via

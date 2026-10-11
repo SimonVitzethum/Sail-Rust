@@ -70,9 +70,12 @@ fn every_row_is_explain_ready() {
             e.code,
             e.ocaml_site
         );
+        let document = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(e.lane);
         assert!(
-            e.lane.starts_with("lanes/") && e.lane.ends_with(".md"),
-            "{} needs a lane spec, got {}",
+            e.lane == "WORK_STATE.md" && document.is_file(),
+            "{} needs the current work-state document, got {}",
             e.code,
             e.lane
         );

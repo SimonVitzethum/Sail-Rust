@@ -5,7 +5,7 @@
 //! `infer`/`check` gaps *inside the `MiniExp`/`MiniPat` subset*. Rules
 //! outside that subset are explicitly [`RuleStatus::Deferred`] with an owner
 //! lane — they are not silent gaps. The human-readable mirror is
-//! `crates/sail-ty/RULES.md`; the machine-readable source of truth is
+//! `ARCHITECTURE.md`; the machine-readable source of truth is
 //! [`RULE_TABLE`], kept in sync by `tests/typechecker_full.rs`
 //! (`rule_table_complete`).
 
@@ -194,7 +194,7 @@ pub enum RuleId {
 }
 
 impl RuleId {
-    /// Stable rule code used in `RULES.md` and diagnostics.
+    /// Stable rule code used in `ARCHITECTURE.md` and diagnostics.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
@@ -386,7 +386,7 @@ pub struct RuleEntry {
 
 const I: RuleStatus = RuleStatus::Implemented;
 
-/// The rule table (Regel → Status → Test). Source of truth; `RULES.md`
+/// The rule table (Regel → Status → Test). Source of truth; `ARCHITECTURE.md`
 /// mirrors it for readers.
 pub static RULE_TABLE: &[RuleEntry] = &[
     RuleEntry { id: RuleId::KConst, status: I, test: "kind_nexp_arith" },

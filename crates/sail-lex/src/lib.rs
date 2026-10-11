@@ -7,7 +7,7 @@
 //!   payload-intern), so repeated identifiers/literals share one table entry.
 //!   Resolve payloads with [`Interner::resolve`].
 //! - [`Span`]/[`FileId`] are re-exports of the canonical `sail-ast` types
-//!   (Lane 61 unification of MIGRATION.md #1/#2; previously a field-identical
+//!   (Lane 61 unification of ARCHITECTURE.md #1/#2; previously a field-identical
 //!   local copy in `src/span.rs`, removed).
 //! - The lexer never fails: see the error policy in [`lexer`].
 //!

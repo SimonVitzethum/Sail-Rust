@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 //! Bridge between the local [`Pat`][crate::Pat] and canonical
-//! `sail-ast` pattern nodes (Lane 61 unification, MIGRATION.md #32).
+//! `sail-ast` pattern nodes (Lane 61 unification, ARCHITECTURE.md #32).
 //!
 //! Mapping: `Wild/Var/Lit/App/Tuple/Vector/VectorConcat/Or/As/Typ/VarTyp/
 //! Struct/List/Cons/StringAppend` map onto the same-named `PatKind`

@@ -2,7 +2,7 @@
 //
 // Conventions of this port:
 // - Menhir tolerates shift/reduce conflicts (resolving to shift), LALRPOP
-//   rejects them. The direct port failed with 4 conflicts (see GRAMMAR.md);
+//   rejects them. The direct port failed with 4 conflicts (see ARCHITECTURE.md);
 //   static audit in Lane 76 found a 5th (`IndexRange` parens, below). The
 //   fixes are validated designs from scratch experiments with
 //   LALRPOP 0.22 (see `/tmp/opencode/laltest`, exit 0):
@@ -57,12 +57,12 @@
 //     productions. Singleton parentheses belong only to Typ, avoiding the
 //     ambiguity of a generic "(" IndexRange ")" wrapper.
 //   - D1/D2 (`Typ` index-range vs tuple, paren vs tuple): UNCHANGED, pending
-//     corpus evaluation via `tests/corpus.rs` (see GRAMMAR.md).
+//     corpus evaluation via `tests/corpus.rs` (see ARCHITECTURE.md).
 // - Every Menhir `A | A B` common-prefix rule is factored to `A B?` with
 //   LALRPOP `?`/`*`.
 // - Semantic actions only call AST constructors. All OCaml helper logic
 //   (`simp_infix`, `same_pat_ops`, deprecation warnings, name mangling,
-//   `fix_extern`, …) is dropped; see GRAMMAR.md.
+//   `fix_extern`, …) is dropped; see ARCHITECTURE.md.
 // - Locations are dropped (byte offsets live in the lexer only).
 
 use crate::ast::*;

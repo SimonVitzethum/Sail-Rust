@@ -12,14 +12,14 @@
 //!   (`sail_lean::Typ`); [`lean_typ_string_of_ast`] renders it with
 //!   `LeanPrinter::print_typ`, falling back to the spelling-based
 //!   `lean_of_sail_typ` for constructs outside the printer subset.
-//! - [`dec_spec_to_minimal`] is the 1:1 conversion fixed in `REGS_NEEDED.md`;
+//! - [`dec_spec_to_minimal`] is the 1:1 conversion fixed in `ARCHITECTURE.md`;
 //!   [`extract_registers_ast`] is the `find_registers` equivalent over
 //!   `&[sail_ast::Def]`. It preserves `has_init` from `DecSpec.init.is_some()`
 //!   even when the initializer is outside the [`try_render_sail_exp`] subset
 //!   (then `init_sail` is `None` and `initial_values()` falls back to the type
 //!   default — the gap stays visible via `has_init == true`).
 //!
-//! Out of scope (stays the typechecker's job, per `REGS_NEEDED.md`):
+//! Out of scope (stays the typechecker's job, per `ARCHITECTURE.md`):
 //! synonym expansion and bitfield base types; callers pass expanded spellings.
 
 use sail_ast::{

@@ -4,7 +4,7 @@
 //! The inventory mirrors `sail/src/lib/token.ml` (OCaml reference): every
 //! keyword, literal, operator and piece of punctuation the parser lane needs.
 //! Payload conventions (`Hex`/`Bin` without prefix, `Num` as decimal text)
-//! match the OCaml lexer; see `LEXER_NEEDED.md` for the swap contract.
+//! match the OCaml lexer; see `ARCHITECTURE.md` for the swap contract.
 //!
 //! Payloads are interned [`Symbol`]s (Lane 71 payload-intern):
 //! [`lex`][crate::lex] takes
