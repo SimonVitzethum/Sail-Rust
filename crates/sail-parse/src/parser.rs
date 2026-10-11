@@ -216,6 +216,21 @@ impl<'a> Scanner<'a> {
         Ok(())
     }
 
+    fn at_doc_comment(&self) -> bool {
+        self.bytes[self.pos..].starts_with(b"///") || self.bytes[self.pos..].starts_with(b"/*!")
+    }
+
+    // Documentation is a definition prefix, not discardable trivia.
+    fn skip_definition_trivia(&mut self) -> Result<(), ParseError> {
+        loop {
+            while self.peek().is_some_and(|b| b.is_ascii_whitespace()) { self.bump(1); }
+            if self.at_doc_comment() { return Ok(()); }
+            if self.peek() == Some(b'/') && matches!(self.peek_at(1), Some(b'/') | Some(b'*')) {
+                self.skip_comment()?;
+            } else { return Ok(()); }
+        }
+    }
+
     /// Read an identifier at the cursor. Returns text + span.
     fn read_ident(&mut self) -> Option<(String, Span)> {
         let from = self.cur();
@@ -420,7 +435,8 @@ impl<'a> Scanner<'a> {
                         w += 1;
                     }
                     let word = &self.src[p..w];
-                    let is_next_def = is_starter(word) || self.bytes.get(p) == Some(&b'$');
+                    let is_next_def = is_starter(word) || self.bytes.get(p) == Some(&b'$')
+                        || self.bytes[p..].starts_with(b"///") || self.bytes[p..].starts_with(b"/*!");
                     let is_blank = self.bytes.get(p) == Some(&b'\n');
                     if is_next_def || is_blank || p >= self.bytes.len() {
                         // Rewind to before the newline; caller skips trivia.
@@ -468,6 +484,9 @@ impl<'a> Scanner<'a> {
                 Some(b'/')
                     if matches!(self.peek_at(1), Some(b'/') | Some(b'*')) =>
                 {
+                    if at_line_start && paren == 0 && bracket == 0 && brace == 0 && self.at_doc_comment() {
+                        return Ok(self.slice(start, end).trim_end().to_owned());
+                    }
                     self.skip_comment()?;
                     // Comments don't extend the significant end.
                     at_line_start = false;
@@ -609,7 +628,7 @@ impl std::iter::FusedIterator for Definitions<'_> {}
 impl Definitions<'_> {
     fn next_definition(&mut self) -> Result<SpannedDef, ParseError> {
         let sc = &mut self.scanner;
-        sc.skip_trivia_all()?;
+        sc.skip_definition_trivia()?;
         if sc.eof() {
             self.finished = true;
             return Ok(SpannedDef::new(
@@ -621,11 +640,11 @@ impl Definitions<'_> {
         // Attributes wrap the following definition, including on the same
         // line. Keep them in its exact source span rather than emitting an
         // unrelated pragma or discarding the rest of that line.
-        while sc.peek() == Some(b'$') && sc.peek_at(1) == Some(b'[') {
-            parse_pragma(sc)?;
-            sc.skip_trivia_all()?;
+        while (sc.peek() == Some(b'$') && sc.peek_at(1) == Some(b'[')) || sc.at_doc_comment() {
+            if sc.at_doc_comment() { sc.skip_comment()?; } else { parse_pragma(sc)?; }
+            sc.skip_definition_trivia()?;
             if sc.eof() {
-                return Err(sc.err(def_start, sc.cur(), "attribute without a following definition"));
+                return Err(sc.err(def_start, sc.cur(), "attribute or documentation without a following definition"));
             }
         }
         if sc.peek() == Some(b'$') {

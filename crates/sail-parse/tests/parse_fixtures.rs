@@ -234,6 +234,21 @@ fn existential_signature_does_not_consume_its_following_function() {
 }
 
 #[test]
+fn documentation_wraps_the_next_definition_without_becoming_signature_text() {
+    let source = "val f : int -> int\n/*! Next function */\n$[never_fold]\nfunction f(x) = x\n/// Next value\nval g : int -> int\n";
+    let parsed = parse_file("docs.sail", source).unwrap();
+    assert_eq!(parsed.defs.len(), 5);
+    let first = &parsed.defs[1];
+    assert!(!source[first.span.start as usize..first.span.end as usize].contains("/*!"));
+    let function = &parsed.defs[2];
+    assert!(source[function.span.start as usize..function.span.end as usize].starts_with("/*!"));
+    assert!(matches!(function.def, Def::Fundef { .. }));
+    let next = &parsed.defs[3];
+    assert!(source[next.span.start as usize..next.span.end as usize].starts_with("///"));
+    assert!(matches!(next.def, Def::Val { .. }));
+}
+
+#[test]
 fn parallel_matches_sequential() {
     let a = fixture("fundefs.sail");
     let b = fixture("registers_types.sail");
