@@ -115,7 +115,7 @@ fn from_report_converts_wall_to_ms() {
 fn budgets_have_spec_values() {
     assert_eq!(BUDGETS[0], Budget::new("aarch64_small", 4));
     assert_eq!(BUDGETS[1], Budget::new("arm-v8.5-a", 16));
-    assert_eq!(BUDGETS[2], Budget::new("arm-v9.4-a", 24));
+    assert_eq!(BUDGETS[2], Budget::new("arm-v9.4-a", 16));
     assert_eq!(BUDGETS[0].limit_kib, 4 * KIB_PER_GIB);
     assert!(BUDGETS[0].fits(1024));
     assert!(!BUDGETS[0].fits(4 * KIB_PER_GIB + 1));

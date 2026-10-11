@@ -1,3 +1,23 @@
+# Current adapter status (2026-10-11)
+
+The LALRPOP tables are generated and the real-entry tests now run normally.
+`RealParser` carries explicit fixity state with OCaml defaults. Expression,
+numeric and constraint infix chains use the shared folding implementation.
+Builtin argument sorts, refined `int`/`bool` names, function argument tuples,
+and numeric/bool alias bodies now match the reference conversion.
+`parse_file_real` tries the exact source of every definition, including
+functions, before its legacy fallback. It still collects a file and tolerates
+unsupported conversion via the unparsed sidecar. It is not a full compiler.
+
+Open: user constructor kind inference, omitted binder kinds, attributes and
+visibility, precise descendant spans, several expression forms, full typed
+elaboration, rewrites and Lean body emission. A driver must reject gaps.
+
+The following original lane notes are historical and describe the earlier
+stub state; they are retained as migration context.
+
+---
+
 # ADAPTER.md — Lane 77: echte Einstiege gegen die Grammatik-Schnittstelle
 
 Stand: 2026-10-10, Branch `lane/77-parser-real`.

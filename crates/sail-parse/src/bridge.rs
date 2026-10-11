@@ -79,6 +79,7 @@ pub fn bridge_parsed(parsed: &ParsedFile) -> BridgeOut {
 pub(crate) struct Bridge {
     pub(crate) ids: IdGen,
     pub(crate) interner: SimpleInterner,
+    pub(crate) fixities: crate::infix::FixityEnv,
     pub(crate) fid: FileId,
     pub(crate) defs: Vec<Def>,
     pub(crate) unparsed: Vec<Unparsed>,
@@ -90,6 +91,7 @@ impl Bridge {
         Bridge {
             ids: IdGen::new(),
             interner: SimpleInterner::new(),
+            fixities: crate::infix::FixityEnv::sail_defaults(),
             fid: FileId(0),
             defs: Vec::new(),
             unparsed: Vec::new(),

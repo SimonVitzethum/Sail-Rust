@@ -102,6 +102,17 @@ pub struct FixityEnv {
 }
 
 impl FixityEnv {
+    /// OCaml `Initial_check.initial_ctx` builtins. `new()` remains an empty
+    /// environment for callers checking explicit operator declarations.
+    pub fn sail_defaults() -> Self {
+        let mut env = Self::new();
+        for (op, assoc, level) in [("^", Assoc::Right, 8), ("|", Assoc::Right, 2),
+            ("&", Assoc::Right, 3), ("==", Assoc::Non, 4), ("!=", Assoc::Non, 4),
+            ("/", Assoc::Left, 7), ("%", Assoc::Left, 7)] {
+            env.insert(op, assoc, level).expect("builtin fixity");
+        }
+        env
+    }
     #[must_use]
     pub fn new() -> Self {
         FixityEnv {

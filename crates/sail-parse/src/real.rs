@@ -1,24 +1,15 @@
-//! Echte Parser-Einstiege auf der generierten Grammatik (Lane 77).
+//! Grammar-backed fragment conversion into `sail-ast` with explicit errors.
 //!
-//! * [`parse_typ`], [`parse_exp`], [`parse_pat`], [`parse_def`]:
-//!   Einzelfragmente → echte `sail-ast`-Knoten (Namen/IDs/Interner echt,
-//!   Knoten-Spans = Fragment-Span, da [`sail_grammar::ast`] keine Locations
-//!   trägt). Fehler sind [`ParseError`] mit Span.
-//! * [`parse_file_real`]: ganze Datei → [`BridgeOut`], wie
-//!   [`crate::bridge_file`], aber `let`/`register`/`constraint`/`type`/
-//!   `measure`/`outcome`/`instantiation` laufen zusätzlich über die neuen
-//!   Einstiege (Knoten-Span = Def-Span), alles Übrige delegiert an
-//!   [`crate::bridge`]. Was die Einstiege (noch) ablehnen, fällt auf das
-//!   ehrliche Brücken-Skelett zurück ([`crate::bridge`]: echte Namen,
-//!   `Unknown`/`Wild`/`Undef`-Rümpfe, Rohtext im `unparsed`-Sidecar) —
-//!   Datei-Ebene schlägt nie wegen Fragment-Lücken fehl, `deferred` bleibt
-//!   nur für wirklich Unbekanntes (`Other`).
+//! `RealParser` retains interner, IDs and fixity declarations across fragment
+//! calls. Each parser starts with OCaml's default fixities. Fragment spans are
+//! currently attached to all converted descendants; the grammar does not yet
+//! carry individual node locations.
 //!
-//! Skelett-Stand der Grammatik (keine LALRPOP-Tabellen, siehe `ADAPTER.md`):
-//! Die Einstiege rufen `sail_grammar::parse_*` gegen die Schnittstelle und
-//! mappen deren Fehler ehrlich auf [`ParseError`] mit Span — es werden nie
-//! Fake-Knoten erfunden. Sobald die Tabellen generiert sind, liefern dieselben
-//! Einstiege ohne Codeänderung echte Knoten (Konverter: [`crate::convert`]).
+//! `parse_file_real` is a collecting, tolerant compatibility API. It first
+//! converts every exact definition through the grammar, including function
+//! bodies. Unsupported constructs fall back to the legacy bridge and its
+//! unparsed sidecar. Compilers must reject those gaps before code generation;
+//! they must not treat a successful tolerant parse as complete elaboration.
 
 #![forbid(unsafe_code)]
 
@@ -52,10 +43,15 @@ pub struct ParseOut<T> {
 
 /// Fragment-Parser mit geteiltem Interner/ID-Raum über viele Aufrufe
 /// (Batch-Aufrufe ohne Neu-Internierung derselben Namen).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RealParser {
     ids: IdGen,
     interner: SimpleInterner,
+    fixities: crate::infix::FixityEnv,
+}
+
+impl Default for RealParser {
+    fn default() -> Self { Self::new() }
 }
 
 impl RealParser {
@@ -64,6 +60,7 @@ impl RealParser {
         RealParser {
             ids: IdGen::new(),
             interner: SimpleInterner::new(),
+            fixities: crate::infix::FixityEnv::sail_defaults(),
         }
     }
 
@@ -81,6 +78,7 @@ impl RealParser {
         Ctx {
             ids: &mut self.ids,
             interner: &mut self.interner,
+            fixities: &mut self.fixities,
         }
     }
 
@@ -179,14 +177,27 @@ pub fn parse_def(src: &str) -> Result<ParseOut<Def>, ParseError> {
 /// das Brücken-Skelett zurück (Brücken-Philosophie: echte Namen, Rohtext im
 /// `unparsed`-Sidecar für Lane 02).
 pub fn parse_file_real(path: &str, src: &str) -> Result<BridgeOut, ParseError> {
-    let parsed = crate::parse_file(path, src)?;
     let mut b = Bridge::new();
-    for sd in &parsed.defs {
-        if !lower_file_def(&mut b, sd) {
-            b.def(sd);
+    for sd in crate::iter_file(path, src) {
+        let sd = sd?;
+        // Feed the exact source through the grammar for every definition,
+        // including functions and scattered clauses. Reconstructed headers
+        // can lose visibility, recursion, annotations and operator names.
+        if !sd.def.is_shard_marker() {
+            let text = &src[sd.span.start as usize..sd.span.end as usize];
+            let result = crate::convert::parse_def_src(&mut Ctx {
+                ids: &mut b.ids, interner: &mut b.interner, fixities: &mut b.fixities,
+            }, sd.span, text);
+            if let Ok(def) = result {
+                b.defs.push(def);
+                continue;
+            }
+        }
+        if !lower_file_def(&mut b, &sd) {
+            b.def(&sd);
         }
     }
-    Ok(b.finish(&parsed.path))
+    Ok(b.finish(path))
 }
 
 /// `true`, wenn die Def vom Echt-Pfad behandelt wurde (Erfolg oder
@@ -199,6 +210,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                 let mut ctx = Ctx {
                     ids: &mut b.ids,
                     interner: &mut b.interner,
+                    fixities: &mut b.fixities,
                 };
                 crate::convert::conv_let(&mut ctx, span, pat_src, body_src)
             };
@@ -220,6 +232,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                 let mut ctx = Ctx {
                     ids: &mut b.ids,
                     interner: &mut b.interner,
+                    fixities: &mut b.fixities,
                 };
                 crate::convert::conv_register(&mut ctx, span, name, type_src, init_src)
             };
@@ -237,6 +250,7 @@ fn lower_file_def(b: &mut Bridge, sd: &SpannedDef) -> bool {
                 let mut ctx = Ctx {
                     ids: &mut b.ids,
                     interner: &mut b.interner,
+                    fixities: &mut b.fixities,
                 };
                 crate::convert::conv_constraint_def(&mut ctx, span, src)
             };
@@ -299,6 +313,7 @@ fn lower_def_text(
         let mut ctx = Ctx {
             ids: &mut b.ids,
             interner: &mut b.interner,
+                    fixities: &mut b.fixities,
         };
         crate::convert::parse_def_src(&mut ctx, span, full)
     };

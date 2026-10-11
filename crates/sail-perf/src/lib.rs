@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// Verbindliche RAM-Budgets (GiB) für 32-GiB-Maschine ohne Swap.
 pub const BUDGET_AARCH64_SMALL_GB: f64 = 4.0;
 pub const BUDGET_ARM_V85A_GB: f64 = 16.0;
-pub const BUDGET_ARM_V94A_GB: f64 = 24.0;
+pub const BUDGET_ARM_V94A_GB: f64 = 16.0;
 
 /// 1 GiB in KiB (so wie GNU time `Maximum resident set size (kbytes)` meldet).
 pub const KIB_PER_GIB: u64 = 1024 * 1024;
@@ -51,7 +51,7 @@ impl Budget {
 pub const BUDGETS: [Budget; 3] = [
     Budget::new("aarch64_small", 4),
     Budget::new("arm-v8.5-a", 16),
-    Budget::new("arm-v9.4-a", 24),
+    Budget::new("arm-v9.4-a", 16),
 ];
 
 /// Ergebnis von GNU `/usr/bin/time -v` (Stderr-Block).

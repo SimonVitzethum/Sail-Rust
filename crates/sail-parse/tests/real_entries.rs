@@ -1,10 +1,4 @@
-//! Echte Einstiege (Lane 77, Code ohne Run per E3).
-//!
-//! Strategie: Fehlerpfad + Datei-Ebene sind heute aktiv testbar (ehrliche
-//! Span-Fehler, verlustfreie Senkung: echt oder Brücken-Skelett, Rest nur
-//! noch für `Other` in `deferred`). Erfolgsfälle brauchen die
-//! generierten LALRPOP-Tabellen und sind `ignore`d (siehe `ADAPTER.md`);
-//! sie kompilieren trotzdem gegen die Schnittstelle.
+//! Active regression tests for generated grammar and core AST conversion.
 
 #![forbid(unsafe_code)]
 
@@ -96,11 +90,10 @@ fn file_real_is_lossless_over_fixtures() {
 }
 
 // ---------------------------------------------------------------------------
-// Ignoriert: Erfolge brauchen die generierten Tabellen (ADAPTER.md).
+// Grammar-backed successful conversions.
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "needs generated LALRPOP tables (see ADAPTER.md)"]
 fn real_typ_bool_is_id() {
     let out = parse_typ("bool").unwrap();
     match &out.value.kind {
@@ -114,7 +107,6 @@ fn real_typ_bool_is_id() {
 }
 
 #[test]
-#[ignore = "needs generated LALRPOP tables (see ADAPTER.md)"]
 fn real_exp_app_and_let() {
     let app = parse_exp("f(x, 1)").unwrap();
     assert!(matches!(app.value.kind, ExpKind::App { .. }), "{:?}", app.value.kind);
@@ -126,7 +118,6 @@ fn real_exp_app_and_let() {
 }
 
 #[test]
-#[ignore = "needs generated LALRPOP tables (see ADAPTER.md)"]
 fn real_pat_some_is_app() {
     let out = parse_pat("Some(x)").unwrap();
     match &out.value.kind {
@@ -140,7 +131,6 @@ fn real_pat_some_is_app() {
 }
 
 #[test]
-#[ignore = "needs generated LALRPOP tables (see ADAPTER.md)"]
 fn real_def_val_has_typschm() {
     let out = parse_def("val f : int -> bool").unwrap();
     match &out.value.kind {
@@ -154,7 +144,6 @@ fn real_def_val_has_typschm() {
 }
 
 #[test]
-#[ignore = "needs generated LALRPOP tables (see ADAPTER.md)"]
 fn file_real_lowers_let_register_constraint() {
     let src = "let x = 1\nregister R : bits(64)\nconstraint true\n";
     let out = parse_file_real("mini.sail", src).unwrap();
@@ -174,9 +163,8 @@ fn file_real_lowers_let_register_constraint() {
 }
 
 #[test]
-#[ignore = "needs generated LALRPOP tables (see ADAPTER.md)"]
 fn file_real_lowers_bridge_bodies() {
-    let src = "type t = int -> bool\ntermination_measure f(x) = x\noutcome o : int -> int\ninstantiation i with a = b\n";
+    let src = "type t = bits(64)\ntermination_measure f(x) = x\noutcome o : int -> int\ninstantiation i with a = b\n";
     let out = parse_file_real("mini.sail", src).unwrap();
     // Echt (nicht Skelett): Typ-Rumpf aufgelöst statt `Unknown` ...
     let ty = out
@@ -192,8 +180,8 @@ fn file_real_lowers_bridge_bodies() {
         TypeDefKind::Abbrev { arg, .. } => match &arg.kind {
             TypArgKind::Typ(t) => {
                 assert!(
-                    matches!(t.kind, TypKind::Fn { .. }),
-                    "Skelett-Unknown statt Fn: {:?}",
+                    matches!(t.kind, TypKind::App { .. }),
+                    "Skelett-Unknown statt App: {:?}",
                     t.kind
                 );
             }
@@ -216,4 +204,73 @@ fn file_real_lowers_bridge_bodies() {
         DefKind::Instantiation { .. }
     )));
     assert!(out.deferred.is_empty(), "deferred: {:?}", out.deferred);
+}
+
+#[test]
+fn builtin_type_arguments_keep_their_sorts_and_refined_names() {
+    let list = parse_typ("list(bool)").unwrap();
+    assert!(matches!(&list.value.kind, TypKind::App { args, .. }
+        if matches!(args[0].kind, TypArgKind::Typ(_))));
+    let refined = parse_typ("bool('p & 'q)").unwrap();
+    match &refined.value.kind {
+        TypKind::App { name, args } => {
+            assert_eq!(refined.interner.resolve(name.symbol), Some("atom_bool"));
+            assert!(matches!(args[0].kind, TypArgKind::Bool(_)));
+        }
+        other => panic!("{other:?}"),
+    }
+    let refined = parse_typ("int(4)").unwrap();
+    match &refined.value.kind {
+        TypKind::App { name, .. } => assert_eq!(refined.interner.resolve(name.symbol), Some("atom")),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn function_domain_tuple_becomes_multiple_arguments() {
+    let out = parse_def("val f : (int, bool) -> int").unwrap();
+    assert!(matches!(&out.value.kind, DefKind::Val(spec)
+        if matches!(&spec.typschm.typ.kind, TypKind::Fn { args, .. } if args.len() == 2)));
+}
+
+#[test]
+fn infix_folding_is_connected_to_expression_and_numeric_conversion() {
+    let out = parse_exp("a + b * c").unwrap();
+    let ExpKind::App { func, args } = &out.value.kind else { panic!("{:?}", out.value); };
+    assert_eq!(out.interner.resolve(func.symbol), Some("+"));
+    let ExpKind::App { func, .. } = &args[1].kind else { panic!("{:?}", args[1]); };
+    assert_eq!(out.interner.resolve(func.symbol), Some("*"));
+    let width = parse_typ("bits('n + 4 * 2)").unwrap();
+    assert!(matches!(&width.value.kind, TypKind::App { args, .. }
+        if matches!(&args[0].kind, TypArgKind::NExp(n) if matches!(n.kind, sail_ast::NExpKind::Sum(..)))));
+    parse_def("constraint 'a < 'b <= 'c & 'd >= 0").unwrap();
+}
+
+#[test]
+fn custom_fixities_survive_between_fragment_calls() {
+    let mut parser = RealParser::new();
+    let span = sail_parse::Span::DUMMY;
+    assert!(parser.parse_exp("a %% b", span).is_err());
+    parser.parse_def("infixr 5 %%", span).unwrap();
+    let exp = parser.parse_exp("a %% b %% c", span).unwrap();
+    assert!(matches!(&exp.kind, ExpKind::App { args, .. } if matches!(args[1].kind, ExpKind::App { .. })));
+}
+
+#[test]
+fn file_real_lowers_function_bodies_without_placeholder_fallback() {
+    let out = parse_file_real("f.sail", "val f : (int, int) -> int\nfunction f(a, b) = a + b * 2\n").unwrap();
+    assert!(out.unparsed.is_empty(), "{:?}", out.unparsed);
+    assert!(matches!(&out.ast.defs[2].kind, DefKind::Fundef { funcls, .. }
+        if matches!(&funcls[0].arm.kind, sail_ast::PExpKind::PatExp { body, .. }
+            if matches!(body.kind, ExpKind::App { .. }))));
+}
+
+#[test]
+fn numeric_and_boolean_type_abbreviations_keep_their_result_kinds() {
+    let numeric = parse_def("type MAX_VL : Int = 2048").unwrap();
+    assert!(matches!(&numeric.value.kind, DefKind::Type(ty)
+        if matches!(&ty.kind, TypeDefKind::Abbrev { arg, .. } if matches!(arg.kind, TypArgKind::NExp(_)))));
+    let boolean = parse_def("type is_VL('vl : Int) -> Bool = ('vl in {128, 256, 512, 1024, 2048})").unwrap();
+    assert!(matches!(&boolean.value.kind, DefKind::Type(ty)
+        if matches!(&ty.kind, TypeDefKind::Abbrev { arg, .. } if matches!(arg.kind, TypArgKind::Bool(_)))));
 }

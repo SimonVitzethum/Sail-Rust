@@ -1822,7 +1822,7 @@ DefAux: DefAux = {
     "impl" <f:Funcl> => DefAux::Impl(f),
     <a:RawFixity> => DefAux::Fixity(a.0, a.1, a.2),
     <v:ValSpec> => DefAux::Val(v),
-    <o:OutcomeSpec> <t:OutcomeTail?> => DefAux::Outcome(o, t.unwrap_or_default()),
+    <o:OutcomeSpec> <t:OutcomeTail> => DefAux::Outcome(o, t),
     "instantiation" <i:Ident> <s:("with" <SubstList>)?> =>
         DefAux::Instantiation(i, s.unwrap_or_default()),
     <t:TypeDef> => DefAux::Type(t),
@@ -1839,23 +1839,57 @@ DefAux: DefAux = {
         DefAux::Measure(i, p, e),
     "termination_measure" <i:Ident> <ms:LoopMeasures> =>
         DefAux::LoopMeasures(i, ms),
+}
+
+// Preserve Menhir's constraint-ordering categories: a bare `constraint`
+// after an outcome/scattered header belongs to that header's type parameters.
+// Treating every definition as `Def*` makes this ambiguous in LALR(1).
+TrailingConstraintAux: DefAux = {
     <s:ScatteredDef> => DefAux::Scattered(s),
+    <o:OutcomeSpec> => DefAux::Outcome(o, vec![]),
 }
 
-// `def`.
+ConstraintAux: DefAux = {
+    "constraint" <t:Typ> => DefAux::Constraint(t),
+}
+
+Wrapped<A>: Def = {
+    "private" <d:Wrapped<A>> => Def::Private(Box::new(d)),
+    <a:Attrs> <d:Wrapped<A>> => Def::Attr(a, Box::new(d)),
+    <c:DocComment> <d:Wrapped<A>> => Def::Doc(c, Box::new(d)),
+    <d:A> => Def::Aux(d),
+}
+
 pub Def: Def = {
-    "private" <d:Def> => Def::Private(Box::new(d)),
-    <a:Attrs> <d:Def> => Def::Attr(a, Box::new(d)),
-    <c:DocComment> <d:Def> => Def::Doc(c, Box::new(d)),
-    <d:DefAux> => Def::Aux(d),
+    <d:Wrapped<DefAux>> => d,
+    <d:Wrapped<TrailingConstraintAux>> => d,
+    <d:Wrapped<ConstraintAux>> => d,
 }
 
-// `defs_list` (constraint-ordering dropped; see GRAMMAR.md).
+// VecDeque avoids quadratic front insertion for generated definition lists.
+DefsNonempty: std::collections::VecDeque<Def> = {
+    <d:Wrapped<ConstraintAux>> <ds:DefsNonempty?> => {
+        let mut ds = ds.unwrap_or_default(); ds.push_front(d); ds
+    },
+    <d:Wrapped<TrailingConstraintAux>> <ds:PostTrailing?> => {
+        let mut ds = ds.unwrap_or_default(); ds.push_front(d); ds
+    },
+    <d:Wrapped<DefAux>> <ds:DefsNonempty?> => {
+        let mut ds = ds.unwrap_or_default(); ds.push_front(d); ds
+    },
+}
+
+PostTrailing: std::collections::VecDeque<Def> = {
+    <d:Wrapped<TrailingConstraintAux>> <ds:PostTrailing?> => {
+        let mut ds = ds.unwrap_or_default(); ds.push_front(d); ds
+    },
+    <d:Wrapped<DefAux>> <ds:DefsNonempty?> => {
+        let mut ds = ds.unwrap_or_default(); ds.push_front(d); ds
+    },
+}
+
 Defs: Vec<Def> = {
-    <ds:Def*> => ds,
+    <ds:DefsNonempty?> => ds.unwrap_or_default().into_iter().collect(),
 }
 
-// `file`.
-pub File: Vec<Def> = {
-    <ds:Defs> => ds,
-}
+pub File: Vec<Def> = { <ds:Defs> => ds }

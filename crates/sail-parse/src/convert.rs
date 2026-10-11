@@ -1,22 +1,12 @@
-//! Surface- (`sail-grammar`) → Core- (`sail-ast`) Lowering (Lane 77).
+//! Grammar AST → core AST conversion. Infix chains are folded using the
+//! explicit fixity environment before conversion; operands are borrowed to
+//! avoid deep-cloning expression subtrees. Known builtin type arguments use
+//! their declared sorts, and numeric/bool aliases retain their result kind.
 //!
-//! Gegen die `sail_grammar::parse_*`-Schnittstelle programmiert: Sobald die
-//! LALRPOP-Tabellen generiert sind (derzeit Skelett, siehe `ADAPTER.md`),
-//! liefern die Einstiege hier echte `sail-ast`-Knoten. Fehler sind
-//! Meldungen ohne Span; [`crate::real`] hängt den Fragment-Span an
-//! ([`sail_grammar::ast`] trägt keine Locations — `GRAMMAR.md` streicht
-//! sie bewusst, Byte-Offsets leben nur im Lexer).
-//!
-//! Abbildungsregeln (Fälle, die der Core nicht ausdrücken kann, sind
-//! `Err`, nie erfundene Semantik; Details + Begründungen in `ADAPTER.md`):
-//! * Namen: per Byte-Heuristik (`is_operator`), wie [`crate::bridge`].
-//! * Alle Knoten erhalten den übergebenen Fragment-Span (Approximation).
-//! * `Typ::Wild` → [`sail_ast::TypKind::Unknown`]; `Zero`/`One` → `"0"`/`"1"`.
-//! * Infix-Ketten brauchen Elaboration-Faltung → `Err` (außer den
-//!   Constraint-/NExp-/Pat-Teilmengen, die eindeutig abbildbar sind).
-//! * Attribute/Doku/`private`-Hüllen entfallen (Core hat keine Slots).
-//! * `Bidir`-Mapcl-Arme erhalten `Undef`-Rümpfe (Muster-als-Ausdruck
-//!   braucht Elaboration; Präzedenz: Brücken-`dummy_arm`).
+//! Unsupported forms return errors. Attributes/visibility and precise node
+//! locations still need core AST support. User type constructors and omitted
+//! binder kinds still need whole-program kind inference; fragment conversion
+//! alone is not a typechecker.
 
 #![forbid(unsafe_code)]
 
@@ -28,12 +18,14 @@ use sail_ast::{
     Typ, TypArg, TypArgKind, TypKind, TypPatKind, TypSchm, TypeDefKind, TypeUnion, ValSpec,
 };
 use sail_grammar::ast as g;
+use crate::infix::{FixityEnv, Folded, Side, fold_chain};
 
 /// Lower-Kontext: frische IDs + Interner, vom Aufrufer geliehen (Datei-Pfad
 /// teilt sich so einen ID-Raum mit [`crate::bridge`]).
 pub(crate) struct Ctx<'a> {
     pub(crate) ids: &'a mut IdGen,
     pub(crate) interner: &'a mut SimpleInterner,
+    pub(crate) fixities: &'a mut FixityEnv,
 }
 
 impl Ctx<'_> {
@@ -213,9 +205,13 @@ fn conv_typschm(c: &mut Ctx, span: Span, s: &g::TypSchm) -> Result<TypSchm, Stri
     let typ = match &s.arrow {
         g::Arrow::Fn => {
             let arg = conv_typ(c, span, &s.lhs)?;
+            let args = match arg.kind {
+                TypKind::Tuple(args) => args,
+                _ => vec![arg],
+            };
             let ret = conv_typ(c, span, &s.rhs)?;
             c.node(span, TypKind::Fn {
-                args: vec![arg],
+                args,
                 ret: Box::new(ret),
             })
         }
@@ -238,11 +234,31 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
         g::Typ::Var(s) => TypKind::Var(c.interner.intern(s)),
         g::Typ::App(f, args) => {
             let mut cargs = Vec::with_capacity(args.len());
-            for a in args {
-                cargs.push(conv_typarg(c, span, a)?);
+            // Builtin argument kinds are known before user declarations.
+            // Trying every argument as a numeric expression first turns
+            // `list(bool)` into a list indexed by a numeric identifier.
+            let kinds: Option<&[Kind]> = match f.as_str() {
+                "int" | "atom" | "bits" | "bitvector" | "implicit" => Some(&[Kind::Int]),
+                "bool" | "atom_bool" => Some(&[Kind::Bool]),
+                "range" => Some(&[Kind::Int, Kind::Int]),
+                "list" | "register" => Some(&[Kind::Type]),
+                "vector" => Some(&[Kind::Int, Kind::Type]),
+                _ => None,
+            };
+            if kinds.is_some_and(|kinds| kinds.len() != args.len()) {
+                return Err(format!("incorrect type argument count for {f}"));
+            }
+            for (i, a) in args.iter().enumerate() {
+                let arg = match kinds.map(|kinds| kinds[i]) {
+                    Some(Kind::Type) => { let typ = conv_typ(c, span, a)?; c.node(span, TypArgKind::Typ(typ)) }
+                    Some(Kind::Int) => { let nexp = conv_nexp(c, span, a)?; c.node(span, TypArgKind::NExp(nexp)) }
+                    Some(Kind::Bool) => { let constraint = conv_constraint(c, span, a)?; c.node(span, TypArgKind::Bool(Box::new(constraint))) }
+                    None => conv_typarg(c, span, a)?,
+                };
+                cargs.push(arg);
             }
             TypKind::App {
-                name: c.name(span, f),
+                name: c.name(span, match f.as_str() { "int" => "atom", "bool" => "atom_bool", _ => f }),
                 args: cargs,
             }
         }
@@ -253,10 +269,11 @@ fn conv_typ(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Typ, String> {
             }
             TypKind::Tuple(cts)
         }
-        g::Typ::Fn(a, b) => TypKind::Fn {
-            args: vec![conv_typ(c, span, a)?],
-            ret: Box::new(conv_typ(c, span, b)?),
-        },
+        g::Typ::Fn(a, b) => {
+            let arg = conv_typ(c, span, a)?;
+            let args = match arg.kind { TypKind::Tuple(args) => args, _ => vec![arg] };
+            TypKind::Fn { args, ret: Box::new(conv_typ(c, span, b)?) }
+        }
         g::Typ::Exist(kopts, cond, body) => {
             // Feldreihenfolge wie im Core: Binder, Constraint, Typ
             // (Annahme, siehe ADAPTER.md).
@@ -344,28 +361,28 @@ fn conv_nexp(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<NExp, String> {
     Ok(c.node(span, kind))
 }
 
-/// Eingliedrige arithmetische Kette (`+`, `-`, `*`); alles andere
-/// braucht Elaboration-Faltung.
 fn infix_nexp(c: &mut Ctx, span: Span, chain: &g::InfixChain<g::Typ>) -> Result<NExp, String> {
-    if !chain.prefixes.is_empty() {
-        return Err("prefix operators need elaboration-time folding".to_owned());
-    }
-    let [(op, local, rhs)] = chain.tail.as_slice() else {
-        return Err("infix chains need elaboration-time folding".to_owned());
-    };
-    if !local.is_empty() {
-        return Err("operator-local prefixes need elaboration-time folding".to_owned());
-    }
-    let lhs = conv_nexp(c, span, &chain.head)?;
-    let rhs = conv_nexp(c, span, rhs)?;
-    let kind = match op.as_str() {
-        "+" => NExpKind::Sum(Box::new(lhs), Box::new(rhs)),
-        "-" => NExpKind::Minus(Box::new(lhs), Box::new(rhs)),
-        "*" => NExpKind::Times(Box::new(lhs), Box::new(rhs)),
-        // Binäres `^`, Division und alle übrigen Operatoren haben keinen
-        // Core-Slot (Faltung ist Elaboration; siehe ADAPTER.md).
-        _ => {
-            return Err(format!("nexp operator `{op}` has no sail-ast core node"));
+    let folded = fold_borrowed(chain, Side::Typ, c.fixities)?;
+    folded_nexp(c, span, &folded)
+}
+
+fn folded_nexp(c: &mut Ctx, span: Span, tree: &Folded<&g::Typ>) -> Result<NExp, String> {
+    let kind = match tree {
+        Folded::Leaf(typ) => return conv_nexp(c, span, typ),
+        Folded::Prefix { op, arg } => match op.as_str() {
+            "pow2" => NExpKind::Exp(Box::new(folded_nexp(c, span, arg)?)),
+            "negate" => NExpKind::Neg(Box::new(folded_nexp(c, span, arg)?)),
+            _ => return Err(format!("invalid numeric prefix {op}")),
+        },
+        Folded::Infix { op, lhs, rhs } => {
+            let lhs = folded_nexp(c, span, lhs)?;
+            let rhs = folded_nexp(c, span, rhs)?;
+            match op.as_str() {
+                "+" => NExpKind::Sum(Box::new(lhs), Box::new(rhs)),
+                "-" => NExpKind::Minus(Box::new(lhs), Box::new(rhs)),
+                "*" => NExpKind::Times(Box::new(lhs), Box::new(rhs)),
+                _ => return Err(format!("numeric infix {op} needs a declared type constructor")),
+            }
         }
     };
     Ok(c.node(span, kind))
@@ -395,65 +412,40 @@ fn conv_constraint(c: &mut Ctx, span: Span, t: &g::Typ) -> Result<Constraint, St
     Ok(c.node(span, kind))
 }
 
-/// Eingliedrige Vergleichs-/Junktions-Kette (`=`, `==`, `!=`, `<`, `<=`,
-/// `>`, `>=`, `&`, `|`, `in {…}`).
-fn infix_constraint(
-    c: &mut Ctx,
-    span: Span,
-    chain: &g::InfixChain<g::Typ>,
-) -> Result<Constraint, String> {
-    if !chain.prefixes.is_empty() {
-        return Err("prefix operators need elaboration-time folding".to_owned());
-    }
-    let [(op, local, rhs)] = chain.tail.as_slice() else {
-        return Err("infix chains need elaboration-time folding".to_owned());
+fn infix_constraint(c: &mut Ctx, span: Span, chain: &g::InfixChain<g::Typ>) -> Result<Constraint, String> {
+    let folded = fold_borrowed(chain, Side::Typ, c.fixities)?;
+    folded_constraint(c, span, &folded)
+}
+
+fn folded_constraint(c: &mut Ctx, span: Span, tree: &Folded<&g::Typ>) -> Result<Constraint, String> {
+    let Folded::Infix { op, lhs, rhs } = tree else {
+        return match tree {
+            Folded::Leaf(typ) => conv_constraint(c, span, typ),
+            _ => Err("numeric prefix in a boolean constraint".into()),
+        };
     };
-    if !local.is_empty() {
-        return Err("operator-local prefixes need elaboration-time folding".to_owned());
-    }
     let kind = match op.as_str() {
-        "=" | "==" => ConstraintKind::Equal(
-            Box::new(conv_typarg(c, span, &chain.head)?),
-            Box::new(conv_typarg(c, span, rhs)?),
-        ),
-        "!=" => ConstraintKind::NotEqual(
-            Box::new(conv_typarg(c, span, &chain.head)?),
-            Box::new(conv_typarg(c, span, rhs)?),
-        ),
-        ">=" => ConstraintKind::Ge(
-            conv_nexp(c, span, &chain.head)?,
-            conv_nexp(c, span, rhs)?,
-        ),
-        ">" => ConstraintKind::Gt(
-            conv_nexp(c, span, &chain.head)?,
-            conv_nexp(c, span, rhs)?,
-        ),
-        "<=" => ConstraintKind::Le(
-            conv_nexp(c, span, &chain.head)?,
-            conv_nexp(c, span, rhs)?,
-        ),
-        "<" => ConstraintKind::Lt(
-            conv_nexp(c, span, &chain.head)?,
-            conv_nexp(c, span, rhs)?,
-        ),
-        "&" => ConstraintKind::And(
-            Box::new(conv_constraint(c, span, &chain.head)?),
-            Box::new(conv_constraint(c, span, rhs)?),
-        ),
-        "|" => ConstraintKind::Or(
-            Box::new(conv_constraint(c, span, &chain.head)?),
-            Box::new(conv_constraint(c, span, rhs)?),
-        ),
-        "in" => {
-            let g::Typ::NSet(members) = rhs else {
-                return Err("`in` needs a set literal on the right".to_owned());
-            };
-            ConstraintKind::Set {
-                nexp: conv_nexp(c, span, &chain.head)?,
-                members: members.clone(),
-            }
+        "=" | "==" | "!=" => {
+            let lhs = folded_nexp(c, span, lhs)?;
+            let rhs = folded_nexp(c, span, rhs)?;
+            let lhs = Box::new(c.node(span, TypArgKind::NExp(lhs)));
+            let rhs = Box::new(c.node(span, TypArgKind::NExp(rhs)));
+            if op == "!=" { ConstraintKind::NotEqual(lhs, rhs) }
+            else { ConstraintKind::Equal(lhs, rhs) }
         }
-        _ => return Err(format!("constraint operator `{op}` has no sail-ast core node")),
+        ">=" => ConstraintKind::Ge(folded_nexp(c, span, lhs)?, folded_nexp(c, span, rhs)?),
+        ">" => ConstraintKind::Gt(folded_nexp(c, span, lhs)?, folded_nexp(c, span, rhs)?),
+        "<=" => ConstraintKind::Le(folded_nexp(c, span, lhs)?, folded_nexp(c, span, rhs)?),
+        "<" => ConstraintKind::Lt(folded_nexp(c, span, lhs)?, folded_nexp(c, span, rhs)?),
+        "&" => ConstraintKind::And(Box::new(folded_constraint(c, span, lhs)?), Box::new(folded_constraint(c, span, rhs)?)),
+        "|" => ConstraintKind::Or(Box::new(folded_constraint(c, span, lhs)?), Box::new(folded_constraint(c, span, rhs)?)),
+        "in" => {
+            let Folded::Leaf(g::Typ::NSet(members)) = rhs.as_ref() else {
+                return Err("`in` needs a set literal on the right".into());
+            };
+            ConstraintKind::Set { nexp: folded_nexp(c, span, lhs)?, members: members.clone() }
+        }
+        _ => return Err(format!("constraint operator `{op}` needs a declared type constructor")),
     };
     Ok(c.node(span, kind))
 }
@@ -787,6 +779,37 @@ fn conv_patexp(c: &mut Ctx, span: Span, p: &g::PatExp) -> Result<PExp, String> {
     })
 }
 
+// Fold references rather than deep-cloning each surface operand. Long ARM
+// functions can contain large subtrees inside a single infix operand.
+fn fold_borrowed<'a, T>(chain: &'a g::InfixChain<T>, side: Side, env: &FixityEnv)
+    -> Result<Folded<&'a T>, String>
+{
+    let borrowed = g::InfixChain {
+        prefixes: chain.prefixes.clone(), head: &chain.head,
+        tail: chain.tail.iter().map(|(op, prefixes, rhs)| (op.clone(), prefixes.clone(), rhs)).collect(),
+    };
+    Ok(fold_chain(&borrowed, side, env)?)
+}
+
+fn folded_exp(c: &mut Ctx, span: Span, tree: &Folded<&g::Exp>) -> Result<Exp, String> {
+    let kind = match tree {
+        Folded::Leaf(exp) => return conv_exp(c, span, exp),
+        Folded::Prefix { op, arg } => ExpKind::App {
+            func: c.name(span, op), args: vec![folded_exp(c, span, arg)?],
+        },
+        Folded::Infix { op, lhs, rhs } => {
+            let lhs = folded_exp(c, span, lhs)?;
+            let rhs = folded_exp(c, span, rhs)?;
+            match op.as_str() {
+                "@" => ExpKind::VectorAppend(Box::new(lhs), Box::new(rhs)),
+                "::" => ExpKind::Cons(Box::new(lhs), Box::new(rhs)),
+                _ => ExpKind::App { func: c.name(span, op), args: vec![lhs, rhs] },
+            }
+        }
+    };
+    Ok(c.node(span, kind))
+}
+
 fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
     let kind = match e {
         g::Exp::Id(s) => ExpKind::Id(c.name(span, s)),
@@ -920,8 +943,9 @@ fn conv_exp(c: &mut Ctx, span: Span, e: &g::Exp) -> Result<Exp, String> {
             cond: Box::new(conv_exp(c, span, cond)?),
             body: Box::new(conv_exp(c, span, body)?),
         },
-        g::Exp::Infix(_) => {
-            return Err("infix chains need elaboration-time folding (see GRAMMAR.md)".to_owned());
+        g::Exp::Infix(chain) => {
+            let folded = fold_borrowed(chain, Side::Exp, c.fixities)?;
+            return folded_exp(c, span, &folded);
         }
         g::Exp::Struct(name, fields) => {
             let name = match name {
@@ -1252,12 +1276,16 @@ fn conv_reg_field(
 
 fn conv_typedef(c: &mut Ctx, span: Span, t: &g::TypeDef) -> Result<TypeDefKind, String> {
     match t {
-        g::TypeDef::Abbrev(name, quant, _kind, body) => {
+        g::TypeDef::Abbrev(name, quant, kind, body) => {
             let name = c.name(span, name);
             let quant = conv_quant_items(c, span, &Some(quant.clone()))?;
-            // Kind-Annotation entfällt (Core hat keinen Slot).
-            let body_typ = conv_typ(c, span, body)?;
-            let arg = c.node(span, TypArgKind::Typ(body_typ));
+            let arg = match kind.as_ref().unwrap_or(&g::Kind::Type) {
+                g::Kind::Type => TypArgKind::Typ(conv_typ(c, span, body)?),
+                g::Kind::Int | g::Kind::Nat => TypArgKind::NExp(conv_nexp(c, span, body)?),
+                g::Kind::Bool => TypArgKind::Bool(Box::new(conv_constraint(c, span, body)?)),
+                g::Kind::Order => return Err("order abbreviation has no core AST representation".into()),
+            };
+            let arg = c.node(span, arg);
             Ok(TypeDefKind::Abbrev { name, quant, arg })
         }
         g::TypeDef::Abstract(name, kind, _aliases) => Ok(TypeDefKind::Abstract {
@@ -1548,7 +1576,12 @@ fn conv_defaux(c: &mut Ctx, span: Span, d: &g::DefAux) -> Result<DefKind, String
 
 fn conv_def(c: &mut Ctx, span: Span, d: &g::Def) -> Result<DefKind, String> {
     match d {
-        g::Def::Aux(a) => conv_defaux(c, span, a),
+        g::Def::Aux(a) => {
+            if let g::DefAux::Fixity(assoc, level, name) = a {
+                c.fixities.insert_grammar(*assoc, *level, name)?;
+            }
+            conv_defaux(c, span, a)
+        }
         // Hüllen entfallen (Core-Slots fehlen; siehe ADAPTER.md).
         g::Def::Private(inner) => conv_def(c, span, inner),
         g::Def::Attr(_, inner) => conv_def(c, span, inner),
@@ -1565,13 +1598,14 @@ mod symbol_threading_tests {
     use super::*;
     use sail_ast::Interner as _;
 
-    fn ctx<'a>(ids: &'a mut IdGen, interner: &'a mut SimpleInterner) -> Ctx<'a> {
-        Ctx { ids, interner }
+    fn ctx<'a>(ids: &'a mut IdGen, interner: &'a mut SimpleInterner, fixities: &'a mut FixityEnv) -> Ctx<'a> {
+        Ctx { ids, interner, fixities }
     }
 
     #[test]
     fn lit_payloads_are_interned_symbols() {
         let mut ids = IdGen::new();
+        let mut fixities = FixityEnv::sail_defaults();
         let mut interner = SimpleInterner::new();
         let span = Span::DUMMY;
         for (lit, expect) in [
@@ -1584,7 +1618,7 @@ mod symbol_threading_tests {
             (g::Lit::Real("1.5".to_owned()), "1.5"),
         ] {
             let node = {
-                let mut c = ctx(&mut ids, &mut interner);
+                let mut c = ctx(&mut ids, &mut interner, &mut fixities);
                 c.lit(span, &lit)
             };
             let sym = match node.kind {
@@ -1598,15 +1632,16 @@ mod symbol_threading_tests {
     #[test]
     fn lit_interning_deduplicates() {
         let mut ids = IdGen::new();
+        let mut fixities = FixityEnv::sail_defaults();
         let mut interner = SimpleInterner::new();
         let span = Span::DUMMY;
         let lit = g::Lit::Num("7".to_owned());
         let a = {
-            let mut c = ctx(&mut ids, &mut interner);
+            let mut c = ctx(&mut ids, &mut interner, &mut fixities);
             c.lit(span, &lit)
         };
         let b = {
-            let mut c = ctx(&mut ids, &mut interner);
+            let mut c = ctx(&mut ids, &mut interner, &mut fixities);
             c.lit(span, &lit)
         };
         let sym = |n: &Lit| match n.kind {
@@ -1621,6 +1656,7 @@ mod symbol_threading_tests {
     fn typschm_fn_and_bidir_lower() {
         // Übte den E0499-Hoist in `conv_typschm` (Fn + Bidir).
         let mut ids = IdGen::new();
+        let mut fixities = FixityEnv::sail_defaults();
         let mut interner = SimpleInterner::new();
         let span = Span::DUMMY;
         for arrow in [g::Arrow::Fn, g::Arrow::Bidir] {
@@ -1633,7 +1669,7 @@ mod symbol_threading_tests {
                 effect: None,
             };
             let out = {
-                let mut c = ctx(&mut ids, &mut interner);
+                let mut c = ctx(&mut ids, &mut interner, &mut fixities);
                 conv_typschm(&mut c, span, &schm).expect("senkbar")
             };
             assert!(out.quant.is_empty());
@@ -1657,11 +1693,12 @@ mod symbol_threading_tests {
     fn subst_typ_threads_interner() {
         // Übte den E0499-Hoist in `conv_subst`.
         let mut ids = IdGen::new();
+        let mut fixities = FixityEnv::sail_defaults();
         let mut interner = SimpleInterner::new();
         let span = Span::DUMMY;
         let s = g::Subst::Typ("n".to_owned(), g::Typ::Id("int".to_owned()));
         let out = {
-            let mut c = ctx(&mut ids, &mut interner);
+            let mut c = ctx(&mut ids, &mut interner, &mut fixities);
             conv_subst(&mut c, span, &s).expect("senkbar")
         };
         match out {
@@ -1677,6 +1714,7 @@ mod symbol_threading_tests {
     fn typedef_abbrev_threads_interner() {
         // Übte den E0499-Hoist in `conv_typedef` (Abbrev-Arg).
         let mut ids = IdGen::new();
+        let mut fixities = FixityEnv::sail_defaults();
         let mut interner = SimpleInterner::new();
         let span = Span::DUMMY;
         let t = g::TypeDef::Abbrev(
@@ -1689,7 +1727,7 @@ mod symbol_threading_tests {
             g::Typ::Id("int".to_owned()),
         );
         let out = {
-            let mut c = ctx(&mut ids, &mut interner);
+            let mut c = ctx(&mut ids, &mut interner, &mut fixities);
             conv_typedef(&mut c, span, &t).expect("senkbar")
         };
         match out {
