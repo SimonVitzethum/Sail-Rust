@@ -31,6 +31,7 @@ pub mod pat;
 pub mod prove;
 pub mod program;
 mod canonical_body;
+mod canonical_eq;
 pub mod quant;
 pub mod rules;
 pub mod solver;

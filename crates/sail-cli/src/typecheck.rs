@@ -23,6 +23,14 @@ fn error(message: impl Into<String>) -> CliError {
         message: message.into(),
     }
 }
+fn type_error(frontend: &FrontendProgram, phase: &str, e: sail_ty::TypeError) -> CliError {
+    let source = frontend
+        .source_paths
+        .get(e.span.file.0 as usize)
+        .map(String::as_str)
+        .unwrap_or("<unknown source>");
+    error(format!("sail-rs: {source}: {phase} typecheck: {e}"))
+}
 fn descriptors(
     frontend: &FrontendProgram,
 ) -> Result<impl Iterator<Item = Result<Descriptor, CliError>>, CliError> {
@@ -47,7 +55,7 @@ pub fn run(frontend: &FrontendProgram) -> Result<Checked, CliError> {
         let (def, interner) = load_definition(&frontend.warm, &id(&descriptor)?)?;
         let result = program.declare(&def, Arc::new(interner), position);
         drop_definition(def);
-        result.map_err(|e| error(format!("sail-rs: declaration typecheck: {e}")))?;
+        result.map_err(|e| type_error(frontend, "declaration", e))?;
     }
     let scheduler = Scheduler::new(SchedulerConfig::new(2, frontend.summary.workers));
     let mut checked = Checked {
@@ -61,7 +69,7 @@ pub fn run(frontend: &FrontendProgram) -> Result<Checked, CliError> {
             let (def, interner) = load_definition(&frontend.warm, &id(&descriptor)?)?;
             let result = program.check_definition(&def, Arc::new(interner), position);
             drop_definition(def);
-            result.map_err(|e| error(format!("sail-rs: body typecheck: {e}")))
+            result.map_err(|e| type_error(frontend, "body", e))
         },
         |_, result| {
             checked.expressions += result?;

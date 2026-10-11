@@ -7,7 +7,10 @@ use crate::{
     program::{Program, Scheme},
 };
 use sail_ast::*;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::Arc,
+};
 
 #[derive(Clone)]
 enum Step {
@@ -20,10 +23,18 @@ enum Step {
 struct Type {
     root: Arc<Scheme>,
     path: Vec<Step>,
+    /// Rigid binder identity survives annotations with a different interner.
+    scope: Arc<Scheme>,
+    substitutions: Arc<BTreeMap<Symbol, Type>>,
 }
 impl Type {
     fn root(root: Arc<Scheme>) -> Self {
-        Self { root, path: vec![] }
+        Self {
+            scope: root.clone(),
+            root,
+            path: vec![],
+            substitutions: Arc::default(),
+        }
     }
     fn node(&self) -> &Typ {
         let mut typ = &self.root.typschm.typ;
@@ -47,6 +58,16 @@ impl Type {
         let mut child = self.clone();
         child.path.push(step);
         child
+    }
+    fn resolved(&self) -> Self {
+        let mut typ = self.clone();
+        while let TypKind::Var(symbol) = typ.node().kind {
+            let Some(bound) = typ.substitutions.get(&symbol) else {
+                break;
+            };
+            typ = bound.clone();
+        }
+        typ
     }
     fn owned(typ: Typ, it: Arc<SimpleInterner>) -> Self {
         Self::root(Arc::new(Scheme {
@@ -131,6 +152,10 @@ struct Checker<'a> {
     position: usize,
     builtins: BTreeMap<&'static str, Type>,
     expressions: usize,
+    context: Option<Arc<Scheme>>,
+    /// Per-definition synthesis cache; pointers are identity keys only and
+    /// are never dereferenced. The loaded AST outlives this checker.
+    inferred: HashMap<*const Exp, Type>,
 }
 struct Task<'a> {
     exp: &'a Exp,
@@ -151,9 +176,17 @@ pub(crate) fn check(
         position,
         builtins: BTreeMap::new(),
         expressions: 0,
+        context: None,
+        inferred: HashMap::new(),
     };
     match &def.kind {
-        DefKind::Fundef { rec, funcls, .. } => {
+        DefKind::Fundef { rec, annot, funcls } => {
+            if !matches!(annot, TAnnotOpt::None) {
+                return Err(unsupported(
+                    def.span,
+                    "function signature annotation elaboration",
+                ));
+            }
             if matches!(rec, RecOpt::Measure { .. }) {
                 return Err(unsupported(def.span, "termination-measure typing"));
             }
@@ -209,6 +242,15 @@ pub(crate) fn check(
 }
 
 impl Checker<'_> {
+    fn annotation(&self, typ: &Typ) -> TypeResult<Type> {
+        self.program
+            .check_annotation(typ, &self.it, self.position, self.context.as_deref())?;
+        let mut typ = Type::owned(typ.clone(), self.it.clone());
+        if let Some(scope) = &self.context {
+            typ.scope = scope.clone();
+        }
+        Ok(typ)
+    }
     fn builtin(&mut self, name: &'static str) -> Type {
         self.builtins
             .entry(name)
@@ -239,21 +281,79 @@ impl Checker<'_> {
     fn literal(&mut self, lit: &Lit) -> TypeResult<Type> {
         Ok(match lit.kind {
             LitKind::Unit => self.builtin("unit"),
-            LitKind::True | LitKind::False => self.builtin("bool"),
-            LitKind::Num(_) => self.builtin("int"),
+            LitKind::True | LitKind::False => self.refined(
+                "atom_bool",
+                TypArgKind::Bool(Box::new(Node::dummy(
+                    if matches!(lit.kind, LitKind::True) {
+                        ConstraintKind::True
+                    } else {
+                        ConstraintKind::False
+                    },
+                ))),
+            ),
+            LitKind::Num(symbol) => {
+                let value = self.it.resolve(symbol).ok_or_else(|| {
+                    TypeError::unbound_var(lit.span, "numeric literal symbol".into())
+                })?;
+                self.refined(
+                    "atom",
+                    TypArgKind::NExp(Node::dummy(NExpKind::Constant(value.to_owned()))),
+                )
+            }
             LitKind::Real(_) => self.builtin("real"),
             LitKind::String(_) => self.builtin("string"),
-            LitKind::Bin(_) | LitKind::Hex(_) => {
-                return Err(unsupported(
-                    lit.span,
-                    "bitvector literal singleton/width inference",
-                ))
+            LitKind::Bin(symbol) | LitKind::Hex(symbol) => {
+                let value = self
+                    .it
+                    .resolve(symbol)
+                    .ok_or_else(|| TypeError::unbound_var(lit.span, "bit literal symbol".into()))?;
+                let digits = value.bytes().filter(|byte| *byte != b'_').count();
+                let width = digits
+                    .checked_mul(if matches!(lit.kind, LitKind::Hex(_)) {
+                        4
+                    } else {
+                        1
+                    })
+                    .ok_or_else(|| unsupported(lit.span, "literal width overflow"))?;
+                self.refined(
+                    "bitvector",
+                    TypArgKind::NExp(Node::dummy(NExpKind::Constant(width.to_string()))),
+                )
             }
         })
+    }
+    fn refined(&self, name: &str, arg: TypArgKind) -> Type {
+        let mut it = SimpleInterner::new();
+        let name = Name::dummy(it.intern(name));
+        Type::owned(
+            Node::dummy(TypKind::App {
+                name,
+                args: vec![Node::dummy(arg)],
+            }),
+            Arc::new(it),
+        )
     }
     fn compatible(&self, expected: &Type, found: &Type, span: Span) -> TypeResult<()> {
         let mut pairs = vec![(expected.clone(), found.clone())];
         while let Some((expected, found)) = pairs.pop() {
+            let expected = expected.resolved();
+            let found = found.resolved();
+            if matches!(
+                (&expected.node().kind, expected.name(), found.name()),
+                (TypKind::Id(_), Some("int"), Some("atom" | "range" | "nat"))
+                    | (TypKind::Id(_), Some("bool"), Some("atom_bool"))
+            ) {
+                continue;
+            }
+            if let (TypKind::Id(_), Some(base), Some(refined)) =
+                (&expected.node().kind, expected.name(), found.name())
+            {
+                if matches!(base, "unit" | "bool" | "int" | "real" | "string")
+                    && matches!(refined, "atom" | "atom_bool" | "bitvector")
+                {
+                    return Err(mismatch(span, &expected, &found));
+                }
+            }
             match (&expected.node().kind, &found.node().kind) {
                 (TypKind::Id(a), TypKind::Id(b)) => {
                     if expected.root.interner.resolve(a.symbol)
@@ -263,13 +363,44 @@ impl Checker<'_> {
                     }
                 }
                 (TypKind::Var(a), TypKind::Var(b))
-                    if Arc::ptr_eq(&expected.root, &found.root) && a == b => {}
+                    if Arc::ptr_eq(&expected.scope, &found.scope)
+                        && expected.root.interner.resolve(*a)
+                            == found.root.interner.resolve(*b) => {}
                 (TypKind::Tuple(a), TypKind::Tuple(b)) => {
                     if a.len() != b.len() {
                         return Err(arity(span, a.len(), b.len()));
                     }
                     for i in 0..a.len() {
                         pairs.push((expected.child(Step::Tuple(i)), found.child(Step::Tuple(i))));
+                    }
+                }
+                (TypKind::App { name: a, args: aa }, TypKind::App { name: b, args: ba })
+                    if expected.root.interner.resolve(a.symbol)
+                        == found.root.interner.resolve(b.symbol) =>
+                {
+                    if aa.len() != ba.len() {
+                        return Err(arity(span, aa.len(), ba.len()));
+                    }
+                    for (i, (a, b)) in aa.iter().zip(ba).enumerate() {
+                        match (&a.kind, &b.kind) {
+                            (TypArgKind::Typ(_), TypArgKind::Typ(_)) => pairs.push((
+                                expected.child(Step::TypeArgument(i)),
+                                found.child(Step::TypeArgument(i)),
+                            )),
+                            _ if crate::canonical_eq::argument(
+                                a,
+                                b,
+                                &expected.root.interner,
+                                &found.root.interner,
+                                Arc::ptr_eq(&expected.scope, &found.scope),
+                            ) => {}
+                            _ => {
+                                return Err(TypeError::constraint_not_proved(
+                                    span,
+                                    "type argument equivalence requires dependent solving",
+                                ))
+                            }
+                        }
                     }
                 }
                 (TypKind::Unknown, _) | (_, TypKind::Unknown) => {
@@ -294,12 +425,30 @@ impl Checker<'_> {
     ) -> TypeResult<()> {
         let mut work = vec![(pat, typ)];
         while let Some((pat, typ)) = work.pop() {
+            let typ = typ.resolved();
             match &pat.kind {
                 PatKind::Wild => {}
                 PatKind::Id(name) => {
-                    scope
-                        .locals
-                        .insert(self.name(name)?.to_owned(), (typ, mutable));
+                    let name_text = self.name(name)?;
+                    if let Some(value) = self.program.enumeration_member(name_text, self.position) {
+                        self.compatible(&typ, &Type::root(value.clone()), pat.span)?;
+                    } else {
+                        if self.program.register(name_text, self.position).is_some() {
+                            return Err(TypeError {
+                                span: pat.span,
+                                kind: TypeErrorKind::RegisterError(format!(
+                                    "cannot shadow register '{name_text}' in a pattern"
+                                )),
+                            });
+                        }
+                        if scope
+                            .locals
+                            .insert(name_text.to_owned(), (typ, mutable))
+                            .is_some()
+                        {
+                            return Err(unsupported(pat.span, "nonlinear pattern binding"));
+                        }
+                    }
                 }
                 PatKind::As { pat, id } => {
                     scope
@@ -311,7 +460,7 @@ impl Checker<'_> {
                     typ: annotation,
                     pat,
                 } => {
-                    let annotated = Type::owned(annotation.clone(), self.it.clone());
+                    let annotated = self.annotation(annotation)?;
                     self.compatible(&typ, &annotated, pat.span)?;
                     work.push((pat, annotated));
                 }
@@ -348,6 +497,7 @@ impl Checker<'_> {
         let scheme = self.program.value(name, self.position).cloned()
             .ok_or_else(|| unsupported(funcl.span, format!("cannot infer type of unannotated function '{name}' without a val specification")))?;
         let typ = Type::root(scheme);
+        self.context = Some(typ.root.clone());
         let TypKind::Fn { args, .. } = &typ.node().kind else {
             return Err(unsupported(
                 funcl.span,
@@ -391,26 +541,171 @@ impl Checker<'_> {
         self.run(tasks)
     }
     fn infer(&mut self, exp: &Exp, scope: &Scope) -> TypeResult<Type> {
-        match &exp.kind {
-            ExpKind::Lit(lit) => self.literal(lit),
-            ExpKind::Id(name) | ExpKind::Ref(name) => self.id(name, scope),
-            ExpKind::Typ { typ, .. } => Ok(Type::owned(typ.clone(), self.it.clone())),
-            ExpKind::Sizeof(_) => Err(unsupported(exp.span, "dependent size expression typing")),
-            ExpKind::App { func, .. } => {
-                let typ = self.id(func, scope)?;
-                if !typ.root.typschm.quant.is_empty() {
-                    return Err(unsupported(exp.span, "polymorphic call instantiation"));
-                }
-                if !matches!(typ.node().kind, TypKind::Fn { .. }) {
-                    return Err(unsupported(exp.span, "application of non-function"));
-                }
-                Ok(typ.child(Step::Result))
-            }
-            _ => Err(unsupported(
-                exp.span,
-                "synthesis for this expression requires further elaboration",
-            )),
+        enum Synthesis<'a> {
+            Enter(&'a Exp),
+            Call(&'a Exp, Type, usize),
         }
+        let mut work = vec![Synthesis::Enter(exp)];
+        let mut results = Vec::new();
+        while let Some(task) = work.pop() {
+            match task {
+                Synthesis::Enter(exp) => {
+                    if let Some(typ) = self.inferred.get(&(exp as *const Exp)) {
+                        results.push(typ.clone());
+                        continue;
+                    }
+                    results.push(match &exp.kind {
+                        ExpKind::Lit(lit) => self.literal(lit)?,
+                        ExpKind::Id(name) => self.id(name, scope)?,
+                        ExpKind::Typ { typ, .. } => self.annotation(typ)?,
+                        ExpKind::App { func, args } => {
+                            let callee = self.id(func, scope)?.resolved();
+                            let TypKind::Fn { args: formal, .. } = &callee.node().kind else {
+                                return Err(unsupported(exp.span, "application of non-function"));
+                            };
+                            if args.len() != formal.len() {
+                                return Err(arity(exp.span, formal.len(), args.len()));
+                            }
+                            if callee.root.typschm.quant.is_empty() {
+                                callee.child(Step::Result).resolved()
+                            } else {
+                                work.push(Synthesis::Call(exp, callee, args.len()));
+                                work.extend(args.iter().rev().map(Synthesis::Enter));
+                                continue;
+                            }
+                        }
+                        _ => {
+                            return Err(unsupported(
+                                exp.span,
+                                "synthesis for this expression requires further elaboration",
+                            ))
+                        }
+                    });
+                }
+                Synthesis::Call(exp, callee, count) => {
+                    let actual = results.split_off(results.len() - count);
+                    let callee = self.instantiate(callee, &actual, None, exp.span)?;
+                    let result = callee.child(Step::Result).resolved();
+                    self.inferred.insert(exp as *const Exp, result.clone());
+                    results.push(result);
+                }
+            }
+        }
+        Ok(results.pop().expect("synthesized root"))
+    }
+
+    fn instantiate(
+        &self,
+        mut callee: Type,
+        actual: &[Type],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> TypeResult<Type> {
+        let mut quantified = BTreeSet::new();
+        for item in &callee.root.typschm.quant {
+            match item {
+                QuantItem::Id(binder) if binder.kind == Kind::Type => {
+                    quantified.insert(binder.kid);
+                }
+                _ => {
+                    return Err(unsupported(
+                        span,
+                        "dependent call instantiation and constraint discharge",
+                    ))
+                }
+            }
+        }
+        let mut bindings = BTreeMap::new();
+        let mut pairs: Vec<_> = actual
+            .iter()
+            .enumerate()
+            .map(|(i, typ)| (callee.child(Step::Argument(i)), typ.clone()))
+            .collect();
+        if let Some(expected) = expected {
+            pairs.push((callee.child(Step::Result), expected.clone()));
+        }
+        while let Some((formal, actual)) = pairs.pop() {
+            let actual = actual.resolved();
+            match &formal.node().kind {
+                TypKind::Var(symbol) if quantified.contains(symbol) => {
+                    if let Some(bound) = bindings.get(symbol) {
+                        self.compatible(bound, &actual, span)?;
+                    } else {
+                        bindings.insert(*symbol, actual);
+                    }
+                }
+                TypKind::Tuple(items) => {
+                    let TypKind::Tuple(found) = &actual.node().kind else {
+                        return Err(mismatch(span, &formal, &actual));
+                    };
+                    if items.len() != found.len() {
+                        return Err(arity(span, items.len(), found.len()));
+                    }
+                    for i in 0..items.len() {
+                        pairs.push((formal.child(Step::Tuple(i)), actual.child(Step::Tuple(i))));
+                    }
+                }
+                TypKind::App { name, args } => {
+                    let TypKind::App {
+                        name: other,
+                        args: found,
+                    } = &actual.node().kind
+                    else {
+                        return Err(unsupported(span, "synonym expansion during instantiation"));
+                    };
+                    if formal.root.interner.resolve(name.symbol)
+                        != actual.root.interner.resolve(other.symbol)
+                    {
+                        return Err(mismatch(span, &formal, &actual));
+                    }
+                    if args.len() != found.len() {
+                        return Err(arity(span, args.len(), found.len()));
+                    }
+                    for (i, (arg, found)) in args.iter().zip(found).enumerate() {
+                        match (&arg.kind, &found.kind) {
+                            (TypArgKind::Typ(_), TypArgKind::Typ(_)) => pairs.push((
+                                formal.child(Step::TypeArgument(i)),
+                                actual.child(Step::TypeArgument(i)),
+                            )),
+                            _ => {
+                                return Err(unsupported(
+                                    span,
+                                    "numeric or Boolean call argument solving",
+                                ))
+                            }
+                        }
+                    }
+                }
+                _ => self.compatible(&formal, &actual, span)?,
+            }
+        }
+        // Unused quantifiers need no binding. Variables that occur in the
+        // result must be fixed before the result can escape this call.
+        let mut work = vec![callee.child(Step::Result)];
+        while let Some(typ) = work.pop() {
+            match &typ.node().kind {
+                TypKind::Var(symbol)
+                    if quantified.contains(symbol) && !bindings.contains_key(symbol) =>
+                {
+                    return Err(unsupported(
+                        span,
+                        "cannot infer polymorphic result variable",
+                    ))
+                }
+                TypKind::Tuple(items) => {
+                    work.extend((0..items.len()).map(|i| typ.child(Step::Tuple(i))))
+                }
+                TypKind::App { args, .. } => {
+                    work.extend(args.iter().enumerate().filter_map(|(i, arg)| {
+                        matches!(arg.kind, TypArgKind::Typ(_))
+                            .then(|| typ.child(Step::TypeArgument(i)))
+                    }))
+                }
+                _ => {}
+            }
+        }
+        callee.substitutions = Arc::new(bindings);
+        Ok(callee)
     }
     fn run(&mut self, mut tasks: Vec<Task<'_>>) -> TypeResult<()> {
         while let Some(Task {
@@ -421,6 +716,7 @@ impl Checker<'_> {
         }) = tasks.pop()
         {
             self.expressions += 1;
+            let expected = expected.resolved();
             match &exp.kind {
                 ExpKind::Lit(lit) => {
                     let actual = self.literal(lit)?;
@@ -474,7 +770,7 @@ impl Checker<'_> {
                     }
                 }
                 ExpKind::Typ { typ, exp: child } => {
-                    let annotated = Type::owned(typ.clone(), self.it.clone());
+                    let annotated = self.annotation(typ)?;
                     self.compatible(&expected, &annotated, exp.span)?;
                     tasks.push(Task {
                         exp: child,
@@ -484,18 +780,19 @@ impl Checker<'_> {
                     });
                 }
                 ExpKind::App { func, args } => {
-                    let callee = self.id(func, &scope)?;
-                    if !callee.root.typschm.quant.is_empty() {
-                        return Err(unsupported(
-                            exp.span,
-                            "polymorphic call instantiation and constraint discharge",
-                        ));
-                    }
+                    let mut callee = self.id(func, &scope)?.resolved();
                     let TypKind::Fn { args: formal, .. } = &callee.node().kind else {
                         return Err(unsupported(exp.span, "application of non-function"));
                     };
                     if args.len() != formal.len() {
                         return Err(arity(exp.span, formal.len(), args.len()));
+                    }
+                    if !callee.root.typschm.quant.is_empty() {
+                        let actual = args
+                            .iter()
+                            .map(|arg| self.infer(arg, &scope))
+                            .collect::<TypeResult<Vec<_>>>()?;
+                        callee = self.instantiate(callee, &actual, Some(&expected), exp.span)?;
                     }
                     self.compatible(&expected, &callee.child(Step::Result), exp.span)?;
                     for (index, arg) in args.iter().enumerate().rev() {

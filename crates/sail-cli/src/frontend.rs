@@ -264,6 +264,7 @@ pub struct FrontendProgram {
     pub summary: FrontendSummary,
     pub warm: WarmLayer,
     pub manifest: PathBuf,
+    pub source_paths: Vec<String>,
     _scratch: Scratch,
 }
 
@@ -456,5 +457,7 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
         ast_bytes,
         workers,
     };
-    Ok(FrontendProgram { summary, warm, manifest: scratch.0.join("ast.jsonl"), _scratch: scratch })
+    let mut source_paths = vec![String::new(); files.len()];
+    for (path, id) in files { source_paths[id.0 as usize] = path; }
+    Ok(FrontendProgram { summary, warm, manifest: scratch.0.join("ast.jsonl"), source_paths, _scratch: scratch })
 }
