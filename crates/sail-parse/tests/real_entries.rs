@@ -86,6 +86,17 @@ fn file_real_is_lossless_over_fixtures() {
         ids.sort_by_key(|id| (id.index, id.generation));
         ids.dedup();
         assert_eq!(ids.len(), out.ast.defs.len(), "duplicate NodeIds in {name}");
+        for def in out.ast.defs {
+            let expected = serde_json::to_vec(&def).unwrap();
+            let snapshot = sail_ast::storage::DefinitionSnapshot::new(def);
+            let mut bytes = Vec::new();
+            snapshot.write(&mut bytes, &out.interner).unwrap();
+            let (back, it) = sail_ast::storage::DefinitionSnapshot::read(bytes.as_slice()).unwrap();
+            assert_eq!(it, out.interner);
+            let def = back.into_definition();
+            assert_eq!(serde_json::to_vec(&def).unwrap(), expected, "{name}");
+            sail_ast::storage::drop_definition(def);
+        }
     }
 }
 
@@ -414,6 +425,20 @@ fn large_arm_impdef_converts_on_the_default_thread_stack() {
     assert!(matches!(&out.kind, DefKind::Fundef { funcls, .. } if funcls.len() == 1));
     let encoded = serde_json::to_vec(&out).unwrap();
     assert!(encoded.len() > source.len());
+    // Recursive JSON is not a usable out-of-core representation for this
+    // actual ARM tree: reading it exceeds serde_json's nesting limit.
+    let error = serde_json::from_slice::<sail_ast::Def>(&encoded).unwrap_err();
+    assert!(error.to_string().contains("recursion limit"), "{error}");
+    let snapshot = sail_ast::storage::DefinitionSnapshot::new(out);
+    let interner = parser.into_interner();
+    let mut wire = Vec::new();
+    snapshot.write(&mut wire, &interner).unwrap();
+    drop(snapshot);
+    let (back, back_interner) = sail_ast::storage::DefinitionSnapshot::read(wire.as_slice()).unwrap();
+    assert_eq!(back_interner, interner);
+    let def = back.into_definition();
+    assert_eq!(serde_json::to_vec(&def).unwrap(), encoded);
+    sail_ast::storage::drop_definition(def);
 }
 
 #[test]

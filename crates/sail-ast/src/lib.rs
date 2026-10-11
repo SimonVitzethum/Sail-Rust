@@ -20,6 +20,7 @@ mod span;
 
 pub mod ast;
 pub mod json;
+pub mod storage;
 
 pub use files::{FileInfo, FileTable};
 
