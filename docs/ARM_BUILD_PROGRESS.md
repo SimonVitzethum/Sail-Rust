@@ -72,6 +72,22 @@ old artifacts cannot satisfy a failed run. Logs are retained there.
 
 ## Remaining acceptance work
 
+Latest validation (2026-10-11): the complete workspace has 1,128 passing tests
+under `MemoryMax=4G MemorySwapMax=0` (716.6 MiB cgroup peak). The additional
+memory gate executes 368 frontend/OOC/scheduler/rewrite tests under 128 MiB
+per binary, including the large ARM definition, 10,000-pattern traversal and
+512/256 MiB synthetic workloads. All pass; test binaries peak at 13.9 MiB
+(the separately limited build step peaks at 506.1 MiB).
+
+The latest canonical 22-input ARM gate completes grammar/core-AST conversion
+without enlarging worker stacks and reaches name resolution at 680.4 MiB
+cgroup peak under the 16 GiB limit. It fails with three resolver diagnostics,
+starting with duplicate `max_int` val specs in the library and ARM prelude.
+The OCaml reference `type_env.ml::add_val_spec` permits legacy duplicate
+function declarations with a warning and updates their binding; the Rust
+resolver currently rejects them. This is the next semantic mismatch to fix.
+These figures measure a failed frontend run, not a complete ARM compilation.
+
 Full kind/type elaboration, all expression/mapping conversions, complete
 annotation handling, typed rewrites and executable Lean body emission remain incomplete.
 The E2E path also reports missing stages. Whole-program checking and generated
