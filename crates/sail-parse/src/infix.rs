@@ -437,11 +437,11 @@ impl<T: Clone> Climber<'_, T> {
         // Ketten-Operanden sind Stufe-5-Formen (`.mly`: `typ5 LtEq ...`).
         let rhs = self.climb(5)?;
         let mut prev = rhs.clone();
-        let mut acc = Folded::Infix {
+        let mut pairs = vec![Folded::Infix {
             op: first_op,
             lhs: Box::new(lhs),
             rhs: Box::new(rhs),
-        };
+        }];
         loop {
             let next: Option<String> = match self.toks.get(self.pos) {
                 Some(Tok::Op(o)) => Some(o.clone()),
@@ -460,10 +460,14 @@ impl<T: Clone> Climber<'_, T> {
                 rhs: Box::new(rhs.clone()),
             };
             prev = rhs;
+            pairs.push(pair);
+        }
+        let mut acc = pairs.pop().expect("first comparison");
+        while let Some(pair) = pairs.pop() {
             acc = Folded::Infix {
                 op: "&".to_owned(),
-                lhs: Box::new(acc),
-                rhs: Box::new(pair),
+                lhs: Box::new(pair),
+                rhs: Box::new(acc),
             };
         }
         Ok(acc)

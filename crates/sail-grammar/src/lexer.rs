@@ -286,15 +286,16 @@ pub fn tokenize(src: &str) -> Result<Vec<(usize, Tok, usize)>, LexError> {
         c.skip_ws();
         let start = c.pos;
         let Some(b) = c.peek() else { break };
+        // ocamllex uses longest match across punctuation and operators.
+        // `==`, `>=`, `^^` and `/` must not be split into punctuation tokens.
+        if is_oper_char(b as char)
+            && !c.starts_with("//") && !c.starts_with("/*")
+            && !c.starts_with("|]") && !c.starts_with("|}")
+        {
+            lex_operator(&mut c, src, start, &mut out)?;
+            continue;
+        }
         match b {
-            b'@' => {
-                c.bump(1);
-                out.push((start, Tok::At, c.pos));
-            }
-            b'^' => {
-                c.bump(1);
-                out.push((start, Tok::Caret, c.pos));
-            }
             b',' => {
                 c.bump(1);
                 out.push((start, Tok::Comma, c.pos));
@@ -352,71 +353,6 @@ pub fn tokenize(src: &str) -> Result<Vec<(usize, Tok, usize)>, LexError> {
                 } else {
                     c.bump(1);
                     out.push((start, Tok::Bar, c.pos));
-                }
-            }
-            b'.' => {
-                if c.starts_with("..") {
-                    c.bump(2);
-                    out.push((start, Tok::DotDot, c.pos));
-                } else {
-                    c.bump(1);
-                    out.push((start, Tok::Dot, c.pos));
-                }
-            }
-            b':' => {
-                if c.starts_with("::") {
-                    c.bump(2);
-                    out.push((start, Tok::ColonColon, c.pos));
-                } else {
-                    c.bump(1);
-                    out.push((start, Tok::Colon, c.pos));
-                }
-            }
-            b'=' => {
-                if c.starts_with("=>") {
-                    c.bump(2);
-                    out.push((start, Tok::EqGt, c.pos));
-                } else {
-                    c.bump(1);
-                    out.push((start, Tok::Eq, c.pos));
-                }
-            }
-            b'-' => {
-                if c.starts_with("->") {
-                    c.bump(2);
-                    out.push((start, Tok::MinusGt, c.pos));
-                } else {
-                    // longest match: operator chars run, but a lone `-`
-                    // (not followed by an operator char) is `Minus`.
-                    let mut end = c.pos + 1;
-                    while c.src.get(end).is_some_and(|&x| is_oper_char(x as char) && x != b'/') {
-                        end += 1;
-                    }
-                    if end == c.pos + 1 {
-                        c.bump(1);
-                        out.push((start, Tok::Minus, c.pos));
-                    } else {
-                        let op = &src[c.pos..end];
-                        c.bump(end - c.pos);
-                        out.push((start, Tok::OpId(op.to_string()), c.pos));
-                    }
-                }
-            }
-            b'<' => {
-                if c.starts_with("<->") {
-                    c.bump(3);
-                    out.push((start, Tok::Bidir, c.pos));
-                } else {
-                    lex_operator(&mut c, src, start, &mut out)?;
-                }
-            }
-            b'*' => {
-                // `**...` is an operator; lone `*` is `Star`.
-                if c.src.get(c.pos + 1).is_some_and(|&x| is_oper_char(x as char) && x != b'/') {
-                    lex_operator(&mut c, src, start, &mut out)?;
-                } else {
-                    c.bump(1);
-                    out.push((start, Tok::Star, c.pos));
                 }
             }
             b'/' => {
@@ -517,10 +453,11 @@ pub fn tokenize(src: &str) -> Result<Vec<(usize, Tok, usize)>, LexError> {
 }
 
 fn lex_operator(c: &mut Cursor<'_>, src: &str, start: usize, out: &mut Vec<(usize, Tok, usize)>) -> Result<(), LexError> {
-    // Longest run of operator chars (`/` excluded: comments handled above).
+    // Comment openings are handled before this function; `/` elsewhere is
+    // an operator character, including as a standalone division operator.
     // A trailing `_ident` suffix belongs to the operator (ocamllex `operatorn`).
     let mut end = c.pos;
-    while c.src.get(end).is_some_and(|&x| is_oper_char(x as char) && x != b'/') {
+    while c.src.get(end).is_some_and(|&x| is_oper_char(x as char)) {
         end += 1;
     }
     if end == c.pos {
@@ -538,10 +475,17 @@ fn lex_operator(c: &mut Cursor<'_>, src: &str, start: usize, out: &mut Vec<(usiz
             end = k;
         }
     }
-    let op = src[c.pos..end].to_string();
+    let op = &src[c.pos..end];
+    let token = match op {
+        "@" => Tok::At, "^" => Tok::Caret, "::" => Tok::ColonColon,
+        ":" => Tok::Colon, ".." => Tok::DotDot, "." => Tok::Dot,
+        "=" => Tok::Eq, "*" => Tok::Star, "|" => Tok::Bar,
+        "=>" => Tok::EqGt, "->" => Tok::MinusGt, "<->" => Tok::Bidir,
+        "-" => Tok::Minus,
+        _ => Tok::OpId(op.to_string()),
+    };
     c.bump(end - c.pos);
-    let _ = start;
-    out.push((start, Tok::OpId(op), c.pos));
+    out.push((start, token, c.pos));
     Ok(())
 }
 

@@ -323,6 +323,7 @@ AtomicTyp: Typ = {
 
 // `tyarg`.
 TyArgs: Vec<Typ> = {
+    "()" => vec![],
     "(" <ts:TypList?> ")" => ts.unwrap_or_default(),
 }
 
@@ -1298,6 +1299,7 @@ MapDef: MapDef = {
 
 // `typaram`.
 TyParam: TypQuant = {
+    "()" <t:TyParamTail?> => TypQuant { kopts: vec![], constraint: t.map(Box::new) },
     "(" <ks:ParamKOptList?> ")" <t:TyParamTail?> => TypQuant {
         kopts: ks.unwrap_or_default(),
         constraint: t.map(Box::new),
@@ -1329,6 +1331,7 @@ ParamKOptList: Vec<KOpt> = {
 // whose reduce competed with the `constraint` shift
 // (Rig 1220:5-1223:5). Same accepted language.
 UnbracketedTyParam: TypQuant = {
+    "()" <t:TyParamTail?> => TypQuant { kopts: vec![], constraint: t.map(Box::new) },
     <ks:ParamKOptList> => TypQuant {
         kopts: ks,
         constraint: None,
