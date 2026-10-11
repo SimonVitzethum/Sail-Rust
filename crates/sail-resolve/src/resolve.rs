@@ -241,13 +241,11 @@ impl Resolver {
                         target_names.push(t);
                     }
                 }
-                if let Err(e) = self.env.insert_overload(OverloadEntry {
+                self.env.insert_overload(OverloadEntry {
                     name: over_name.clone(),
                     targets: target_names,
                     span,
-                }) {
-                    self.push_err(e);
-                }
+                });
                 self.pending_overloads.push((over_name, targets, span));
             }
             DefKind::Default(order) => {
@@ -520,6 +518,8 @@ impl Resolver {
             for (target, target_span) in targets {
                 if self.env.lookup_valspec(&target).is_none()
                     && self.env.lookup_function(&target).is_none()
+                    && self.env.lookup_overload(&target).is_none()
+                    && self.env.lookup_ctor(&target).is_none()
                 {
                     self.push_err(ResolveError {
                         kind: ResolveErrorKind::UnknownOverloadTarget,

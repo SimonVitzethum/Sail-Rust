@@ -317,6 +317,20 @@ fn intra_clause_duplicate_pattern_is_error() {
 }
 
 #[test]
+fn overload_extensions_append_candidates_and_can_reference_overloads() {
+    let mut it = SimpleInterner::new();
+    let mut defs = vec![valspec_def(&mut it, "f"), valspec_def(&mut it, "g")];
+    for (name, target) in [("o", "f"), ("o", "g"), ("nested", "o")] {
+        defs.push(Node::dummy(DefKind::Overload {
+            name: nm(&mut it, name), overloads: vec![nm(&mut it, target)],
+        }));
+    }
+    let result = resolve(&Ast::new(defs), &it);
+    assert!(result.is_ok(), "{:?}", result.errors);
+    assert_eq!(result.env.lookup_overload("o").unwrap().targets, ["f", "g"]);
+}
+
+#[test]
 fn overload_targets_must_exist_order_independent() {
     // Overload listed *before* its targets still resolves.
     let mut it = SimpleInterner::new();

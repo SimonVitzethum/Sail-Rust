@@ -64,6 +64,10 @@ pub static PRELUDE_FILES: &[PreludeFile] = &[
     prelude_file!("vector_inc.sail"),
 ];
 
+/// Implicit builtins loaded before model inputs unless `--no-core` is set,
+/// matching OCaml `Frontend.load_files` and `Corelib_sail.path`.
+pub static CORE_LIBRARY: PreludeFile = prelude_file!("core/corelib.sail");
+
 /// File names in [`PRELUDE_FILES`] order.
 pub fn names() -> impl Iterator<Item = &'static str> {
     PRELUDE_FILES.iter().map(|f| f.name)
@@ -72,6 +76,7 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 /// Look up a vendored prelude file by file name.
 pub fn get(name: &str) -> Option<&'static PreludeFile> {
     PRELUDE_FILES.iter().find(|f| f.name == name)
+        .or_else(|| (name == CORE_LIBRARY.name).then_some(&CORE_LIBRARY))
 }
 
 /// Minimal empty-model skeleton: a stub Sail model that only pulls in

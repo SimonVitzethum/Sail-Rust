@@ -230,6 +230,30 @@ impl<'a> Scanner<'a> {
         Some((self.slice(start, self.pos).to_owned(), self.span(from, to)))
     }
 
+    /// Read an identifier or symbolic definition name before scanning `=`.
+    /// Operator names may themselves contain `=` (or be exactly `=`).
+    fn read_definition_name(&mut self) -> Result<String, ParseError> {
+        self.skip_trivia_all()?;
+        let from = self.cur();
+        if self.peek() == Some(b'"') {
+            let raw = self.read_string()?;
+            return Ok(raw[1..raw.len() - 1].to_owned());
+        }
+        if let Some((word, _)) = self.read_ident() {
+            if word != "operator" { return Ok(word); }
+            self.skip_trivia_all()?;
+        }
+        let start = self.pos;
+        while self.peek().is_some_and(|b| b"!%&*+-./:<=>@^|".contains(&b)) {
+            self.bump(1);
+        }
+        if self.pos == start { return Err(self.err(from, self.cur(), "expected definition name")); }
+        if self.peek() == Some(b'_') {
+            while self.peek().is_some_and(is_ident_char) { self.bump(1); }
+        }
+        Ok(self.slice(start, self.pos).to_owned())
+    }
+
     /// Read a `"..."` string at the cursor (including quotes), raw.
     fn read_string(&mut self) -> Result<String, ParseError> {
         let from = self.cur();
@@ -377,6 +401,8 @@ impl<'a> Scanner<'a> {
                     // `==`, `=>`, `<=`, `>=`, `!=` are not header ends.
                     let n = self.peek_at(1);
                     if matches!(n, Some(b'=') | Some(b'>')) {
+                        self.bump(2);
+                    } else if self.pos > start && b"!%&*+-./:<=>@^|".contains(&self.bytes[self.pos - 1]) {
                         self.bump(1);
                     } else {
                         return Ok((self.slice(start, self.pos).trim().to_owned(), HeaderEnd::Eq));
@@ -546,66 +572,79 @@ enum HeaderEnd {
 /// Spans carry `FileId(0)`: the file-table mapping (`FileId` → path) is
 /// owned by a later (driver) lane; the path stays on [`ParsedFile::path`].
 pub fn parse_file(path: &str, src: &str) -> Result<ParsedFile, ParseError> {
-    let mut sc = Scanner::new(FileId(0), src);
-    let mut defs: Vec<SpannedDef> = Vec::new();
+    let defs = iter_file(path, src).collect::<Result<Vec<_>, _>>()?;
+    Ok(ParsedFile { path: path.to_owned(), defs })
+}
 
-    defs.push(SpannedDef::new(
-        Def::Pragma { name: "file_start".to_owned(), arg: PragmaArg::Line(path.to_owned()) },
-        Span::new(FileId(0), 0, 0),
-    ));
+/// Lazily scan one definition at a time, retaining only the borrowed source
+/// and current definition. Errors terminate the iterator. The collecting
+/// `parse_file` API uses the same scanner and preserves its marker contract.
+pub fn iter_file<'a>(path: &str, src: &'a str) -> Definitions<'a> {
+    Definitions { scanner: Scanner::new(FileId(0), src), path: path.into(), started: false, finished: false }
+}
 
-    loop {
+pub struct Definitions<'a> {
+    scanner: Scanner<'a>,
+    path: String,
+    started: bool,
+    finished: bool,
+}
+
+impl Iterator for Definitions<'_> {
+    type Item = Result<SpannedDef, ParseError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished { return None; }
+        if !self.started {
+            self.started = true;
+            return Some(Ok(SpannedDef::new(
+                Def::Pragma { name: "file_start".into(), arg: PragmaArg::Line(self.path.clone()) },
+                Span::new(FileId(0), 0, 0),
+            )));
+        }
+        let result = self.next_definition();
+        if result.is_err() { self.finished = true; }
+        Some(result)
+    }
+}
+impl std::iter::FusedIterator for Definitions<'_> {}
+
+impl Definitions<'_> {
+    fn next_definition(&mut self) -> Result<SpannedDef, ParseError> {
+        let sc = &mut self.scanner;
         sc.skip_trivia_all()?;
         if sc.eof() {
-            break;
+            self.finished = true;
+            return Ok(SpannedDef::new(
+                Def::Pragma { name: "file_end".into(), arg: PragmaArg::Line(self.path.clone()) },
+                sc.span(sc.cur(), sc.cur()),
+            ));
         }
         let def_start = sc.cur();
         if sc.peek() == Some(b'$') {
-            let (def, end) = parse_pragma(&mut sc)?;
-            defs.push(SpannedDef::new(def, sc.span(def_start, end)));
-            continue;
+            let (def, end) = parse_pragma(sc)?;
+            return Ok(SpannedDef::new(def, sc.span(def_start, end)));
         }
-        let Some((kw, _kw_span)) = sc.read_ident() else {
+        let Some((kw, _)) = sc.read_ident() else {
             let to = sc.cur();
-            // Skip one stray char with an error: unbalanced `}` etc.
             if sc.peek() == Some(b'}') {
                 return Err(sc.err(def_start, to, "unbalanced `}` at top level"));
             }
             let ch = sc.peek().unwrap_or(b'?') as char;
             return Err(sc.err(def_start, to, &format!("expected definition keyword, found `{ch}`")));
         };
-        if kw == "private" {
-            // Visibility prefix: parse the real def, extend its span.
+        let kw = if kw == "private" {
             sc.skip_trivia_all()?;
-            let inner_start = sc.cur();
-            let Some((ikw, _)) = sc.read_ident() else {
-                let to = sc.cur();
-                return Err(sc.err(def_start, to, "expected definition after `private`"));
-            };
-            let (def, end) = parse_keyword_def(&mut sc, path, &ikw, inner_start)?;
-            let _ = inner_start;
-            defs.push(SpannedDef::new(def, sc.span(def_start, end)));
-            continue;
-        }
+            sc.read_ident().map(|(kw, _)| kw).ok_or_else(||
+                sc.err(def_start, sc.cur(), "expected definition after `private`"))?
+        } else { kw };
         if !is_starter(&kw) {
-            let to = sc.cur();
-            return Err(sc.err(
-                def_start,
-                to,
-                &format!("expected definition keyword, found `{kw}` (line must start a definition)"),
-            ));
+            return Err(sc.err(def_start, sc.cur(),
+                &format!("expected definition keyword, found `{kw}` (line must start a definition)")));
         }
-        let (def, end) = parse_keyword_def(&mut sc, path, &kw, def_start)?;
-        defs.push(SpannedDef::new(def, sc.span(def_start, end)));
+        let (def, end) = parse_keyword_def(sc, &self.path, &kw, def_start)?;
+        Ok(SpannedDef::new(def, sc.span(def_start, end)))
     }
-
-    let eof = sc.cur();
-    defs.push(SpannedDef::new(
-        Def::Pragma { name: "file_end".to_owned(), arg: PragmaArg::Line(path.to_owned()) },
-        Span::new(FileId(0), eof.byte as u32, eof.byte as u32),
-    ));
-
-    Ok(ParsedFile { path: path.to_owned(), defs })
 }
 
 /// Parse `$name ...`, `$name{...}` or `$[name ...]` at the cursor
@@ -698,21 +737,11 @@ fn parse_keyword_def(
     match kw {
         "val" => {
             sc.skip_trivia_all()?;
-            // Optional quoted operator name: val "op" : ...
-            let name = if sc.peek() == Some(b'"') {
-                let raw = sc.read_string()?;
-                raw[1..raw.len() - 1].to_owned()
-            } else {
-                let (head, end_kind) = sc.capture_header()?;
-                // Name = first ident in header (skipping a leading
-                // `operator` keyword: `val operator ^^ = ...` names `^^`).
-                let nm = clause_name(&head);
-                return Ok((Def::Val { name: nm, sig_src: finish_val_sig(sc, head, end_kind)? }, sc.cur()));
-            };
+            let name_start = sc.pos;
+            let name = sc.read_definition_name()?;
+            let name_src = sc.slice(name_start, sc.pos).to_owned();
             let (head, end_kind) = sc.capture_header()?;
-            // header starts with `: ...`; sig = name + header
-            let sig_src = format!("{name}{}", head.trim_start());
-            let sig_src = finish_val_sig(sc, sig_src, end_kind)?;
+            let sig_src = finish_val_sig(sc, format!("{name_src} {head}"), end_kind)?;
             Ok((Def::Val { name, sig_src }, sc.cur()))
         }
         "function" | "mapping" | "impl" => {
@@ -801,9 +830,8 @@ fn parse_keyword_def(
             Ok((Def::Register { name, type_src, init_src }, sc.cur()))
         }
         "overload" => {
-            sc.skip_trivia_all()?;
+            let name = sc.read_definition_name()?;
             let (head, end_kind) = sc.capture_header()?;
-            let name = clause_name(&head);
             let (head_src, body_src) = finish_eq_body(sc, head, end_kind)?;
             let ids_src = if body_src.is_empty() { head_src } else { body_src };
             let ids = idents_in(&ids_src);

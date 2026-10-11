@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 //! Korpus-Gate-Treiber (Lane 81): alle `sail/lib`-Dateien durchs Frontend.
 //!
-//! NOTE (E3): Treiber als Code, NICHT ausführen in dieser Lane — kein lokaler
-//! `cargo`-Lauf. Verifikation auf dem Test-Rig (`cargo test -p sail-prelude`).
-//! Der Treiber parst jede Datei mit `sail_parse::bridge_file` (Lane 02 + 63)
+//! The fragment gate preprocesses conditionals before bridging each file.
+//! Includes stay explicit: this per-file test is not a whole-program check.
 //! und resolvt mit `sail_resolve::resolve` (Lane 03). Fehler → katalogisiert
 //! als [`sail_prelude::corpus::FileReport`] (Stufe + Meldung); deferred
 //! Bridge-Reste sind KEIN Fehler, nur Lücke mit Owner aus
@@ -46,7 +45,17 @@ fn collect_sail(dir: &Path, out: &mut Vec<PathBuf>) {
 
 /// Eine Datei durch parse → bridge → resolve treiben.
 fn run_one(rel: &str, src: &str) -> FileReport {
-    let bridged = match sail_parse::bridge_file(rel, src) {
+    let mut parsed = sail_parse::ParsedFile { path: rel.into(), defs: Vec::new() };
+    let mut preprocessor = sail_parse::preprocess::Preprocessor::new(Some("lean".into()));
+    // Library fragments need the same implicit builtins as model inputs.
+    // Provide a default order explicitly so vector.sail's guard is exercised.
+    preprocessor.process("defaults", "default Order dec\n", |_, _| Ok(None), |_, _| Ok(())).unwrap();
+    preprocessor.process(sail_prelude::CORE_LIBRARY.name,
+        sail_prelude::CORE_LIBRARY.contents, |_, _| Ok(None),
+        |_, def| { parsed.defs.push(def); Ok(()) }).unwrap();
+    let preprocessed = preprocessor.process(rel, src, |_, _| Ok(None),
+        |_, def| { parsed.defs.push(def); Ok(()) });
+    let bridged = match preprocessed.map(|()| sail_parse::bridge_parsed(&parsed)) {
         Ok(b) => b,
         Err(e) => {
             return FileReport {

@@ -445,19 +445,17 @@ impl Env {
         }
     }
 
-    pub(crate) fn insert_overload(&mut self, e: OverloadEntry) -> Result<(), ResolveError> {
+    pub(crate) fn insert_overload(&mut self, e: OverloadEntry) {
         use std::collections::hash_map::Entry;
         match self.overloads.entry(e.name.clone()) {
             Entry::Vacant(v) => {
                 v.insert(e);
-                Ok(())
             }
-            Entry::Occupied(o) => Err(ResolveError {
-                kind: ResolveErrorKind::DuplicateOverload,
-                name: e.name,
-                first: o.get().span,
-                second: e.span,
-            }),
+            Entry::Occupied(mut o) => {
+                // OCaml Type_env.add_overloads appends candidates in source
+                // order. Libraries deliberately extend core overloads.
+                o.get_mut().targets.extend(e.targets);
+            }
         }
     }
 

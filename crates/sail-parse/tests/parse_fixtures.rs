@@ -287,3 +287,29 @@ fn scattered_clauses_end_operator_names_nested_comments() {
     assert!(names.iter().any(|h| h.starts_with("clause csr_map")), "{names:?}");
     assert!(names.iter().any(|h| h == "end step"), "{names:?}");
 }
+
+#[test]
+fn symbolic_names_are_not_split_at_equals() {
+    for op in ["==", "<=", ">=", "!=", "=", ">=_s"] {
+        let src = format!("val operator {op} : (int, int) -> bool\noverload operator {op} = {{eq_int}}\n");
+        let parsed = parse_file("operators.sail", &src).unwrap();
+        let val = parsed.defs.iter().find_map(|d| match &d.def {
+            Def::Val { name, .. } => Some(name), _ => None,
+        }).unwrap();
+        let (name, ids) = parsed.defs.iter().find_map(|d| match &d.def {
+            Def::Overload { name, ids } => Some((name, ids)), _ => None,
+        }).unwrap();
+        assert_eq!(val, op);
+        assert_eq!(name, op);
+        assert_eq!(ids, &["eq_int"]);
+    }
+}
+#[test]
+fn definition_iterator_is_lazy_and_fused_after_errors() {
+    let mut defs = sail_parse::iter_file("lazy.sail", "val x : int\n\n}\n");
+    assert!(defs.next().unwrap().is_ok()); // file_start
+    assert!(matches!(defs.next().unwrap().unwrap().def, sail_parse::Def::Val { .. }));
+    assert!(defs.next().unwrap().is_err());
+    assert!(defs.next().is_none());
+    assert!(defs.next().is_none());
+}
