@@ -61,6 +61,7 @@ struct Value {
 pub struct Program {
     constructors: BTreeMap<String, Vec<Binding<Constructor>>>,
     values: BTreeMap<String, Vec<Binding<Value>>>,
+    overloads: BTreeMap<String, Vec<Binding<Vec<String>>>>,
     registers: BTreeMap<String, Vec<Binding<Arc<Scheme>>>>,
     constraints: Vec<Binding<(Arc<Constraint>, Arc<SimpleInterner>)>>,
     solvers: SolverPool<SmtLibSolver>,
@@ -70,6 +71,7 @@ impl Default for Program {
         Self {
             constructors: BTreeMap::new(),
             values: BTreeMap::new(),
+            overloads: BTreeMap::new(),
             registers: BTreeMap::new(),
             constraints: Vec::new(),
             solvers: SolverPool::with_default_cache(SmtLibSolver::new),
@@ -426,6 +428,37 @@ impl Program {
                 });
                 Ok(())
             }
+            DefKind::Overload { name, overloads } => {
+                let name = text(&*it, name.symbol, name.span)?.to_owned();
+                if self.value(&name, position).is_some() || self.register(&name, position).is_some()
+                {
+                    return Err(failure(
+                        def.span,
+                        format!("overload '{name}' conflicts with an existing value"),
+                    ));
+                }
+                let mut candidates = self.overload(&name, position).unwrap_or(&[]).to_vec();
+                for candidate in overloads {
+                    let candidate_name = text(&*it, candidate.symbol, candidate.span)?;
+                    if self.value(candidate_name, position).is_none()
+                        && self.register(candidate_name, position).is_none()
+                        && self.overload(candidate_name, position).is_none()
+                    {
+                        return Err(TypeError::unbound_var(
+                            candidate.span,
+                            candidate_name.to_owned(),
+                        ));
+                    }
+                    candidates.push(candidate_name.to_owned());
+                }
+                // OCaml extends the existing list at its end, preserving the
+                // first matching candidate and source-position semantics.
+                self.overloads.entry(name).or_default().push(Binding {
+                    position,
+                    value: candidates,
+                });
+                Ok(())
+            }
             // Bodies and definitions requiring inference are checked by the
             // body pass; accepting their header does not accept the body.
             _ => Ok(()),
@@ -547,6 +580,56 @@ impl Program {
             .get(name)
             .and_then(|history| at(history, position))
             .map(|value| &value.scheme)
+    }
+    fn overload(&self, name: &str, position: usize) -> Option<&[String]> {
+        self.overloads
+            .get(name)
+            .and_then(|history| at(history, position))
+            .map(Vec::as_slice)
+    }
+    pub(crate) fn overload_candidates(
+        &self,
+        name: &str,
+        position: usize,
+    ) -> TypeResult<Option<Vec<Arc<Scheme>>>> {
+        let Some(initial) = self.overload(name, position) else {
+            return Ok(None);
+        };
+        enum Work<'a> {
+            Enter(&'a str),
+            Leave(&'a str),
+        }
+        let mut active = std::collections::BTreeSet::new();
+        active.insert(name);
+        let mut work: Vec<_> = initial
+            .iter()
+            .rev()
+            .map(|n| Work::Enter(n.as_str()))
+            .collect();
+        let mut candidates = Vec::new();
+        while let Some(task) = work.pop() {
+            match task {
+                Work::Leave(name) => {
+                    active.remove(name);
+                }
+                Work::Enter(name) => {
+                    if let Some(nested) = self.overload(name, position) {
+                        if !active.insert(name) {
+                            return Err(failure(Span::DUMMY, format!("cyclic overload '{name}'")));
+                        }
+                        work.push(Work::Leave(name));
+                        work.extend(nested.iter().rev().map(|n| Work::Enter(n.as_str())));
+                    } else {
+                        let scheme = self
+                            .register(name, position)
+                            .or_else(|| self.value(name, position))
+                            .ok_or_else(|| TypeError::unbound_var(Span::DUMMY, name.to_owned()))?;
+                        candidates.push(scheme.clone());
+                    }
+                }
+            }
+        }
+        Ok(Some(candidates))
     }
     pub(crate) fn enumeration_member(&self, name: &str, position: usize) -> Option<&Arc<Scheme>> {
         self.values

@@ -140,8 +140,15 @@ compound result types and prove quantifier constraints. Immutable bindings and
 opaque scalar results receive distinct rigid singleton witnesses. Canonical
 views avoid copying numeric trees; cached call instances and iterative
 substitution cleanup handle 10,000 composed dependent calls on a 128 KiB stack.
-The run now passes `flow.sail` bodies and stops in `arith.sail` at inline function
-signature elaboration; it takes 39.75 s and peaks at 1.3 GiB without swap.
+Inline return annotations now synthesize complete signatures from argument
+patterns, including argument-only binder-kind uses. Source-ordered overload
+tables preserve OCaml candidate order and check all arguments, return context
+and dependent obligations. Nested expansion and deep header cleanup use explicit
+work stacks. The run passes `flow.sail`, inline signatures and operator lookup,
+then stops at the nonnegative-shift obligation in `_shl_int_general` because
+conditional branch assumptions are missing. It takes 49.69 s and peaks at
+1.4 GiB without swap. The canonical gate has 27 passing tests under 128 MiB,
+including negative overload cases and 10,000-level inline tuple patterns.
 The focused solver/typechecker/CLI suite passes 203 tests with each binary limited
 to 128 MiB, including 21 canonical tests and a stalled-child deadline/reaping
 regression. The updated sixteen-worker out-of-core subset run passes at 128 MiB

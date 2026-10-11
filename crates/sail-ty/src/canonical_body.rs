@@ -465,6 +465,64 @@ impl Checker<'_> {
             .map(Type::root)
             .ok_or_else(|| TypeError::unbound_var(name.span, name_text.to_owned()))
     }
+    fn call_candidates(&self, name: &Name, scope: &Scope) -> TypeResult<Vec<Type>> {
+        let name_text = self.name(name)?;
+        if scope.get(name_text).is_none() {
+            if let Some(candidates) = self.program.overload_candidates(name_text, self.position)? {
+                return Ok(candidates.into_iter().map(Type::root).collect());
+            }
+        }
+        Ok(vec![self.id(name, scope)?.resolved()])
+    }
+    fn select_call(
+        &self,
+        candidates: Vec<Type>,
+        actual: &[Type],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> TypeResult<Type> {
+        let single = candidates.len() == 1;
+        let mut last = None;
+        for callee in candidates {
+            let attempt = (|| {
+                let TypKind::Fn { args, .. } = &callee.node().kind else {
+                    return Err(unsupported(span,"overload candidate is not an elaborated function (mapping expansion may be required)"));
+                };
+                if args.len() != actual.len() {
+                    return Err(arity(span, args.len(), actual.len()));
+                }
+                let callee = if callee.root.typschm.quant.is_empty() {
+                    callee
+                } else {
+                    self.instantiate(callee, actual, expected, span)?
+                };
+                for (index, typ) in actual.iter().enumerate() {
+                    self.compatible(&callee.child(Step::Argument(index)), typ, span)?;
+                }
+                if let Some(expected) = expected {
+                    self.compatible(expected, &callee.child(Step::Result), span)?;
+                }
+                Ok(callee)
+            })();
+            match attempt {
+                Ok(callee) => return Ok(callee),
+                Err(error) if matches!(error.kind, TypeErrorKind::Unsupported(_)) => {
+                    return Err(error)
+                }
+                Err(error) => last = Some(error),
+            }
+        }
+        if single {
+            return Err(last.expect("one attempted candidate"));
+        }
+        Err(TypeError {
+            span,
+            kind: TypeErrorKind::QuantError(format!(
+                "no matching overload{}",
+                last.map(|e| format!(": {e}")).unwrap_or_default()
+            )),
+        })
+    }
     fn literal(&mut self, lit: &Lit) -> TypeResult<Type> {
         Ok(match crate::canonical_literal::classify(lit, &self.it)? {
             crate::canonical_literal::LiteralType::Primitive(name) => self.builtin(name),
@@ -695,7 +753,7 @@ impl Checker<'_> {
     fn infer(&mut self, exp: &Exp, scope: &Scope) -> TypeResult<Type> {
         enum Synthesis<'a> {
             Enter(&'a Exp),
-            Call(&'a Exp, Type, usize),
+            Call(&'a Exp, Vec<Type>, usize),
         }
         let mut work = vec![Synthesis::Enter(exp)];
         let mut results = Vec::new();
@@ -711,7 +769,13 @@ impl Checker<'_> {
                         ExpKind::Id(name) => self.id(name, scope)?,
                         ExpKind::Typ { typ, .. } => self.annotation(typ)?,
                         ExpKind::App { func, args } => {
-                            let callee = self.id(func, scope)?.resolved();
+                            let mut candidates = self.call_candidates(func, scope)?;
+                            if candidates.len() != 1 {
+                                work.push(Synthesis::Call(exp, candidates, args.len()));
+                                work.extend(args.iter().rev().map(Synthesis::Enter));
+                                continue;
+                            }
+                            let callee = candidates.pop().unwrap();
                             let TypKind::Fn { args: formal, .. } = &callee.node().kind else {
                                 return Err(unsupported(exp.span, "application of non-function"));
                             };
@@ -721,7 +785,7 @@ impl Checker<'_> {
                             if callee.root.typschm.quant.is_empty() {
                                 callee.child(Step::Result).resolved()
                             } else {
-                                work.push(Synthesis::Call(exp, callee, args.len()));
+                                work.push(Synthesis::Call(exp, vec![callee], args.len()));
                                 work.extend(args.iter().rev().map(Synthesis::Enter));
                                 continue;
                             }
@@ -735,9 +799,9 @@ impl Checker<'_> {
                     };
                     results.push(self.value_type(exp, declared));
                 }
-                Synthesis::Call(exp, callee, count) => {
+                Synthesis::Call(exp, candidates, count) => {
                     let actual = results.split_off(results.len() - count);
-                    let callee = self.instantiate(callee, &actual, None, exp.span)?;
+                    let callee = self.select_call(candidates, &actual, None, exp.span)?;
                     let result = self.value_type(exp, callee.child(Step::Result).resolved());
                     self.calls.insert(exp as *const Exp, callee);
                     self.inferred.insert(exp as *const Exp, result.clone());
@@ -1027,21 +1091,24 @@ impl Checker<'_> {
                     });
                 }
                 ExpKind::App { func, args } => {
-                    let mut callee = self.id(func, &scope)?.resolved();
+                    let mut candidates = self.call_candidates(func, &scope)?;
+                    let callee = if let Some(callee) = self.calls.get(&(exp as *const Exp)) {
+                        callee.clone()
+                    } else if candidates.len() != 1 || !candidates[0].root.typschm.quant.is_empty()
+                    {
+                        let actual = args
+                            .iter()
+                            .map(|arg| self.infer(arg, &scope))
+                            .collect::<TypeResult<Vec<_>>>()?;
+                        self.select_call(candidates, &actual, Some(&expected), exp.span)?
+                    } else {
+                        candidates.pop().unwrap()
+                    };
                     let TypKind::Fn { args: formal, .. } = &callee.node().kind else {
                         return Err(unsupported(exp.span, "application of non-function"));
                     };
                     if args.len() != formal.len() {
                         return Err(arity(exp.span, formal.len(), args.len()));
-                    }
-                    if let Some(instantiated) = self.calls.get(&(exp as *const Exp)) {
-                        callee = instantiated.clone();
-                    } else if !callee.root.typschm.quant.is_empty() {
-                        let actual = args
-                            .iter()
-                            .map(|arg| self.infer(arg, &scope))
-                            .collect::<TypeResult<Vec<_>>>()?;
-                        callee = self.instantiate(callee, &actual, Some(&expected), exp.span)?;
                     }
                     let result = self.value_type(exp, callee.child(Step::Result).resolved());
                     self.compatible(&expected, &result, exp.span)?;

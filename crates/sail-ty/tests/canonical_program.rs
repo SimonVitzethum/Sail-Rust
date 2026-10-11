@@ -25,6 +25,98 @@ fn declare(defs: &[(Def, Arc<SimpleInterner>)]) -> Program {
 }
 
 #[test]
+fn overloads_check_all_arguments_results_and_dependent_constraints() {
+    let defs = parse(&[
+        "val integer : int -> int",
+        "val boolean : bool -> bool",
+        "overload choose = {integer, boolean}",
+        "function pick_bool(x : bool) -> bool = choose(x)",
+        "function pick_int(x : int) -> int = choose(x)",
+        "val wrong_pair : (int, bool) -> int",
+        "val right_pair : (int, int) -> int",
+        "overload pair = {wrong_pair, right_pair}",
+        "function pair_call(x : int) -> int = pair(x, x)",
+        "val returns_bool : int -> bool",
+        "overload result = {returns_bool, integer}",
+        "function result_call(x : int) -> int = result(x)",
+        "val positive : forall 'n, 'n > 0. int('n) -> int('n)",
+        "val any_integer : forall 'n. int('n) -> int('n)",
+        "overload constrained = {positive, any_integer}",
+        "function nonpositive() -> int(0) = constrained(0)",
+        "function positive_call() -> int(1) = constrained(1)",
+        "overload nested = {choose}",
+        "function nested_call(x : bool) -> bool = nested(x)",
+        "function bad_arg() -> int = choose(())",
+        "function bad_result(x : bool) -> int = choose(x)",
+        "function bad_pair() -> int = pair(true, 0)",
+    ]);
+    let program = declare(&defs);
+    for (position, (def, it)) in defs.iter().enumerate() {
+        let result = program.check_definition(def, it.clone(), position);
+        assert_eq!(
+            result.is_err(),
+            position >= 19,
+            "position {position}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn overload_extensions_preserve_source_position_and_candidate_order() {
+    let defs = parse(&[
+        "val first : int -> int(1)",
+        "val second : int -> int(2)",
+        "overload select = {first}",
+        "function before() -> int(1) = let x = select(0) in x",
+        "overload select = {second}",
+        "function after() -> int(1) = let x = select(0) in x",
+        "function wrong() -> int(2) = let x = select(0) in x",
+        "function too_early() -> bool = select(true)",
+        "val boolean : bool -> bool",
+        "overload select = {boolean}",
+        "function later() -> bool = select(true)",
+    ]);
+    let program = declare(&defs);
+    for position in [3, 5, 10] {
+        program
+            .check_definition(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap();
+    }
+    assert!(program
+        .check_definition(&defs[6].0, defs[6].1.clone(), 6)
+        .is_err());
+    assert!(program
+        .check_definition(&defs[7].0, defs[7].1.clone(), 7)
+        .is_err());
+}
+
+#[test]
+fn overload_declarations_reject_missing_candidates_conflicts_and_cycles() {
+    for sources in [
+        vec!["overload choose = {missing}"],
+        vec!["val choose : int -> int", "overload choose = {choose}"],
+    ] {
+        let defs = parse(&sources);
+        let mut program = Program::new();
+        for (position, (def, it)) in defs.iter().enumerate() {
+            let result = program.declare(def, it.clone(), position);
+            assert_eq!(result.is_err(), position + 1 == defs.len());
+        }
+    }
+    let defs = parse(&[
+        "val integer : int -> int",
+        "overload choose = {integer}",
+        "overload nested = {choose}",
+        "overload choose = {nested}",
+        "function cyclic(x : int) -> int = choose(x)",
+    ]);
+    let program = declare(&defs);
+    assert!(program
+        .check_definition(&defs[4].0, defs[4].1.clone(), 4)
+        .is_err());
+}
+
+#[test]
 fn inline_return_annotations_synthesize_source_ordered_recursive_signatures() {
     let defs = parse(&[
         "function identity(x : int) -> int = x",

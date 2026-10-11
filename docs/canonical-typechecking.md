@@ -58,8 +58,22 @@ processes inherit the compiler's systemd memory and swap limits. Z3 must be on
 PATH. Powers, general numeric/constraint applications and type-valued equality
 currently require further elaboration and fail explicitly at this bridge.
 
+Inline annotations now synthesize source-position function signatures from
+typed, literal and tuple argument patterns; their stored type is the return
+type, as in OCaml. With a separate `val`, duplicate inline quantifiers and
+incompatible returns are rejected. The parser infers binder kinds from argument
+annotations as well as returns. Header cleanup and tuple-pattern inference use
+explicit stacks, tested at 10,000 levels on a 128 KiB stack.
+
+Overload declarations retain source-position histories and append candidates in
+OCaml order. Nested lists expand iteratively with cycle detection. Calls check
+every argument, the expected return when available, and instantiated dependent
+constraints before selecting a candidate. Unsupported candidate elaboration
+remains an error. Context propagation through nested ambiguous calls is not yet
+complete.
+
 Unknown expression rules, arithmetic inference of nontrivial call parameters,
-general refinement subsumption, inline function annotations, synonym expansion,
+general refinement subsumption, synonym expansion,
 mappings and scattered definitions fail explicitly. This is a partial checker:
 it does not yet produce the complete typed AST required by the rewrite and Lean
 backend passes. Successful checking of the supported subset still ends with
@@ -85,10 +99,11 @@ limit and the explicit missing-backend failure. It does not accept this partial
 compilation as ARM or Lean success.
 
 The latest full ARM gate passes the declaration phase, including the constructor
-conditions of `Mem_read_request` and `Mem_write_request`. It now stops in a
-`arith.sail` function body at inline signature elaboration, after the `flow.sail`
-bodies pass. The run takes 39.75 s,
-peaks at 1.3 GiB under the 16 GiB/no-swap limit and still exits 1 before Lean/Lake.
+conditions of `Mem_read_request` and `Mem_write_request`, inline signatures and
+operator overload resolution. It stops at the dependent nonnegative-shift
+condition in `_shl_int_general`: branch assumptions from `n >= 0` are not yet
+available. The run takes 49.69 s, peaks at 1.4 GiB under the 16 GiB/no-swap limit
+and still exits 1 before Lean/Lake.
 The focused solver/typechecker/CLI suite has 203 passing tests under 128 MiB per
 binary, including 21 canonical tests. It covers source-position global
 assumptions, cross-interner annotations and recursive/sibling call separation.
@@ -102,13 +117,10 @@ canonical prover's SMT timing/call counters are not yet connected to the CLI
 profiler; its printed zero counters do not imply that no Z3 requests occurred.
 Use phase wall time and the systemd cgroup peak for these measurements.
 
-The next inline-signature step must preserve OCaml's `infer_funtyp` semantics:
-`TAnnotOpt::Some.typ` is the return type. Without a separate `val`, infer the
-argument types from the one clause's typed/literal/tuple patterns, then publish
-the synthesized function signature in source order for later and recursive
-calls. With a separate `val`, reject duplicate inline quantifiers and check the
-inline return type against that signature. Treating the stored annotation as
-an already complete function type would be an incorrect port.
+The canonical gate now has 27 passing tests under 128 MiB without swap (73.8 MiB
+peak), including positive/negative overload selection, candidate order,
+source-position extensions and cycle rejection. Full conditional flow typing
+is the next ARM requirement; assumptions must be confined to their own branch.
 
 The memory bound is the resident declaration tables plus a bounded number of
 loaded definitions, local scopes and worker temporaries. A single definition
