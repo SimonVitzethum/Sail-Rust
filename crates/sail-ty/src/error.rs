@@ -35,6 +35,7 @@ pub enum TypeErrorKind {
     QuantError(String),
     FuelExhausted,
     RegisterError(String),
+    Unsupported(String),
 }
 
 impl TypeError {
@@ -97,6 +98,7 @@ impl TypeError {
 impl std::fmt::Display for TypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.kind {
+            TypeErrorKind::Unsupported(message) => write!(f, "typechecking incomplete at {}: {message}", self.span),
             TypeErrorKind::KindMismatch { expected, found } => write!(
                 f,
                 "kind mismatch at {:?}: expected {expected}, found {found}",

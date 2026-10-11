@@ -9,6 +9,7 @@ mod frontend;
 mod memo;
 mod ooc;
 mod profile;
+mod typecheck;
 
 use std::io::Write;
 
@@ -115,9 +116,12 @@ fn check_inputs(opts: &Options, memo: &mut BoundedMemoCache) -> Result<(), CliEr
 /// No generated Lean project is published until every required stage exists.
 fn run_compiler(opts: &Options, profiler: &mut Profiler) -> Result<(), CliError> {
     let mut effective_options = opts.clone();
-    let summary = profiler.phase("frontend", || frontend::run(&mut effective_options))?;
+    let frontend = profiler.phase("frontend", || frontend::run(&mut effective_options))?;
+    let summary = &frontend.summary;
     eprintln!("sail-rs: frontend converted {} definitions from {} files using {} workers; {} AST bytes spooled",
         summary.definitions, summary.files, summary.workers, summary.ast_bytes);
+    let checked = profiler.phase("typecheck", || typecheck::run(&frontend))?;
+    eprintln!("sail-rs: typechecked {} definitions and {} expressions using {} workers", checked.definitions, checked.expressions, summary.workers);
     Err(CliError {
         exit_code: EXIT_ERROR,
         message: "sail-rs: compilation incomplete: full Sail typechecking, rewrite integration and Lean body emission are not implemented; frontend conversion is not a successful model build".into(),

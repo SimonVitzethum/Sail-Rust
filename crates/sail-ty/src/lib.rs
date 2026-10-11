@@ -29,6 +29,8 @@ pub mod kind;
 pub mod nexp;
 pub mod pat;
 pub mod prove;
+pub mod program;
+mod canonical_body;
 pub mod quant;
 pub mod rules;
 pub mod solver;

@@ -260,10 +260,31 @@ pub struct FrontendSummary {
     pub workers: usize,
 }
 
+pub struct FrontendProgram {
+    pub summary: FrontendSummary,
+    pub warm: WarmLayer,
+    pub manifest: PathBuf,
+    _scratch: Scratch,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Descriptor {
+    pub id: String,
+    pub declaration: bool,
+}
+
+pub fn load_definition(warm: &WarmLayer, id: &ContentId) -> Result<(sail_ast::Def, sail_ast::SimpleInterner), CliError> {
+    let reader = warm.reader(id).map_err(|e| CliError::fatal(e.to_string()))?
+        .ok_or_else(|| CliError::fatal(format!("missing AST blob {id}")))?;
+    let (snapshot, interner) = DefinitionSnapshot::read(reader)
+        .map_err(|e| CliError::fatal(format!("AST blob {id}: {e}")))?;
+    Ok((snapshot.into_definition(), interner))
+}
+
 /// Convert all active input definitions without retaining whole-program bodies.
 /// Any lexical, include, grammar, conversion or linkage gap stops the pipeline.
 /// Successful conversion is deliberately not reported as successful checking.
-pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
+pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
     let workers = match std::env::var("SAIL_RS_THREADS") {
         Ok(value) => value
             .parse::<usize>()
@@ -380,6 +401,8 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
                     .map_err(|e| error(format!("{}: {e}", record.path)))?
             };
             let interner = parser.into_interner();
+            let declaration = matches!(&def.kind, DefKind::Type(_) | DefKind::Val(_)
+                | DefKind::Register(_) | DefKind::Constraint(_) | DefKind::Outcome { .. });
             if opts.verbose >= 2 { eprintln!("sail-rs: spool {}:{}", record.path, record.span); }
             let snapshot = DefinitionSnapshot::new(def);
             let mut bytes = Vec::new();
@@ -391,19 +414,16 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
             warm.store(&id, &bytes)
                 .map_err(|e| CliError::fatal(e.to_string()))?;
             // Queued results hold disk references, never completed AST bodies.
-            Ok::<_, CliError>((id, bytes.len() as u64))
+            Ok::<_, CliError>((id, bytes.len() as u64, declaration))
         },
         |_, result| {
-            let (id, bytes) = result?;
-            let reader = warm.reader(&id)
-                .map_err(|e| CliError::fatal(e.to_string()))?
-                .ok_or_else(|| CliError::fatal(format!("missing AST blob {id}")))?;
-            let (snapshot, interner) = DefinitionSnapshot::read(reader)
-                .map_err(|e| CliError::fatal(format!("AST blob {id}: {e}")))?;
-            let def = snapshot.into_definition();
+            let (id, bytes, declaration) = result?;
+            let (def, interner) = load_definition(&warm, &id)?;
             resolver.add_definition(&def, &interner);
             drop_definition(def);
-            writeln!(snapshots, "{id}").map_err(|e| CliError::fatal(e.to_string()))?;
+            serde_json::to_writer(&mut snapshots, &Descriptor { id: id.to_hex(), declaration })
+                .map_err(|e| CliError::fatal(e.to_string()))?;
+            snapshots.write_all(b"\n").map_err(|e| CliError::fatal(e.to_string()))?;
             definitions += 1;
             ast_bytes += bytes;
             Ok::<_, CliError>(())
@@ -430,10 +450,11 @@ pub fn run(opts: &mut Options) -> Result<FrontendSummary, CliError> {
             resolved.errors.len()
         )));
     }
-    Ok(FrontendSummary {
+    let summary = FrontendSummary {
         files: files.len(),
         definitions,
         ast_bytes,
         workers,
-    })
+    };
+    Ok(FrontendProgram { summary, warm, manifest: scratch.0.join("ast.jsonl"), _scratch: scratch })
 }

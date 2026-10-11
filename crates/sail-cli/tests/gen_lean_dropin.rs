@@ -235,7 +235,7 @@ fn includes_macros_attributes_and_fixities_keep_order_across_workers() {
     let input = dir.join("main.sail");
     std::fs::write(
         dir.join("ops.sail"),
-        "$define ENABLE\ninfixl 6 %%\n$[never_fold] val f : unit -> int\n",
+        "$define ENABLE\ninfixl 6 %%\nval operator %% : (int, int) -> int\n$[never_fold] val f : unit -> int\n",
     )
     .unwrap();
     std::fs::write(&input,
@@ -250,7 +250,7 @@ fn includes_macros_attributes_and_fixities_keep_order_across_workers() {
         assert_eq!(out.status.code(), Some(1));
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
-            stderr.contains("frontend converted 5 definitions from 2 files"),
+            stderr.contains("frontend converted 6 definitions from 2 files"),
             "{stderr}"
         );
         assert!(
@@ -285,6 +285,35 @@ fn declared_constructor_kinds_follow_include_order_in_parallel_frontend() {
         .env_remove("SAIL_RS_DRY_RUN").env_remove("SAIL_RS_LIBDIR")
         .env("SAIL_RS_THREADS", "4").output().unwrap();
     assert!(String::from_utf8_lossy(&out.stderr).contains("cannot infer kind"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn disk_backed_parallel_typechecking_checks_bodies_and_reports_errors_in_source_order() {
+    let dir = temp_dir("parallel-typecheck");
+    let input = dir.join("input.sail");
+    let valid = "val identity : int -> int\nfunction identity(x) = x\nval call : int -> int\nfunction call(x) = let y = identity(x) in y\n";
+    for bad in [false, true] {
+        std::fs::write(&input, if bad {
+            format!("{valid}val wrong : int -> bool\nfunction wrong(x) = x\nval other : int -> int\nfunction other(x) = absent\n")
+        } else { valid.to_owned() }).unwrap();
+        for workers in ["1", "4"] {
+            let out = Command::new(binary())
+                .args(["--lean", "--no-core", "-dprofile", input.to_str().unwrap()])
+                .env_remove("SAIL_RS_DRY_RUN").env_remove("SAIL_RS_LIBDIR")
+                .env("SAIL_RS_THREADS", workers).output().unwrap();
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(1));
+            assert!(stderr.contains("phase=\"typecheck\""), "{stderr}");
+            if bad {
+                assert!(stderr.contains("expected bool, found int"), "{stderr}");
+                assert!(!stderr.contains("unbound variable 'absent'"), "{stderr}");
+            } else {
+                assert!(stderr.contains(&format!("typechecked 4 definitions and 5 expressions using {workers} workers")), "{stderr}");
+                assert!(stderr.contains("compilation incomplete"), "{stderr}");
+            }
+        }
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 

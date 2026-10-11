@@ -16,6 +16,7 @@ sail-ast = { path = "../sail-ast" }
 serde = { version = "1.0.203", features = ["derive"] }
 
 [dev-dependencies]
+sail-parse = { path = "../sail-parse" }
 serde_json = "1.0.117"
 sail-solver = { path = "../sail-solver" }
 
