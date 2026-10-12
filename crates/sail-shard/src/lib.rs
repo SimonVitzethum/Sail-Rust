@@ -8,6 +8,11 @@
 //! * [`Scheduler`]/[`SchedulerConfig`]: paralleler Scheduler mit begrenzter
 //!   Arbeits-Queue (bounded, low-RAM) und konfigurierbarem `max_inflight`
 //!   (Default 8); Ergebniskanal bewusst unbegrenzt (deadlock-frei).
+//!   Streaming laeuft wahlweise im Count-Fenster (`run_streaming`) oder im
+//!   Byte-Budget (`run_streaming_weighed` + `max_bytes`, Lane 22): Credits
+//!   zaehlen dann Eingabe-Bytes statt Definitionen; ein einzelnes Item groesser
+//!   als das Budget laeuft allein im leeren Fenster (RAM-Schranke: das einzelne
+//!   Item muss selbst in RAM passen).
 //! * [`IncrementalCache`]: Skip-bei-unveraendert-Logik, inkl. textuellem
 //!   Cache-Format (`serialize`/`deserialize`) fuer prozessuebergreifende Laeufe.
 //!

@@ -27,6 +27,10 @@
 //! * [`OocDriverLoop`]/[`DriverPhase`]/[`DriverState`]/[`DriverStats`]:
 //!   fahrtuechtige Driver-Schleife (Lane 83: holen → Phase → sealen →
 //!   spillen → weiter; Budgets je Phase, Zustaende s. `ARCHITECTURE.md`).
+//! * Byte-Budget ([`budget`], Lane 22): Streaming-Credits in Bytes statt
+//!   Definitionszahl (`SAIL_TYPECHECK_MEMORY`, Default 32 MiB); grosse
+//!   Einzeldefinition laeuft allein im leeren Fenster (RAM-Schranke: das
+//!   einzelne Item muss selbst in RAM passen).
 //!
 //! Auf Lane 11 ([`sail_shard`]) und Lane 36 ([`sail_cache`]) wird
 //! aufgesetzt (gelesen, nicht gedoppelt); Lane 37 liefert die
@@ -39,6 +43,7 @@
 #![forbid(unsafe_code)]
 
 mod barrier;
+mod budget;
 mod driver;
 mod id;
 mod memo;
@@ -48,6 +53,10 @@ mod warm;
 
 pub use barrier::{
     BarrierError, HotToken, PhaseBarrier, SealReceipt, ShardPhase, MAX_SEALED_RECEIPTS,
+};
+pub use budget::{
+    byte_budget_from_env, format_bytes, parse_byte_limit, DEFAULT_TYPECHECK_BUDGET_BYTES,
+    TYPECHECK_BUDGET_ENV, TYPECHECK_COUNT_CEILING, UNKNOWN_BLOB_BYTES,
 };
 pub use driver::{
     check_phase_budget, DriverError, DriverPhase, DriverState, DriverStats, OocDriverLoop,

@@ -13,6 +13,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use crate::query::SolverQuery;
+use crate::quota::QuotaRecommendation;
 use crate::solver::{Solver, SolverVerdict};
 
 /// Konfiguration des Memo-Caches.
@@ -52,12 +53,19 @@ struct Entry {
 }
 
 /// Momentaufnahme der Cache-Metriken.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CacheStats {
     pub hits: u64,
     pub misses: u64,
     pub len: usize,
     pub capacity: usize,
+    /// Anzahl seit Cache-Erzeugung notierter SMT-Rundläufe (Lane 15:
+    /// kanonische Prover-Zähler; `MemoSolver::prove` und
+    /// [`crate::SolverPool::prove_cached`] notieren hier jede echte
+    /// Solver-Anfrage inkl. Wandzeit).
+    pub smt_calls: u64,
+    /// Summierte SMT-Wandzeit in Sekunden (nur Misses mit Solver-Kontakt).
+    pub smt_secs: f64,
 }
 
 impl CacheStats {
@@ -133,6 +141,16 @@ pub struct MemoCache {
     inner: Mutex<Inner>,
     hits: AtomicU64,
     misses: AtomicU64,
+    /// Kanonische Prover-Zähler (Lane 15): jede echte Solver-Anfrage
+    /// (Cache-Miss mit Solver-Kontakt) wird mit Wandzeit notiert.
+    /// Auslesbar via [`MemoCache::smt_totals`] / [`MemoCache::stats`];
+    /// der CLI-Profiler rechnet daraus Deltas pro Phase.
+    smt_calls: AtomicU64,
+    smt_nanos: AtomicU64,
+    /// Adaptive Byte-Quote (Lane 15): `u64::MAX` = aus. Sonst wirft
+    /// [`MemoCache::enforce_byte_quota`] jeweils die ältesten Einträge,
+    /// bis [`MemoCache::approx_bytes`] wieder im Budget liegt.
+    max_bytes: AtomicU64,
 }
 
 impl MemoCache {
@@ -147,7 +165,29 @@ impl MemoCache {
             }),
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
+            smt_calls: AtomicU64::new(0),
+            smt_nanos: AtomicU64::new(0),
+            max_bytes: AtomicU64::new(u64::MAX),
         }
+    }
+
+    /// Notiert einen SMT-Rundlauf mit Wandzeit (kanonischer Prover-Zähler).
+    /// Rufer: jede Stelle, die nach einem Cache-Miss wirklich den Solver
+    /// befragt ([`MemoSolver::prove`], [`crate::SolverPool::prove_cached`]).
+    pub fn note_smt_call(&self, elapsed: Duration) {
+        self.smt_calls.fetch_add(1, Ordering::Relaxed);
+        self.smt_nanos.fetch_add(
+            elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// `(Anzahl SMT-Rundläufe, summierte SMT-Wandzeit in Sekunden)`.
+    pub fn smt_totals(&self) -> (u64, f64) {
+        (
+            self.smt_calls.load(Ordering::Relaxed),
+            self.smt_nanos.load(Ordering::Relaxed) as f64 / 1_000_000_000.0,
+        )
     }
 
     /// Lookup; zaehlt Hit/Miss. Abgelaufene Eintraege zaehlen als Miss.
@@ -221,12 +261,91 @@ impl MemoCache {
 
     pub fn stats(&self) -> CacheStats {
         let inner = self.inner.lock().expect("solver memo lock poisoned");
+        let (smt_calls, smt_secs) = self.smt_totals();
         CacheStats {
             hits: self.hits.load(Ordering::Relaxed),
             misses: self.misses.load(Ordering::Relaxed),
             len: inner.map.len(),
             capacity: inner.capacity,
+            smt_calls,
+            smt_secs,
         }
+    }
+
+    /// Setzt die adaptive Byte-Quote (`u64::MAX` = aus, Default).
+    /// Die Quote begrenzt [`MemoCache::approx_bytes`]; Durchsetzung per
+    /// [`MemoCache::enforce_byte_quota`] (expliziter Drop-Punkt, kein
+    /// implizites Räumen im Lookup-Pfad).
+    pub fn set_max_bytes(&self, max_bytes: u64) {
+        self.max_bytes.store(max_bytes, Ordering::Relaxed);
+    }
+
+    /// Uebernimmt das Byte-Budget aus einer [`QuotaRecommendation`]
+    /// (Lane 36): `max_cache_bytes` -> `set_max_bytes`. Keine eigene
+    /// Eintragszahl-Arithmetik — dafuer [`MemoCache::entries_for_byte_budget`].
+    pub fn apply_recommendation(&self, rec: &QuotaRecommendation) {
+        self.set_max_bytes(rec.max_cache_bytes);
+    }
+
+    /// Aktuelle Byte-Quote (`u64::MAX` = aus).
+    pub fn max_bytes(&self) -> u64 {
+        self.max_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Wirft die jeweils ältesten Einträge, bis die Quote wieder hält
+    /// oder der Cache leer ist. Gibt die Anzahl entfernter Einträge zurück.
+    ///
+    /// Periodischer Drop-Punkt (Lane 36): explizit rufen (z. B. via
+    /// [`crate::SolverPool::enforce_quotas`]); der Lookup-Pfad raeumt
+    /// bewusst nicht implizit (Lane-15-Semantik bleibt).
+    pub fn enforce_byte_quota(&self) -> usize {
+        let max = self.max_bytes.load(Ordering::Relaxed);
+        if max == u64::MAX {
+            return 0;
+        }
+        let mut evicted = 0;
+        while (self.approx_bytes() as u64) > max {
+            if self.evict_oldest(1) == 0 {
+                break;
+            }
+            evicted += 1;
+        }
+        evicted
+    }
+
+    /// Periodischer Quota-Drop-Punkt (Lane 36): Alias fuer
+    /// [`MemoCache::enforce_byte_quota`] zum expliziten periodischen Rufen
+    /// (kein implizites Raeumen im Lookup-Pfad).
+    pub fn enforce_quota(&self) -> usize {
+        self.enforce_byte_quota()
+    }
+
+    /// Entfernt bis zu `n` älteste Einträge (LRU-Front). Gibt die Anzahl
+    /// tatsächlich entfernter Einträge zurück.
+    ///
+    /// Speisung per [`QuotaRecommendation`]: Budget via
+    /// [`MemoCache::apply_recommendation`] uebernehmen, dann diesen
+    /// Drop-Punkt periodisch rufen (kein Lookup-Raeumen).
+    pub fn evict_oldest(&self, n: usize) -> usize {
+        let mut inner = self.inner.lock().expect("solver memo lock poisoned");
+        let mut removed = 0;
+        for _ in 0..n {
+            match inner.order.pop_front() {
+                Some(oldest) => {
+                    inner.map.remove(&oldest);
+                    removed += 1;
+                }
+                None => break,
+            }
+        }
+        removed
+    }
+
+    /// Kapazitätsvorschlag für ein Byte-Budget: so viele Einträge passen
+    /// bei `bytes_per_entry` Bytes pro Eintrag hinein (mindestens 1).
+    /// Reine Rechenhilfe für die adaptive Quote, ohne Zustand.
+    pub fn entries_for_byte_budget(budget_bytes: usize, bytes_per_entry: usize) -> usize {
+        (budget_bytes / bytes_per_entry.max(1)).max(1)
     }
 
     /// Grobe Speicherabschaetzung (Eintraege + Keys), fuer Lane-14-Messungen.
@@ -255,7 +374,9 @@ impl<S: Solver> MemoSolver<S> {
         if let Some(v) = self.cache.lookup(query) {
             return v;
         }
+        let start = Instant::now();
         let v = self.solver.prove(query);
+        self.cache.note_smt_call(start.elapsed());
         self.cache.store(query, v);
         v
     }
@@ -336,5 +457,97 @@ mod tests {
         });
         cache.store(&q("x"), SolverVerdict::Valid);
         assert_eq!(cache.stats().len, 1);
+    }
+
+    #[test]
+    fn smt_counters_start_at_zero_and_note_records() {
+        use crate::stub::StubSolver;
+        let solver = MemoSolver::new(
+            StubSolver::new(),
+            SolverCacheConfig {
+                capacity: 8,
+                ttl: Duration::from_secs(60),
+            },
+        );
+        assert_eq!(solver.cache().smt_totals().0, 0);
+        // Miss mit Solver-Kontakt zaehlt genau einen SMT-Rundlauf.
+        solver.prove(&q("smt-a"));
+        // Treffer zaehlt keinen weiteren Rundlauf.
+        solver.prove(&q("smt-a"));
+        let (calls, secs) = solver.cache().smt_totals();
+        assert_eq!(calls, 1);
+        assert!(secs >= 0.0);
+        let s = solver.stats();
+        assert_eq!(s.smt_calls, 1);
+        assert!((s.smt_secs - secs).abs() < 1e-9);
+        assert_eq!((s.hits, s.misses), (1, 1));
+    }
+
+    #[test]
+    fn byte_quota_evicts_oldest_first() {
+        let cache = MemoCache::new(SolverCacheConfig {
+            capacity: 16,
+            ttl: Duration::from_secs(60),
+        });
+        for i in 0..6 {
+            cache.store(&q(&format!("quota-{i}")), SolverVerdict::Unknown);
+        }
+        let full = cache.approx_bytes();
+        assert!(full > 0);
+        // Quote unter aktuellem Stand: aelteste muessen weichen.
+        cache.set_max_bytes((full / 2) as u64);
+        assert_eq!(cache.max_bytes(), (full / 2) as u64);
+        let evicted = cache.enforce_byte_quota();
+        assert!(evicted > 0);
+        assert!((cache.approx_bytes() as u64) <= (full / 2) as u64);
+        // Juengste Eintraege bleiben bevorrechtigt.
+        assert!(cache.lookup(&q("quota-5")).is_some());
+        // Quote aus: kein weiterer Evict.
+        cache.set_max_bytes(u64::MAX);
+        assert_eq!(cache.enforce_byte_quota(), 0);
+    }
+
+    #[test]
+    fn entries_for_byte_budget_clamps_to_one() {
+        assert_eq!(MemoCache::entries_for_byte_budget(10_000, 100), 100);
+        assert_eq!(MemoCache::entries_for_byte_budget(50, 100), 1);
+        assert_eq!(MemoCache::entries_for_byte_budget(1_000, 0), 1_000);
+    }
+
+    #[test]
+    fn apply_recommendation_sets_byte_budget() {
+        use crate::quota::QuotaRecommendation;
+        let cache = MemoCache::new(SolverCacheConfig {
+            capacity: 16,
+            ttl: Duration::from_secs(60),
+        });
+        let rec = QuotaRecommendation::recommend(128 * 1024 * 1024, 100 * 1024 * 1024, 16);
+        cache.apply_recommendation(&rec);
+        assert_eq!(cache.max_bytes(), rec.max_cache_bytes);
+        // Empfehlung nutzt die geteilte Eintragszahl-Math, kein Duplikat:
+        // Budget passt fuer mindestens einen Eintrag je 1 KiB.
+        assert!(MemoCache::entries_for_byte_budget(rec.max_cache_bytes as usize, 1024) >= 1);
+        assert_eq!(cache.enforce_quota(), 0);
+    }
+
+    #[test]
+    fn lookup_does_not_implicitly_enforce_byte_quota() {
+        let cache = MemoCache::new(SolverCacheConfig {
+            capacity: 16,
+            ttl: Duration::from_secs(60),
+        });
+        for i in 0..6 {
+            cache.store(&q(&format!("implicit-{i}")), SolverVerdict::Unknown);
+        }
+        let len_before = cache.stats().len;
+        assert_eq!(len_before, 6);
+        // Winzige Quote setzen: Lookup (Hit wie Miss) darf NICHT raeumen.
+        cache.set_max_bytes(1);
+        assert!(cache.lookup(&q("implicit-5")).is_some());
+        assert!(cache.lookup(&q("missing")).is_none());
+        assert_eq!(cache.stats().len, len_before);
+        // Erst der periodische Drop-Punkt raeumt.
+        assert!(cache.enforce_quota() > 0);
+        assert!((cache.approx_bytes() as u64) <= 1);
     }
 }

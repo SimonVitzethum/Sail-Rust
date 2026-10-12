@@ -3,8 +3,21 @@
 //! * [`parse_time_v_output`] parst GNU `time -v`-Stderr (`/usr/bin/time -v`).
 //! * [`PhaseRecord`] ist das `-dprofile`-Äquivalent: eine Zeile JSON pro Phase (JSONL-Timings-Log).
 //! * [`BUDGETS`] hält die verbindlichen Peak-RSS-Limits (32 GiB Maschine ohne Swap).
+//! * Lane 15: [`quota`] (adaptive Solver-/Cache-Quote) und [`profparse`]
+//!   (`[profile]`-Parser für die Gate-Auswertung).
+//!
+//! Verbindliche Modell-Limits (WORK_STATE.md, TESTING.md): OOC/ARM-Läufe
+//! 16 GiB, Ausweichgrenze 28 GiB (nur Fallback, kein Standard).
 
 #![forbid(unsafe_code)]
+
+pub mod profparse;
+pub mod quota;
+
+pub use profparse::{
+    parse_profile_line, summarize_gate_log, CliProfileSample, GateLogSummary, ParseProfileError,
+};
+pub use quota::{QuotaAdvice, BYTES_PER_IDLE_SOLVER};
 
 use std::fmt;
 use std::fs::OpenOptions;

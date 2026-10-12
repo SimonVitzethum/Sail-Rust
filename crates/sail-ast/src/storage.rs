@@ -4,12 +4,68 @@
 //! Recursive children are moved into flat, typed records before serde sees
 //! them. Reading, reconstruction and disposal use the same exhaustive child
 //! traversal. The canonical AST and its public JSON format stay unchanged.
+//!
+//! Lane-15-Rekursionsaudit (drop_definition-Pfad, tiefe Bäume):
+//! - Iterativ (expliziter Work-Stack, kein Call-Stack): [`DefinitionSnapshot::new`]
+//!   (BFS-Flatten), [`DefinitionSnapshot::validate`], `into_definition`
+//!   (Bottom-up-Reassemblierung), `drop_part`/`drop_definition` sowie
+//!   `Drop for DefinitionSnapshot` (Record-für-Record). 10k-fach
+//!   verschachtelte Bäume laufen auf 64–128 KiB Stack (Tests unten).
+//! - Abgeleitet-rekursiv (nie auf tiefen Bäumen aufrufen): `Clone`, `PartialEq`,
+//!   `Debug` der AST-Knoten sowie direkte `serde_json`-Serialisierung eines
+//!   `Def`. Auf dem Hot-Path (Frontend-Spool, Scheduler, Typecheck) nur
+//!   Snapshot-Bytes vergleichen/umwandeln; `drop_definition` statt implizitem
+//!   `Drop` eines `Def` verwenden (abgeleiteter Drop rekursiert über `Box`).
+//! - `read` prüft vor jeder serde-Dekodierung die JSON-Verschachtelungstiefe
+//!   der Zeile ([`MAX_LINE_NESTING`]): feindlich tief verschachtelter Input
+//!   wird abgelehnt, bevor serde-Rekursion den Stack erreichen kann.
+//!   Flache Records (Writer-Output) bleiben weit unter der Schranke.
+//! - Drop-Pfad gesichert: `frontend.rs`/`typecheck.rs` (Scheduler-Callbacks),
+//!   `program.rs::dispose_signature` und `canonical_eq.rs` (Tests) geben alle
+//!   über `drop_definition` frei; `into_definition`-Panikpfade (`unreachable!`
+//!   bei validierter Wurzel) lassen höchstens Records fallen, deren
+//!   `DefinitionSnapshot::Drop` wiederum iterativ räumt.
 
 use crate::*;
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 
 const FORMAT: &str = "sail-rs/flat-definition-v1";
+
+/// Maximale JSON-Verschachtelungstiefe pro Flat-Record-Zeile, geprüft vor
+/// jeder serde-Dekodierung. Flache Records schachteln nur wenige Ebenen
+/// (Record-Tupel, Node-Maps, leere Platzhalter-Kinder); feindlich tiefer
+/// Input wird als `InvalidData` abgelehnt, ohne serde-Rekursion zu erreichen.
+const MAX_LINE_NESTING: usize = 64;
+
+/// Iterative JSON-Verschachtelungstiefe einer Zeile (String-Literale und
+/// Escapes werden korrekt übersprungen; kein Call-Stack-Verbrauch).
+fn line_nesting_depth(line: &str) -> usize {
+    let bytes = line.as_bytes();
+    let mut depth = 0usize;
+    let mut peak = 0usize;
+    let mut in_string = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if b == b'\\' {
+                i += 1;
+            } else if b == b'"' {
+                in_string = false;
+            }
+        } else if b == b'"' {
+            in_string = true;
+        } else if b == b'{' || b == b'[' {
+            depth += 1;
+            peak = peak.max(depth);
+        } else if b == b'}' || b == b']' {
+            depth = depth.saturating_sub(1);
+        }
+        i += 1;
+    }
+    peak
+}
 
 trait Children {
     fn children(&mut self, visit: &mut impl FnMut(Slot<'_>));
@@ -706,6 +762,9 @@ impl DefinitionSnapshot {
         }
         let mut line = String::new();
         read_line(&mut reader, &mut line)?;
+        if line_nesting_depth(&line) > MAX_LINE_NESTING {
+            return Err(invalid("flat AST line nesting too deep"));
+        }
         let header: Header = serde_json::from_str(&line)?;
         if header.format != FORMAT || header.nodes == 0 {
             return Err(invalid("flat AST format or empty root"));
@@ -719,6 +778,9 @@ impl DefinitionSnapshot {
         let mut records = Vec::new();
         for expected in (0..header.nodes).rev() {
             read_line(&mut reader, &mut line)?;
+            if line_nesting_depth(&line) > MAX_LINE_NESTING {
+                return Err(invalid("flat AST line nesting too deep"));
+            }
             let (index, record): (usize, Record) = serde_json::from_str(&line)?;
             if index != expected {
                 return Err(invalid("flat AST record order"));
@@ -988,6 +1050,58 @@ mod tests {
         let mut trailing = wire;
         trailing.extend_from_slice(b"trailing");
         assert!(DefinitionSnapshot::read(trailing.as_slice()).is_err());
+    }
+
+    #[test]
+    fn hostile_nesting_is_rejected_on_a_small_stack() {
+        // Feindlich tief verschachteltes JSON darf nie serde-Rekursion erreichen.
+        let mut hostile = String::from("{\"a\":");
+        for _ in 0..10_000 {
+            hostile.push('[');
+        }
+        hostile.push_str("0");
+        for _ in 0..10_000 {
+            hostile.push(']');
+        }
+        hostile.push('}');
+        assert!(line_nesting_depth(&hostile) > MAX_LINE_NESTING);
+        std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(move || {
+                let header = serde_json::json!({
+                    "format": "sail-rs/flat-definition-v1",
+                    "nodes": 1,
+                    "symbols": [],
+                });
+                let mut wire = serde_json::to_string(&header).unwrap();
+                wire.push('\n');
+                wire.push_str(&hostile);
+                wire.push('\n');
+                match DefinitionSnapshot::read(wire.as_bytes()) {
+                    Err(e) => assert_eq!(e.kind(), io::ErrorKind::InvalidData),
+                    Ok(_) => panic!("hostile nesting accepted"),
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn line_nesting_depth_skips_strings_and_escapes() {
+        assert_eq!(line_nesting_depth(r#"{"a": "[[]", "b": "\\\""}"#), 1);
+        assert_eq!(line_nesting_depth("[0, [1, [2]]]"), 3);
+        assert_eq!(line_nesting_depth(""), 0);
+        // Legitime flache Records bleiben weit unter der Schranke.
+        let source = DefinitionSnapshot::new(let_def(Pat::empty(), Exp::empty()));
+        let wire = bytes(&source, &SimpleInterner::new());
+        let text = std::str::from_utf8(&wire).unwrap();
+        for line in text.lines() {
+            assert!(
+                line_nesting_depth(line) <= MAX_LINE_NESTING,
+                "flat record too deep: {line}"
+            );
+        }
     }
 
     #[test]

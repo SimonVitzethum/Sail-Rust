@@ -23,6 +23,7 @@
 mod cache;
 pub mod canonical;
 mod pool;
+pub mod quota;
 mod query;
 mod smtlib_backend;
 mod solver;
@@ -32,6 +33,10 @@ pub mod z3_backend;
 
 pub use cache::{CacheStats, MemoCache, MemoSolver, SolverCacheConfig};
 pub use pool::{PooledSolver, SolverPool};
+pub use quota::{
+    QuotaConfig, QuotaPermit, QuotaRecommendation, QuotaStats, SolverQuota, BYTES_PER_SOLVER,
+    MAX_LIVE_SOLVERS, MIN_CACHE_BYTES,
+};
 pub use query::{Constraint, SolverQuery};
 pub use smtlib_backend::SmtLibSolver;
 pub use solver::{Solver, SolverVerdict};
