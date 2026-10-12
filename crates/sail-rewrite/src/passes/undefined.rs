@@ -6,7 +6,7 @@
 #![forbid(unsafe_code)]
 
 use crate::ast::{DefKind, Shard, Stmt};
-use crate::pass::Pass;
+use crate::pass::{Pass, TypedPass};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Undefined;
@@ -18,6 +18,20 @@ impl Pass for Undefined {
             if def.kind != DefKind::Valspec { rewrite_body(&mut def.body); }
         }
         shard
+    }
+}
+
+impl TypedPass for Undefined {
+    fn name(&self) -> &'static str { "undefined" }
+
+    fn run(&self, _ast: &mut sail_ast::Ast, _interner: &mut dyn sail_ast::Interner) {
+        // Typed-path preserve: OCaml `rewrite_undefined` replaces `E_undef`
+        // via `undefined_of_typ`, which needs the type of each `E_undef`
+        // occurrence plus the type environment (`Env.expand_synonyms`,
+        // `check_exp`). The untyped `sail_ast` carries neither, and the
+        // string-level `default_for_ty` only covers environments-free type
+        // spellings. Guessing a literal (e.g. zero) would violate ranges and
+        // widths, so `Undef` is preserved until a typed AST is available.
     }
 }
 
@@ -91,10 +105,26 @@ mod tests {
                 bindings: vec![], rhs: "effect()".into(), body: vec![known.clone()],
             }]),
         ]);
-        let out = Undefined.run(shard);
+        let out = crate::pass::Pass::run(&Undefined, shard);
         assert_eq!(out.defs[0].body, vec![known]);
         assert_eq!(out.defs[1].body[0], unknown);
         let Stmt::LetTuple { body, .. } = &out.defs[1].body[1] else { panic!("scope") };
         assert_eq!(body, &[Stmt::Assign { lhs: "x".into(), rhs: "undefined_int()".into() }]);
+    }
+
+    #[test]
+    fn typed_preserves_undef_without_guessing_a_value() {
+        use sail_ast::{Ast, DefKind, ExpKind, PatKind, SimpleInterner};
+
+        use crate::passes::typed::{mk_exp, mk_pat};
+
+        let mut it = SimpleInterner::new();
+        let mut ast = Ast::new(vec![sail_ast::Def::dummy(DefKind::Let {
+            pat: mk_pat(PatKind::Wild),
+            exp: mk_exp(ExpKind::Undef),
+        })]);
+        let snapshot = ast.clone();
+        crate::pass::TypedPass::run(&Undefined, &mut ast, &mut it);
+        assert_eq!(ast, snapshot, "Undef must survive without type info");
     }
 }

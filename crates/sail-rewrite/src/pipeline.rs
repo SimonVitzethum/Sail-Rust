@@ -18,8 +18,17 @@ use std::sync::Arc;
 use rayon::prelude::*;
 
 use crate::ast::Shard;
-use crate::pass::Pass;
-use crate::passes::{SimpleAssignments, TupleAssignments, Undefined};
+use crate::pass::{Pass, TypedPass};
+use crate::passes::{
+    AddUnspecifiedRec, ConstPropMutrec, InstantiateOutcomes, MappingPatterns, MergeFunctionClauses,
+    MinimiseRecursiveFunctions, MoveTerminationMeasures, NexpIds, PatStringAppend, RealizeMappings,
+    RemoveBlocks, RemoveDuplicateValspecs, RemoveEAssign, InternalLets, EarlyReturn, ExpLiftAssign,
+    RecheckDefs, InferEffects, AttachEffects,
+    BitListsToLits, RemoveVectorSubrangePats, VectorConcatAssignments,
+    RemoveSuperfluousLetbinds, RemoveSuperfluousReturns,
+    SimpleAssignments, Split, TopSortDefs, AddRegisterInitFunction, ToplevelLetPatterns,
+    TupleAssignments, Undefined,
+};
 
 /// Full Lean rewrite order, taken from OCaml `lean_rewrites`.
 ///
@@ -90,6 +99,18 @@ pub fn is_implemented_pass(name: &str) -> bool {
     matches!(
         name,
         "undefined" | "tuple_assignments" | "simple_assignments"
+            | "realize_mappings"
+            | "mapping_patterns"
+            | "instantiate_outcomes"
+            | "nexp_ids"
+            | "top_sort_defs"
+            | "add_register_init_function"
+            | "remove_vector_subrange_pats"
+            | "vector_concat_assignments"
+            | "bit_lists_to_lits"
+            | "recheck_defs"
+            | "infer_effects"
+            | "attach_effects"
     )
 }
 
@@ -102,6 +123,18 @@ fn make_implemented(name: &'static str) -> Option<Arc<dyn Pass>> {
         "undefined" => Some(Arc::new(Undefined)),
         "tuple_assignments" => Some(Arc::new(TupleAssignments)),
         "simple_assignments" => Some(Arc::new(SimpleAssignments)),
+        "realize_mappings" => Some(Arc::new(RealizeMappings)),
+        "mapping_patterns" => Some(Arc::new(MappingPatterns)),
+        "instantiate_outcomes" => Some(Arc::new(InstantiateOutcomes)),
+        "nexp_ids" => Some(Arc::new(NexpIds)),
+        "top_sort_defs" => Some(Arc::new(TopSortDefs)),
+        "add_register_init_function" => Some(Arc::new(AddRegisterInitFunction)),
+        "remove_vector_subrange_pats" => Some(Arc::new(RemoveVectorSubrangePats)),
+        "vector_concat_assignments" => Some(Arc::new(VectorConcatAssignments)),
+        "bit_lists_to_lits" => Some(Arc::new(BitListsToLits)),
+        "recheck_defs" => Some(Arc::new(RecheckDefs)),
+        "infer_effects" => Some(Arc::new(InferEffects)),
+        "attach_effects" => Some(Arc::new(AttachEffects)),
         _ => None,
     }
 }
@@ -265,6 +298,186 @@ impl Pipeline {
     }
 }
 
+/// Whether `name` has a real canonical-path implementation (vs.
+/// [`TypedStubPass`]).
+///
+/// The three preserved passes (`undefined`, `tuple_assignments`,
+/// `simple_assignments`) are bound here alongside the newly wired ones;
+/// the rest of [`LEAN_REWRITES`] stays stubbed until its OCaml logic
+/// (type/effect environments, provers) has a typed equivalent.
+#[must_use]
+pub fn is_typed_implemented_pass(name: &str) -> bool {
+    matches!(
+        name,
+        "move_termination_measures"
+            | "remove_vector_subrange_pats"
+            | "undefined"
+            | "tuple_assignments"
+            | "vector_concat_assignments"
+            | "simple_assignments"
+            | "add_unspecified_rec"
+            | "minimise_recursive_functions"
+            | "remove_duplicate_valspecs"
+            | "remove_e_assign"
+            | "internal_lets"
+            | "early_return"
+            | "exp_lift_assign"
+            | "pat_string_append"
+            | "remove_blocks"
+            | "remove_superfluous_letbinds"
+            | "remove_superfluous_returns"
+            | "bit_lists_to_lits"
+            | "toplevel_let_patterns"
+            | "split"
+            | "const_prop_mutrec"
+            | "merge_function_clauses"
+    )
+}
+
+/// Build the canonical-path implementation for a known pass name.
+///
+/// Returns `None` for known-but-unimplemented passes (caller falls back to
+/// [`TypedStubPass`]) and for unknown names.
+fn make_typed_implemented(name: &'static str) -> Option<Arc<dyn TypedPass>> {
+    match name {
+        "undefined" => Some(Arc::new(Undefined)),
+        "tuple_assignments" => Some(Arc::new(TupleAssignments)),
+        "simple_assignments" => Some(Arc::new(SimpleAssignments)),
+        "add_unspecified_rec" => Some(Arc::new(AddUnspecifiedRec)),
+        "minimise_recursive_functions" => Some(Arc::new(MinimiseRecursiveFunctions)),
+        "remove_duplicate_valspecs" => Some(Arc::new(RemoveDuplicateValspecs)),
+        "remove_e_assign" => Some(Arc::new(RemoveEAssign)),
+        "internal_lets" => Some(Arc::new(InternalLets)),
+        "early_return" => Some(Arc::new(EarlyReturn)),
+        "exp_lift_assign" => Some(Arc::new(ExpLiftAssign)),
+        "bit_lists_to_lits" => Some(Arc::new(BitListsToLits)),
+        "remove_vector_subrange_pats" => Some(Arc::new(RemoveVectorSubrangePats)),
+        "vector_concat_assignments" => Some(Arc::new(VectorConcatAssignments)),
+        "pat_string_append" => Some(Arc::new(PatStringAppend)),
+        "remove_blocks" => Some(Arc::new(RemoveBlocks)),
+        "remove_superfluous_letbinds" => Some(Arc::new(RemoveSuperfluousLetbinds)),
+        "remove_superfluous_returns" => Some(Arc::new(RemoveSuperfluousReturns)),
+        "toplevel_let_patterns" => Some(Arc::new(ToplevelLetPatterns)),
+        "split" => Some(Arc::new(Split)),
+        "const_prop_mutrec" => Some(Arc::new(ConstPropMutrec)),
+        "move_termination_measures" => Some(Arc::new(MoveTerminationMeasures)),
+        "remove_superfluous_returns" => Some(Arc::new(RemoveSuperfluousReturns)),
+        "toplevel_let_patterns" => Some(Arc::new(ToplevelLetPatterns)),
+        "merge_function_clauses" => Some(Arc::new(MergeFunctionClauses)),
+        _ => None,
+    }
+}
+
+/// Placeholder for a Lean rewrite with no canonical-path implementation yet.
+///
+/// Identity transform over `sail_ast::Ast`, mirroring [`StubPass`]: keeps the
+/// full [`LEAN_REWRITES`] order configurable and runnable end to end while
+/// passes land one by one.
+#[derive(Clone, Copy, Debug)]
+pub struct TypedStubPass {
+    name: &'static str,
+}
+
+impl TypedStubPass {
+    /// Create a stub for the given (known) pass name.
+    #[must_use]
+    pub fn new(name: &'static str) -> Self {
+        Self { name }
+    }
+}
+
+impl TypedPass for TypedStubPass {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn run(&self, _ast: &mut sail_ast::Ast, _interner: &mut dyn sail_ast::Interner) {}
+}
+
+/// An ordered list of canonical-path rewrite passes.
+///
+/// Unlike [`Pipeline`] (shard-local strings, `rayon`-parallel), typed passes
+/// observe the whole [`sail_ast::Ast`] — e.g. `remove_duplicate_valspecs`
+/// compares signatures across definitions — so `run` is sequential. Cheap to
+/// clone (`Arc`-backed); `&TypedPipeline` is `Send + Sync`.
+#[derive(Clone)]
+pub struct TypedPipeline {
+    passes: Vec<Arc<dyn TypedPass>>,
+}
+
+impl std::fmt::Debug for TypedPipeline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TypedPipeline")
+            .field("passes", &self.pass_names())
+            .finish()
+    }
+}
+
+impl TypedPipeline {
+    /// Build a pipeline from an explicit ordered list of pass names.
+    ///
+    /// Known-but-unimplemented names become [`TypedStubPass`]es; unknown
+    /// names yield [`UnknownPass`].
+    pub fn from_names(names: &[&'static str]) -> Result<Self, UnknownPass> {
+        let mut passes: Vec<Arc<dyn TypedPass>> = Vec::with_capacity(names.len());
+        for &name in names {
+            if !is_known_pass(name) {
+                return Err(UnknownPass {
+                    name: name.to_string(),
+                });
+            }
+            let pass: Arc<dyn TypedPass> =
+                make_typed_implemented(name).unwrap_or_else(|| Arc::new(TypedStubPass::new(name)));
+            passes.push(pass);
+        }
+        Ok(Self { passes })
+    }
+
+    /// The full Lean default order ([`LEAN_REWRITES`]) on the canonical path.
+    ///
+    /// Infallible: every name in [`LEAN_REWRITES`] is known by construction.
+    #[must_use]
+    pub fn lean_default() -> Self {
+        Self::from_names(LEAN_REWRITES).expect("LEAN_REWRITES must be known")
+    }
+
+    /// Only the passes with a canonical-path implementation, in Lean order.
+    #[must_use]
+    pub fn lean_implemented() -> Self {
+        let names: Vec<&'static str> = LEAN_REWRITES
+            .iter()
+            .copied()
+            .filter(|n| is_typed_implemented_pass(n))
+            .collect();
+        Self::from_names(&names).expect("implemented names are known")
+    }
+
+    /// Names of the passes in this pipeline, in order.
+    #[must_use]
+    pub fn pass_names(&self) -> Vec<&'static str> {
+        self.passes.iter().map(|p| p.name()).collect()
+    }
+
+    /// Number of passes in this pipeline.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.passes.len()
+    }
+
+    /// Whether this pipeline holds no passes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.passes.is_empty()
+    }
+
+    /// Run the whole pipeline over the canonical AST, in order.
+    pub fn run(&self, ast: &mut sail_ast::Ast, interner: &mut dyn sail_ast::Interner) {
+        for pass in &self.passes {
+            pass.run(ast, interner);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,7 +522,31 @@ mod tests {
         let pipe = Pipeline::lean_implemented();
         assert_eq!(
             pipe.pass_names(),
-            vec!["undefined", "tuple_assignments", "simple_assignments"]
+            vec![
+                "instantiate_outcomes",
+                "realize_mappings",
+                "remove_vector_subrange_pats",
+                "mapping_patterns",
+                "undefined",
+                "tuple_assignments",
+                "vector_concat_assignments",
+                "simple_assignments",
+                "recheck_defs",
+                "nexp_ids",
+                "recheck_defs",
+                "top_sort_defs",
+                "add_register_init_function",
+                "recheck_defs",
+                "recheck_defs",
+                "recheck_defs",
+                "infer_effects",
+                "attach_effects",
+                "attach_effects",
+                "attach_effects",
+                "bit_lists_to_lits",
+                "recheck_defs",
+                "attach_effects",
+            ]
         );
         let shard = Shard::new(
             0,
@@ -373,5 +610,62 @@ mod tests {
                 }]
             );
         }
+    }
+
+    #[test]
+    fn typed_default_matches_ocaml_order_and_stubs_pass_through() {
+        let pipe = TypedPipeline::lean_default();
+        assert_eq!(pipe.pass_names(), LEAN_REWRITES);
+        assert!(is_typed_implemented_pass("move_termination_measures"));
+
+        let stubbed = TypedPipeline::from_names(&["recheck_defs"])
+            .unwrap_or_else(|e| panic!("{e}"));
+        let mut it = sail_ast::SimpleInterner::new();
+        let mut ast = sail_ast::Ast::new(vec![sail_ast::Def::dummy(
+            sail_ast::DefKind::Pragma {
+                key: "k".to_string(),
+                payload: "v".to_string(),
+            },
+        )]);
+        let snapshot = ast.clone();
+        stubbed.run(&mut ast, &mut it);
+        assert_eq!(ast, snapshot);
+    }
+
+    #[test]
+    fn typed_implemented_lists_only_wired_passes() {
+        assert_eq!(
+            TypedPipeline::lean_implemented().pass_names(),
+            vec![
+                "move_termination_measures",
+                "remove_vector_subrange_pats",
+                "remove_duplicate_valspecs",
+                "pat_string_append",
+                "add_unspecified_rec",
+                "undefined",
+                "tuple_assignments",
+                "vector_concat_assignments",
+                "simple_assignments",
+                "split",
+                "minimise_recursive_functions",
+                "const_prop_mutrec",
+                "exp_lift_assign",
+                "early_return",
+                "merge_function_clauses",
+                "remove_blocks",
+                "remove_e_assign",
+                "internal_lets",
+                "remove_superfluous_letbinds",
+                "remove_superfluous_returns",
+                "bit_lists_to_lits",
+                "toplevel_let_patterns",
+            ]
+        );
+    }
+
+    #[test]
+    fn typed_rejects_unknown_pass() {
+        let err = TypedPipeline::from_names(&["no_such_pass"]).unwrap_err();
+        assert_eq!(err.name, "no_such_pass");
     }
 }
