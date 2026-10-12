@@ -25,12 +25,20 @@
 //! Scattered-freeze (Lane 111, see `WORK_STATE.md`): no scattered views
 //! here — open/`impl`/`end` linkage stays in `sail-resolve`; the checker
 //! only lowers *closed* schemes through these two methods.
+//!
+//! Lane-08 adds the `Program` record/union views over the same idea:
+//! [`Program::record_fields_ast`] / [`Program::variant_ctors_ast`] /
+//! [`Program::accessor_scheme_ast`] borrow the preserved field payloads
+//! (OCaml `Env.records` / `Env.unions` / `Env.accessors`) at a source
+//! position. Payloads are already canonical `sail-ast` nodes, so these
+//! views borrow instead of lowering.
 
-use sail_ast::{Interner, KOpt, TypSchm};
+use sail_ast::{Interner, KOpt, Span, Typ, TypSchm};
 
 use crate::conv::{kind_erase, kind_from_ast, typquant_to_ast};
 use crate::env::TypeEnv;
 use crate::kind::{Kind, KindEnv};
+use crate::program::Program;
 
 /// Lower a kind environment onto a canonical `KOpt` telescope, sorted by
 /// variable name so output is deterministic across hash orders.
@@ -75,6 +83,57 @@ impl TypeEnv {
     pub fn register_scheme_ast(&self, name: &str, it: &mut impl Interner) -> Option<TypSchm> {
         self.lookup_register(name)
             .map(|scheme| typquant_to_ast(scheme, it))
+    }
+}
+
+impl Program {
+    /// Borrowed `(field, type, span)` payloads for `struct name` as
+    /// declared at `position`. `None` for unknown structs.
+    ///
+    /// The payloads are the canonical field types (already `sail-ast`
+    /// nodes, preserved by `declare`), so this view borrows instead of
+    /// lowering. Resolution of binder symbols uses the declaration's
+    /// own interner (`record(...).interner`).
+    pub fn record_fields_ast(&self, name: &str, position: usize) -> Option<Vec<(&str, &Typ, Span)>> {
+        self.record(name, position).map(|record| {
+            record
+                .fields
+                .iter()
+                .map(|field| (field.name.as_str(), &field.typ, field.span))
+                .collect()
+        })
+    }
+
+    /// Borrowed `(constructor, payload, span)` entries for
+    /// `union name` as declared at `position`. `None` for unknown
+    /// unions. Each payload is the constructor argument type; the
+    /// matching `Fn(payload) -> union` value scheme stays reachable
+    /// via [`Program::value`].
+    pub fn variant_ctors_ast(
+        &self,
+        name: &str,
+        position: usize,
+    ) -> Option<Vec<(&str, &Typ, Span)>> {
+        self.variant(name, position).map(|union| {
+            union
+                .ctors
+                .iter()
+                .map(|ctor| (ctor.name.as_str(), &ctor.typ, ctor.span))
+                .collect()
+        })
+    }
+
+    /// Borrowed accessor arrow `Fn(record) -> field` for
+    /// `record.field` as declared at `position`. `None` for unknown
+    /// pairs. The scheme is quantified over the record telescope.
+    pub fn accessor_scheme_ast(
+        &self,
+        record: &str,
+        field: &str,
+        position: usize,
+    ) -> Option<&TypSchm> {
+        self.accessor(record, field, position)
+            .map(|scheme| &scheme.typschm)
     }
 }
 

@@ -976,6 +976,55 @@ fn take_exp(ready: &mut ExpResults, exp: &g::Exp) -> Result<Exp, String> {
         .ok_or_else(|| "internal error: missing postorder expression child".into())
 }
 
+/// True, wenn `e` ein `()`-Literal ist (leerer Körper einer Block-Deklaration
+/// in alter Geschwister-Ablage bzw. explizites `in ()`).
+fn is_unit_body(e: &Exp) -> bool {
+    matches!(&e.kind, ExpKind::Lit(l) if matches!(l.kind, LitKind::Unit))
+}
+
+/// Bare `let`/`var` mit leerem Körper: alte Grammatikform legt Deklaration
+/// und Rest-Block als Geschwister ab (`[Let(p,e,()), rest...]`). Die
+/// Lane-03-Form liefert bereits `Let/Var(p, e, Block(rest))` — dann ist der
+/// Körper kein `Unit` und es wird nichts gefaltet.
+fn is_bare_decl(e: &Exp) -> bool {
+    match &e.kind {
+        ExpKind::Let { body, .. } | ExpKind::Var { body, .. } => is_unit_body(body),
+        _ => false,
+    }
+}
+
+/// Faltet alte Geschwister-Form `[Let(p,e,()), rest...]` zu
+/// `[Let(p,e, Block(rest'))]` (OCaml `parser.mly`, Produktion `block`:
+/// `rest` ist der Körper der Deklaration, kein Geschwister). Neue Form mit
+/// `Block`-Körper bleibt unverändert. IDs/Spans/Annotationen der Deklaration
+/// bleiben erhalten; der Rest-Block wird als neuer `Block`-Knoten mit dem
+/// Def-/Fragment-Span verpackt. Iterativ von hinten, sodass Ketten
+/// `{ let a; let b; x }` zu `Let(a, Block([Let(b, Block([x]))]))` werden.
+/// Hinweis: Die Oberfläche unterscheidet `{ let x = e; rest }` nicht von
+/// `{ let x = e in (); rest }` (beide `Let((), ...)`); Faltung nimmt die
+/// Deklaration an (üblicher Fall, vgl. OCaml-`block`).
+fn fold_block_decls(c: &mut Ctx, span: Span, items: Vec<Exp>) -> Vec<Exp> {
+    use std::collections::VecDeque;
+    if items.is_empty() {
+        return items;
+    }
+    let mut rest: VecDeque<Exp> = VecDeque::with_capacity(items.len());
+    for mut head in items.into_iter().rev() {
+        if !rest.is_empty() && is_bare_decl(&head) {
+            let tail: Vec<Exp> = std::mem::take(&mut rest).into_iter().collect();
+            let body = c.node(span, ExpKind::Block(tail));
+            match &mut head.kind {
+                ExpKind::Let { body: b, .. } | ExpKind::Var { body: b, .. } => **b = body,
+                _ => unreachable!("is_bare_decl geprüft"),
+            }
+            rest.push_front(head);
+        } else {
+            rest.push_front(head);
+        }
+    }
+    rest.into_iter().collect()
+}
+
 /// Enumerate only expression children consumed by finish_exp. Assignment
 /// targets are handled as l-values, except whole setter applications.
 fn expression_children<'a>(exp: &'a g::Exp, children: &mut Vec<&'a g::Exp>) {
@@ -1166,7 +1215,7 @@ fn finish_exp(c: &mut Ctx, span: Span, e: &g::Exp, ready: &mut ExpResults) -> Re
             for x in es {
                 ces.push(take_exp(ready, x)?);
             }
-            ExpKind::Block(ces)
+            ExpKind::Block(fold_block_decls(c, span, ces))
         }
         g::Exp::Return(x) => ExpKind::Return(Box::new(take_exp(ready, x)?)),
         g::Exp::Throw(x) => ExpKind::Throw(Box::new(take_exp(ready, x)?)),

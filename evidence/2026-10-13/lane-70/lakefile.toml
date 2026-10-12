@@ -1,0 +1,5 @@
+name = "lane70tiny"
+defaultTargets = ["Lane70tiny"]
+
+[[lean_lib]]
+name = "Lane70tiny"

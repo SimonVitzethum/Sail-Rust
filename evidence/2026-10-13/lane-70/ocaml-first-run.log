@@ -1,0 +1,22 @@
+[gate] start mem=1G avail=20840MiB: bash -c /home/simon/.opam/sail/bin/sail -just_check target/lane70-tiny/tiny.sail 2>&1; echo "=== OCAML-FULL RC=$?"; /home/simon/.opam/sail/bin/sail -just_check target/lane70-tiny/tiny_green.sail 2>&1; echo "=== OCAML-GREEN RC=$?"
+Running as unit: run-p181417-i201645.service
+[93mType error[0m:
+[96mtarget/lane70-tiny/tiny.sail[0m:26.9-15:
+26[96m |[0mfunction is_red(Green) = false
+  [91m |[0m         [91m^----^[0m
+  [91m |[0m Function is_red has already been declared
+=== OCAML-FULL RC=1
+[93mWarning[0m: Incomplete pattern match statement at
+[96mtarget/lane70-tiny/tiny_green.sail[0m:25.0-8:
+25[96m |[0mfunction is_red(Red) = true
+  [91m |[0m[91m^------^[0m
+  [91m |[0m The following expression is unmatched: [93mGreen[0m
+
+=== OCAML-GREEN RC=0
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 101ms
+             CPU time consumed: 248ms
+                   Memory peak: 107M (swap: 0B)
+[gate] ende rc=0 avail=20732MiB
+RC=0

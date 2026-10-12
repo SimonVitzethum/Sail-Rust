@@ -57,13 +57,107 @@ struct Value {
     inline: bool,
 }
 
+/// One preserved record field payload: the field type as declared,
+/// with its source span. Names are resolved strings so lookups never
+/// depend on a definition-local interner.
+#[derive(Clone, Debug)]
+pub struct RecordField {
+    pub name: String,
+    pub typ: Typ,
+    pub span: Span,
+}
+
+/// Preserved `struct` payload (OCaml `Env.records`): the quantified
+/// telescope plus every field type. The constructor-kind signature
+/// lives in [`Program::constructors`]; this table keeps the field
+/// payloads that well-formedness checking would otherwise drop.
+#[derive(Clone, Debug)]
+pub struct RecordDef {
+    pub quant: Vec<QuantItem>,
+    pub interner: Arc<SimpleInterner>,
+    pub fields: Vec<RecordField>,
+}
+impl Drop for RecordDef {
+    fn drop(&mut self) {
+        let quant = std::mem::take(&mut self.quant);
+        let fields = std::mem::take(&mut self.fields);
+        let ast_fields = fields
+            .into_iter()
+            .map(|field| (Name::dummy(Symbol::DUMMY), field.typ))
+            .collect();
+        sail_ast::storage::drop_definition(Node::dummy(DefKind::Type(Node::dummy(
+            TypeDefKind::Record {
+                name: Name::dummy(Symbol::DUMMY),
+                quant,
+                fields: ast_fields,
+                wf: false,
+            },
+        ))));
+    }
+}
+
+/// One preserved union constructor payload: the constructor argument
+/// type as declared, with its source span.
+#[derive(Clone, Debug)]
+pub struct UnionCtor {
+    pub name: String,
+    pub typ: Typ,
+    pub span: Span,
+}
+
+/// Preserved `union` payload (OCaml `Env.unions`): the quantified
+/// telescope plus every constructor argument type. Each constructor
+/// additionally keeps its `Fn(payload) -> union` scheme in
+/// [`Program::values`]; this table keeps the grouped payload list.
+#[derive(Clone, Debug)]
+pub struct UnionDef {
+    pub quant: Vec<QuantItem>,
+    pub interner: Arc<SimpleInterner>,
+    pub ctors: Vec<UnionCtor>,
+}
+impl Drop for UnionDef {
+    fn drop(&mut self) {
+        let quant = std::mem::take(&mut self.quant);
+        let ctors = std::mem::take(&mut self.ctors);
+        let ast_ctors = ctors
+            .into_iter()
+            .map(|ctor| TypeUnion {
+                id: NodeId::DUMMY,
+                span: ctor.span,
+                typ: ctor.typ,
+                ctor: Name::dummy(Symbol::DUMMY),
+            })
+            .collect();
+        sail_ast::storage::drop_definition(Node::dummy(DefKind::Type(Node::dummy(
+            TypeDefKind::Variant {
+                name: Name::dummy(Symbol::DUMMY),
+                quant,
+                ctors: ast_ctors,
+                wf: false,
+            },
+        ))));
+    }
+}
+
 /// Canonical declaration tables, frozen before parallel body checking. Only
 /// signatures/type definitions belong here, never function bodies.
+///
+/// `records` / `unions` mirror OCaml `Env.records` / `Env.unions`:
+/// the constructor-kind signature lives in `constructors`, while these
+/// tables preserve the field/constructor *payloads* (each field type as
+/// declared) alongside the quantified telescope. `accessors` mirrors
+/// OCaml `Env.accessors`: one `Fn(record) -> field` scheme per
+/// `(record, field)` pair. All three follow the same declaration
+/// history (`Binding` + source `position`): a worker at `position`
+/// never sees a later declaration.
 pub struct Program {
     constructors: BTreeMap<String, Vec<Binding<Constructor>>>,
     values: BTreeMap<String, Vec<Binding<Value>>>,
     overloads: BTreeMap<String, Vec<Binding<Vec<String>>>>,
     registers: BTreeMap<String, Vec<Binding<Arc<Scheme>>>>,
+    records: BTreeMap<String, Vec<Binding<RecordDef>>>,
+    unions: BTreeMap<String, Vec<Binding<UnionDef>>>,
+    accessors: BTreeMap<(String, String), Vec<Binding<Arc<Scheme>>>>,
     constraints: Vec<Binding<(Arc<Constraint>, Arc<SimpleInterner>)>>,
     solvers: SolverPool<SmtLibSolver>,
 }
@@ -74,6 +168,9 @@ impl Default for Program {
             values: BTreeMap::new(),
             overloads: BTreeMap::new(),
             registers: BTreeMap::new(),
+            records: BTreeMap::new(),
+            unions: BTreeMap::new(),
+            accessors: BTreeMap::new(),
             constraints: Vec::new(),
             solvers: SolverPool::with_default_cache(SmtLibSolver::new),
         }
@@ -322,7 +419,111 @@ impl Program {
                         ));
                     }
                 }
-                self.constructors.entry(name).or_default().push(Binding {
+                // Preserve record/union field payloads alongside the
+                // constructor entry (OCaml `Env.records` / `Env.unions` /
+                // `Env.accessors`). Histories share this declaration's
+                // `position`, so a source-position view never sees a later
+                // declaration. Duplicate fields within one struct are
+                // rejected; duplicate union constructors are already
+                // rejected by the member check above.
+                let record_payload = match &typ.kind {
+                    TypeDefKind::Record { quant, fields, .. } => {
+                        let mut seen_fields = std::collections::BTreeSet::new();
+                        let mut kept = Vec::with_capacity(fields.len());
+                        for (field_name, field_typ) in fields {
+                            let field =
+                                text(it.as_ref(), field_name.symbol, field_name.span)?.to_owned();
+                            if !seen_fields.insert(field.clone()) {
+                                return Err(failure(
+                                    field_name.span,
+                                    format!("duplicate field '{field}' in struct '{name}'"),
+                                ));
+                            }
+                            kept.push(RecordField {
+                                name: field,
+                                typ: field_typ.clone(),
+                                span: field_name.span,
+                            });
+                        }
+                        Some(RecordDef {
+                            quant: quant.clone(),
+                            interner: it.clone(),
+                            fields: kept,
+                        })
+                    }
+                    _ => None,
+                };
+                let union_payload = match &typ.kind {
+                    TypeDefKind::Variant { quant, ctors, .. } => {
+                        let mut kept = Vec::with_capacity(ctors.len());
+                        for ctor in ctors {
+                            kept.push(UnionCtor {
+                                name: text(it.as_ref(), ctor.ctor.symbol, ctor.span)?.to_owned(),
+                                typ: ctor.typ.clone(),
+                                span: ctor.span,
+                            });
+                        }
+                        Some(UnionDef {
+                            quant: quant.clone(),
+                            interner: it.clone(),
+                            ctors: kept,
+                        })
+                    }
+                    _ => None,
+                };
+                // Field accessors mirror OCaml `Env.accessors`: one
+                // `Fn(record) -> field` scheme per `(record, field)` pair,
+                // quantified over the record telescope.
+                let accessor_payload = match (&typ.kind, &record_payload) {
+                    (TypeDefKind::Record { name: rec_name, quant, .. }, Some(record)) => {
+                        let args: Vec<_> = quant
+                            .iter()
+                            .filter_map(|item| match item {
+                                QuantItem::Constraint(_) => None,
+                                QuantItem::Id(binder) => Some(Node::dummy(match binder.kind {
+                                    Kind::Type => {
+                                        TypArgKind::Typ(Node::dummy(TypKind::Var(binder.kid)))
+                                    }
+                                    Kind::Int => {
+                                        TypArgKind::NExp(Node::dummy(NExpKind::Var(binder.kid)))
+                                    }
+                                    Kind::Bool => TypArgKind::Bool(Box::new(Node::dummy(
+                                        ConstraintKind::Var(binder.kid),
+                                    ))),
+                                })),
+                            })
+                            .collect();
+                        let record_typ = Node::dummy(if args.is_empty() {
+                            TypKind::Id(rec_name.clone())
+                        } else {
+                            TypKind::App {
+                                name: rec_name.clone(),
+                                args,
+                            }
+                        });
+                        record
+                            .fields
+                            .iter()
+                            .map(|field| {
+                                (
+                                    field.name.clone(),
+                                    Arc::new(Scheme {
+                                        typschm: TypSchm {
+                                            quant: quant.clone(),
+                                            typ: Node::dummy(TypKind::Fn {
+                                                args: vec![record_typ.clone()],
+                                                ret: Box::new(field.typ.clone()),
+                                            }),
+                                        },
+                                        interner: it.clone(),
+                                    }),
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    }
+                    _ => Vec::new(),
+                };
+                self.constructors.entry(name.clone()).or_default().push(Binding {
                     position,
                     value: signature,
                 });
@@ -331,6 +532,27 @@ impl Program {
                         .entry(name)
                         .or_default()
                         .push(Binding { position, value });
+                }
+                if let Some(record) = record_payload {
+                    self.records.entry(name.clone()).or_default().push(Binding {
+                        position,
+                        value: record,
+                    });
+                }
+                if let Some(union) = union_payload {
+                    self.unions.entry(name.clone()).or_default().push(Binding {
+                        position,
+                        value: union,
+                    });
+                }
+                for (field, scheme) in accessor_payload {
+                    self.accessors
+                        .entry((name.clone(), field))
+                        .or_default()
+                        .push(Binding {
+                            position,
+                            value: scheme,
+                        });
                 }
                 Ok(())
             }
@@ -655,6 +877,72 @@ impl Program {
         self.registers
             .get(name)
             .and_then(|history| at(history, position))
+    }
+
+    /// Source-position `struct` lookup (OCaml `Env.get_record`). Returns
+    /// the preserved quantified telescope plus every field payload, or
+    /// `None` when the struct is not declared at `position`.
+    #[must_use]
+    pub fn record(&self, name: &str, position: usize) -> Option<&RecordDef> {
+        self.records
+            .get(name)
+            .and_then(|history| at(history, position))
+    }
+
+    /// Source-position `union` lookup (OCaml `Env.get_variant`). Returns
+    /// the preserved quantified telescope plus every constructor
+    /// payload, or `None` when the union is not declared at `position`.
+    #[must_use]
+    pub fn variant(&self, name: &str, position: usize) -> Option<&UnionDef> {
+        self.unions
+            .get(name)
+            .and_then(|history| at(history, position))
+    }
+
+    /// Source-position field-accessor lookup (OCaml `Env.get_accessor`):
+    /// the preserved `Fn(record) -> field` scheme for
+    /// `record.field`, or `None` when the pair is not declared at
+    /// `position`.
+    #[must_use]
+    pub fn accessor(
+        &self,
+        record: &str,
+        field: &str,
+        position: usize,
+    ) -> Option<&Arc<Scheme>> {
+        self.accessors
+            .get(&(record.to_owned(), field.to_owned()))
+            .and_then(|history| at(history, position))
+    }
+
+    /// Sorted struct names visible at `position` (deterministic order).
+    #[must_use]
+    pub fn record_names(&self, position: usize) -> Vec<String> {
+        self.records
+            .iter()
+            .filter(|(_, history)| {
+                history
+                    .iter()
+                    .rfind(|binding| binding.position <= position)
+                    .is_some()
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// Sorted union names visible at `position` (deterministic order).
+    #[must_use]
+    pub fn variant_names(&self, position: usize) -> Vec<String> {
+        self.unions
+            .iter()
+            .filter(|(_, history)| {
+                history
+                    .iter()
+                    .rfind(|binding| binding.position <= position)
+                    .is_some()
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
     }
 
     fn signature(&self, name: &str, position: usize) -> Option<Constructor> {

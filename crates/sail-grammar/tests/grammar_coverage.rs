@@ -526,14 +526,11 @@ fn parse_exp_let_requires_in() {
     // to `()`).
     assert_eq!(
         parse_exp("{ let x = 1; x }").unwrap(),
-        Exp::Block(vec![
-            Exp::Let(
-                Pat::Id("x".to_string()),
-                Box::new(Exp::Lit(Lit::Num("1".to_string()))),
-                Box::new(Exp::Lit(Lit::Unit)),
-            ),
-            Exp::Id("x".to_string()),
-        ])
+        Exp::Block(vec![Exp::Let(
+            Pat::Id("x".to_string()),
+            Box::new(Exp::Lit(Lit::Num("1".to_string()))),
+            Box::new(Exp::Block(vec![Exp::Id("x".to_string())])),
+        )])
     );
 }
 
@@ -877,30 +874,31 @@ fn parse_block_bare_let_var() {
     );
     assert_eq!(
         parse_exp("{ let x = 1; x }").unwrap(),
-        Exp::Block(vec![let_x(), Exp::Id("x".to_string())])
+        Exp::Block(vec![Exp::Let(
+            Pat::Id("x".to_string()),
+            Box::new(Exp::Lit(Lit::Num("1".to_string()))),
+            Box::new(Exp::Block(vec![Exp::Id("x".to_string())])),
+        )])
     );
     assert_eq!(
         parse_exp("{ let x = 1; let y = 2; x }").unwrap(),
-        Exp::Block(vec![
-            let_x(),
-            Exp::Let(
+        Exp::Block(vec![Exp::Let(
+            Pat::Id("x".to_string()),
+            Box::new(Exp::Lit(Lit::Num("1".to_string()))),
+            Box::new(Exp::Block(vec![Exp::Let(
                 Pat::Id("y".to_string()),
                 Box::new(Exp::Lit(Lit::Num("2".to_string()))),
-                Box::new(unit()),
-            ),
-            Exp::Id("x".to_string()),
-        ])
+                Box::new(Exp::Block(vec![Exp::Id("x".to_string())])),
+            )])),
+        )])
     );
     assert_eq!(
         parse_exp("{ var x = 1; x }").unwrap(),
-        Exp::Block(vec![
-            Exp::Var(
-                Box::new(Exp::Id("x".to_string())),
-                Box::new(Exp::Lit(Lit::Num("1".to_string()))),
-                Box::new(unit()),
-            ),
-            Exp::Id("x".to_string()),
-        ])
+        Exp::Block(vec![Exp::Var(
+            Box::new(Exp::Id("x".to_string())),
+            Box::new(Exp::Lit(Lit::Num("1".to_string()))),
+            Box::new(Exp::Block(vec![Exp::Id("x".to_string())])),
+        )])
     );
     // Expression-level `let` still requires `in` (E4, unchanged).
     assert!(parse_exp("let x = 1 in x").is_ok());

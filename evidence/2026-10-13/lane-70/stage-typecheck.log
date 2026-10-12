@@ -1,0 +1,78 @@
+parse ok #0: default Order dec
+parse ok #1: struct Point = { x : int, y : int }
+parse ok #2: enum Colour = { Red, Green }
+parse ok #3: union Shape = { Circle : int, Square : bool }
+parse ok #4: val const_one : unit -> int
+parse ok #5: function const_one() = 1
+parse ok #6: val choose : bool -> int
+parse ok #7: function choose(b) = if b then 1 else 0
+parse ok #8: val swap_pair : (int, bool) -> (bool, int)
+parse ok #9: function swap_pair(x, y) = (y, x)
+parse ok #10: val two_nums : unit -> vector(2, int)
+parse ok #11: function two_nums() = [1, 2]
+parse ok #12: val byte_pair : unit -> bitvector(2)
+parse ok #13: function byte_pair() = [bitone, bitzero]
+parse ok #14: val is_red : Colour -> bool
+parse ok #15: function is_red(Red) = true
+and is_red(Green) = false
+parse ok #16: val mk_point : (int, int) -> Point
+parse ok #17: function mk_point(x, y) = struct Point { x = x, y = y }
+parse ok #18: val get_x : Point -> int
+parse ok #19: function get_x(p) = p.x
+parse ok #20: val describe : Shape -> int
+parse ok #21: function describe(s) = match s { Circle(n) => n, Square(_) => 0 }
+declare ok #0
+declare ok #1
+declare ok #2
+declare ok #3
+declare ok #4
+declare ok #5
+declare ok #6
+declare ok #7
+declare ok #8
+declare ok #9
+declare ok #10
+declare ok #11
+declare ok #12
+declare ok #13
+declare ok #14
+declare ok #15
+declare ok #16
+declare ok #17
+declare ok #18
+declare ok #19
+declare ok #20
+declare ok #21
+check ok #0 (+0 exprs)
+check ok #1 (+0 exprs)
+check ok #2 (+0 exprs)
+check ok #3 (+0 exprs)
+check ok #4 (+0 exprs)
+check ok #5 (+1 exprs)
+check ok #6 (+0 exprs)
+check ok #7 (+4 exprs)
+check ok #8 (+0 exprs)
+check ok #9 (+3 exprs)
+check ok #10 (+0 exprs)
+check ok #11 (+3 exprs)
+check ok #12 (+0 exprs)
+check ok #13 (+3 exprs)
+check ok #14 (+0 exprs)
+check ok #15 (+2 exprs)
+check ok #16 (+0 exprs)
+check FAIL #17: typechecking incomplete at <synthetic>: expression rule is not yet implemented in the canonical checker
+check ok #18 (+0 exprs)
+check FAIL #19: typechecking incomplete at <synthetic>: expression rule is not yet implemented in the canonical checker
+check ok #20 (+0 exprs)
+check FAIL #21: typechecking incomplete at <synthetic>: expression rule is not yet implemented in the canonical checker
+scheme const_one: Fn { args: [Node { id: NodeId { index: 3, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 2, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }], ret: Node { id: NodeId { index: 5, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 4, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(2), is_operator: false }), annotation: None } }
+scheme choose: Fn { args: [Node { id: NodeId { index: 3, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 2, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }], ret: Node { id: NodeId { index: 5, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 4, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(2), is_operator: false }), annotation: None } }
+scheme swap_pair: Fn { args: [Node { id: NodeId { index: 3, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 2, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }, Node { id: NodeId { index: 5, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 4, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(2), is_operator: false }), annotation: None }], ret: Node { id: NodeId { index: 11, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Tuple([Node { id: NodeId { index: 8, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 7, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(2), is_operator: false }), annotation: None }, Node { id: NodeId { index: 10, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 9, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }]), annotation: None } }
+scheme two_nums: Fn { args: [Node { id: NodeId { index: 3, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 2, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }], ret: Node { id: NodeId { index: 10, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: App { name: Name { id: NodeId { index: 9, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(3), is_operator: false }, args: [Node { id: NodeId { index: 5, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: NExp(Node { id: NodeId { index: 4, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Constant("2"), annotation: None }), annotation: None }, Node { id: NodeId { index: 8, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Typ(Node { id: NodeId { index: 7, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 6, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(2), is_operator: false }), annotation: None }), annotation: None }] }, annotation: None } }
+scheme byte_pair: Fn { args: [Node { id: NodeId { index: 3, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 2, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }], ret: Node { id: NodeId { index: 7, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: App { name: Name { id: NodeId { index: 6, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(2), is_operator: false }, args: [Node { id: NodeId { index: 5, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: NExp(Node { id: NodeId { index: 4, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Constant("2"), annotation: None }), annotation: None }] }, annotation: None } }
+scheme is_red: Fn { args: [Node { id: NodeId { index: 3, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 2, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }], ret: Node { id: NodeId { index: 5, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 4, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(2), is_operator: false }), annotation: None } }
+scheme mk_point: Fn { args: [Node { id: NodeId { index: 3, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 2, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }, Node { id: NodeId { index: 5, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 4, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }], ret: Node { id: NodeId { index: 8, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 7, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(2), is_operator: false }), annotation: None } }
+scheme get_x: Fn { args: [Node { id: NodeId { index: 3, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 2, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }], ret: Node { id: NodeId { index: 5, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 4, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(2), is_operator: false }), annotation: None } }
+scheme describe: Fn { args: [Node { id: NodeId { index: 3, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 2, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(1), is_operator: false }), annotation: None }], ret: Node { id: NodeId { index: 5, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Id(Name { id: NodeId { index: 4, generation: 0 }, span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, symbol: Symbol(2), is_operator: false }), annotation: None } }
+SUMMARY defs=22 exprs=16 green_funs=6/6 red_defs=3
+DUP-PROBE repeated-function-lines accepted=true (ocaml=reject, resolver=reject)

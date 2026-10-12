@@ -1,0 +1,359 @@
+[gate] start mem=4G avail=22104MiB: bash -c cargo test -p sail-ty --test lane70_tiny --profile ci 2>&1; echo "=== TY RC=$?"; cargo test -p sail-lean --test lane70_emit --profile ci 2>&1; echo "=== LEAN RC=$?"; cargo test -p sail-cli --test lane70_project --profile ci 2>&1; echo "=== CLI RC=$?"; cargo test -p sail-rewrite --profile ci 2>&1; echo "=== REWRITE RC=$?"; cargo build -p sail-cli --profile ci 2>&1; echo "=== BUILD RC=$?"
+Running as unit: run-p151416-i161473.service
+warning: unused import: `Interner`
+  --> crates/sail-lex/src/token.rs:18:16
+   |
+18 | use sail_ast::{Interner, Symbol};
+   |                ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-lex` (lib) generated 1 warning
+warning: unused variable: `it`
+   --> crates/sail-ty/src/conv.rs:385:35
+    |
+385 | fn typarg_nexp_only(arg: &TypArg, it: &impl Interner) -> Option<NExp> {
+    |                                   ^^ help: if this is intentional, prefix it with an underscore: `_it`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-ty` (lib) generated 1 warning (run `cargo fix --lib -p sail-ty` to apply 1 suggestion)
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 0.53s
+     Running tests/lane70_tiny.rs (target/ci/deps/lane70_tiny-89be366f8f1def12)
+
+running 1 test
+test lane70_tiny_parse_declare_check ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== TY RC=0
+   Compiling sail-except v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-except)
+   Compiling sail-lean v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-lean)
+error[E0499]: cannot borrow `it` as mutable more than once at a time
+  --> crates/sail-lean/tests/lane70_emit.rs:70:26
+   |
+65 |     let vector2int = app(
+   |                      --- first borrow later used by call
+66 |         &mut it,
+   |         ------- first mutable borrow occurs here
+...
+70 |             typarg_ty(id(&mut it, "int")),
+   |                          ^^^^^^^ second mutable borrow occurs here
+
+For more information about this error, try `rustc --explain E0499`.
+error: could not compile `sail-lean` (test "lane70_emit") due to 1 previous error
+=== LEAN RC=101
+warning: unused import: `Interner`
+  --> crates/sail-lex/src/token.rs:18:16
+   |
+18 | use sail_ast::{Interner, Symbol};
+   |                ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+   Compiling sail-cache v0.0.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-cache)
+   Compiling sail-diag v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-diag)
+warning: `sail-lex` (lib) generated 1 warning
+warning: unused variable: `it`
+   --> crates/sail-ty/src/conv.rs:385:35
+    |
+385 | fn typarg_nexp_only(arg: &TypArg, it: &impl Interner) -> Option<NExp> {
+    |                                   ^^ help: if this is intentional, prefix it with an underscore: `_it`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-ty` (lib) generated 1 warning (run `cargo fix --lib -p sail-ty` to apply 1 suggestion)
+   Compiling sail-resolve v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-resolve)
+   Compiling sail-prelude v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-prelude)
+   Compiling sail-regs v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-regs)
+   Compiling sail-ooc v0.0.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-ooc)
+   Compiling sail-lake v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-lake)
+   Compiling sail-cli v0.0.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-cli)
+warning: function `run_with_ooc` is never used
+   --> crates/sail-cli/src/e2e.rs:264:8
+    |
+264 | pub fn run_with_ooc<H: OocHooks>(args: &E2eArgs, driver: &mut OocDriver<H>) -> Outcome {
+    |        ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `MEMO_DOMAIN_SOLVER_Z3` is never used
+  --> crates/sail-cli/src/ooc.rs:56:11
+   |
+56 | pub const MEMO_DOMAIN_SOLVER_Z3: &str = "ooc/memo-v1/solver/z3-v1";
+   |           ^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `WarmBudget`, `ContentMismatch`, and `Io` are never constructed
+  --> crates/sail-cli/src/ooc.rs:74:5
+   |
+61 | pub enum OocError {
+   |          -------- variants in this enum
+...
+74 |     WarmBudget {
+   |     ^^^^^^^^^^
+...
+84 |     ContentMismatch {
+   |     ^^^^^^^^^^^^^^^
+...
+96 |     Io(String),
+   |     ^^
+   |
+   = note: `OocError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `warm_fetch`, `memo_lookup`, `memo_store`, and `summary_remove` are never used
+   --> crates/sail-cli/src/ooc.rs:163:8
+    |
+152 | pub trait OocHooks {
+    |           -------- methods in this trait
+...
+163 |     fn warm_fetch(&mut self, content_key: &str) -> Option<Vec<u8>>;
+    |        ^^^^^^^^^^
+...
+168 |     fn memo_lookup(&self, query_key: &str) -> Option<Vec<u8>>;
+    |        ^^^^^^^^^^^
+169 |     /// Kalter Memo-Store (unveränderliche Werte; Erster gewinnt).
+170 |     fn memo_store(&mut self, query_key: &str, value: &[u8]);
+    |        ^^^^^^^^^^
+...
+180 |     fn summary_remove(&mut self, shard: &str) -> bool;
+    |        ^^^^^^^^^^^^^^
+
+warning: struct `RecordingHooks` is never constructed
+   --> crates/sail-cli/src/ooc.rs:226:12
+    |
+226 | pub struct RecordingHooks {
+    |            ^^^^^^^^^^^^^^
+
+warning: methods `with_max_live_bytes`, `live_bytes`, `summary_count`, and `event` are never used
+   --> crates/sail-cli/src/ooc.rs:258:12
+    |
+255 | impl RecordingHooks {
+    | ------------------- methods in this implementation
+...
+258 |     pub fn with_max_live_bytes(mut self, n: u64) -> Self {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+265 |     pub fn live_bytes(&self) -> u64 {
+    |            ^^^^^^^^^^
+...
+271 |     pub fn summary_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^
+...
+275 |     fn event(&mut self, e: String) {
+    |        ^^^^^
+
+warning: methods `hooks`, `hooks_mut`, `hot`, `into_hooks`, `memo_prove`, and `warm_recall` are never used
+   --> crates/sail-cli/src/ooc.rs:406:12
+    |
+393 | impl<H: OocHooks> OocDriver<H> {
+    | ------------------------------ methods in this implementation
+...
+406 |     pub fn hooks(&self) -> &H {
+    |            ^^^^^
+...
+411 |     pub fn hooks_mut(&mut self) -> &mut H {
+    |            ^^^^^^^^^
+...
+423 |     pub fn hot(&self) -> Option<&str> {
+    |            ^^^
+...
+429 |     pub fn into_hooks(self) -> H {
+    |            ^^^^^^^^^^
+...
+528 |     pub fn memo_prove(
+    |            ^^^^^^^^^^
+...
+545 |     pub fn warm_recall(&mut self, content_key: &str) -> Option<Vec<u8>> {
+    |            ^^^^^^^^^^^
+
+warning: `sail-cli` (bin "sail-rs") generated 7 warnings
+    Finished `ci` profile [optimized] target(s) in 7.28s
+     Running tests/lane70_project.rs (target/ci/deps/lane70_project-01e79fa338be9fd3)
+
+running 1 test
+test lane70_tiny_lake_skeleton ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== CLI RC=0
+   Compiling sail-rewrite v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-rewrite)
+    Finished `ci` profile [optimized] target(s) in 1.34s
+     Running unittests src/lib.rs (target/ci/deps/sail_rewrite-0bf85526643e3458)
+
+running 11 tests
+test passes::tuple_assignments::tests::binds_effectful_rhs_once_before_assigning_any_target ... ok
+test passes::simple_assignments::tests::preserves_register_writes_and_effectful_lvalues ... ok
+test passes::tuple_assignments::tests::zero_and_one_component_still_use_tuple_binding ... ok
+test passes::tuple_assignments::tests::avoids_capture_and_preserves_surrounding_statements ... ok
+test passes::undefined::tests::calls_type_directed_helpers_instead_of_guessing_literals ... ok
+test pipeline::tests::implemented_pipeline_rewrites_end_to_end ... ok
+test pipeline::tests::lean_default_matches_ocaml_order ... ok
+test pipeline::tests::rejects_unknown_pass ... ok
+test pipeline::tests::stubs_pass_shards_through ... ok
+test passes::undefined::tests::preserves_unsupported_types_and_valspecs_and_visits_scopes ... ok
+test pipeline::tests::parallel_matches_sequential_and_keeps_order ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/assignment_semantics.rs (target/ci/deps/assignment_semantics-0374ef24e62a01ae)
+
+running 1 test
+test tuple_lowering_preserves_calls_swaps_and_register_write_effects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/lean_smoke.rs (target/ci/deps/lean_smoke-cbec56a009d8996c)
+
+running 1 test
+test lean_default_pipeline_parallel_smoke ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/shard_chunk.rs (target/ci/deps/shard_chunk-51e24c988f7d16c9)
+
+running 2 tests
+test chunk_size_zero_clamps_to_one_and_empty_stays_empty ... ok
+test chunk_is_deterministic_and_covers_all_defs ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/streaming.rs (target/ci/deps/streaming-c1bd73b18c36d159)
+
+running 1 test
+test streaming_rewrites_and_spills_a_corpus_larger_than_ram ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+   Doc-tests sail_rewrite
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== REWRITE RC=0
+warning: unused import: `Interner`
+  --> crates/sail-lex/src/token.rs:18:16
+   |
+18 | use sail_ast::{Interner, Symbol};
+   |                ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-lex` (lib) generated 1 warning
+warning: unused variable: `it`
+   --> crates/sail-ty/src/conv.rs:385:35
+    |
+385 | fn typarg_nexp_only(arg: &TypArg, it: &impl Interner) -> Option<NExp> {
+    |                                   ^^ help: if this is intentional, prefix it with an underscore: `_it`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-ty` (lib) generated 1 warning (run `cargo fix --lib -p sail-ty` to apply 1 suggestion)
+warning: function `run_with_ooc` is never used
+   --> crates/sail-cli/src/e2e.rs:264:8
+    |
+264 | pub fn run_with_ooc<H: OocHooks>(args: &E2eArgs, driver: &mut OocDriver<H>) -> Outcome {
+    |        ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `MEMO_DOMAIN_SOLVER_Z3` is never used
+  --> crates/sail-cli/src/ooc.rs:56:11
+   |
+56 | pub const MEMO_DOMAIN_SOLVER_Z3: &str = "ooc/memo-v1/solver/z3-v1";
+   |           ^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `WarmBudget`, `ContentMismatch`, and `Io` are never constructed
+  --> crates/sail-cli/src/ooc.rs:74:5
+   |
+61 | pub enum OocError {
+   |          -------- variants in this enum
+...
+74 |     WarmBudget {
+   |     ^^^^^^^^^^
+...
+84 |     ContentMismatch {
+   |     ^^^^^^^^^^^^^^^
+...
+96 |     Io(String),
+   |     ^^
+   |
+   = note: `OocError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `warm_fetch`, `memo_lookup`, `memo_store`, and `summary_remove` are never used
+   --> crates/sail-cli/src/ooc.rs:163:8
+    |
+152 | pub trait OocHooks {
+    |           -------- methods in this trait
+...
+163 |     fn warm_fetch(&mut self, content_key: &str) -> Option<Vec<u8>>;
+    |        ^^^^^^^^^^
+...
+168 |     fn memo_lookup(&self, query_key: &str) -> Option<Vec<u8>>;
+    |        ^^^^^^^^^^^
+169 |     /// Kalter Memo-Store (unveränderliche Werte; Erster gewinnt).
+170 |     fn memo_store(&mut self, query_key: &str, value: &[u8]);
+    |        ^^^^^^^^^^
+...
+180 |     fn summary_remove(&mut self, shard: &str) -> bool;
+    |        ^^^^^^^^^^^^^^
+
+warning: struct `RecordingHooks` is never constructed
+   --> crates/sail-cli/src/ooc.rs:226:12
+    |
+226 | pub struct RecordingHooks {
+    |            ^^^^^^^^^^^^^^
+
+warning: methods `with_max_live_bytes`, `live_bytes`, `summary_count`, and `event` are never used
+   --> crates/sail-cli/src/ooc.rs:258:12
+    |
+255 | impl RecordingHooks {
+    | ------------------- methods in this implementation
+...
+258 |     pub fn with_max_live_bytes(mut self, n: u64) -> Self {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+265 |     pub fn live_bytes(&self) -> u64 {
+    |            ^^^^^^^^^^
+...
+271 |     pub fn summary_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^
+...
+275 |     fn event(&mut self, e: String) {
+    |        ^^^^^
+
+warning: methods `hooks`, `hooks_mut`, `hot`, `into_hooks`, `memo_prove`, and `warm_recall` are never used
+   --> crates/sail-cli/src/ooc.rs:406:12
+    |
+393 | impl<H: OocHooks> OocDriver<H> {
+    | ------------------------------ methods in this implementation
+...
+406 |     pub fn hooks(&self) -> &H {
+    |            ^^^^^
+...
+411 |     pub fn hooks_mut(&mut self) -> &mut H {
+    |            ^^^^^^^^^
+...
+423 |     pub fn hot(&self) -> Option<&str> {
+    |            ^^^
+...
+429 |     pub fn into_hooks(self) -> H {
+    |            ^^^^^^^^^^
+...
+528 |     pub fn memo_prove(
+    |            ^^^^^^^^^^
+...
+545 |     pub fn warm_recall(&mut self, content_key: &str) -> Option<Vec<u8>> {
+    |            ^^^^^^^^^^^
+
+warning: `sail-cli` (bin "sail-rs") generated 7 warnings
+    Finished `ci` profile [optimized] target(s) in 0.03s
+=== BUILD RC=0
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 9.774s
+             CPU time consumed: 26.298s
+                   Memory peak: 300.9M (swap: 0B)
+[gate] ende rc=0 avail=22192MiB
+RC=0

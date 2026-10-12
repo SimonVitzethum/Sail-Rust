@@ -592,3 +592,48 @@ fn numeric_and_boolean_type_abbreviations_keep_their_result_kinds() {
     assert!(matches!(&boolean.value.kind, DefKind::Type(ty)
         if matches!(&ty.kind, TypeDefKind::Abbrev { arg, .. } if matches!(arg.kind, TypArgKind::Bool(_)))));
 }
+
+#[test]
+fn block_declarations_scope_over_the_remaining_block() {
+    // OCaml `parser.mly`, Produktion `block`: `{ let x = e; rest }` bzw.
+    // `{ var x = e; rest }` trägt `rest` als Körper, keine Geschwister mit
+    // leerem `()`-Körper. Spans sind keine Dummies (Fragment-Span wird
+    // vollständig weitergereicht).
+    for source in ["{ let x = 1; x }", "{ var x = 1; x }"] {
+        let out = parse_exp(source).unwrap();
+        assert!(!out.value.span.is_dummy(), "{source}");
+        let ExpKind::Block(items) = &out.value.kind else { panic!("{source}") };
+        assert_eq!(items.len(), 1, "{source}: {:?}", items);
+        assert!(!items[0].span.is_dummy(), "{source}");
+        let body = match &items[0].kind {
+            ExpKind::Let { body, .. } | ExpKind::Var { body, .. } => body,
+            other => panic!("{source}: {other:?}"),
+        };
+        assert!(!body.span.is_dummy(), "{source}");
+        let ExpKind::Block(items) = &body.kind else { panic!("{source}: {body:?}") };
+        assert!(matches!(items.as_slice(), [sail_ast::Node { kind: ExpKind::Id(_), .. }]), "{source}: {items:?}");
+        assert!(!items[0].span.is_dummy(), "{source}");
+    }
+    // Kette: jede Deklaration sieht den Rest.
+    let out = parse_exp("{ let x = 1; let y = 2; x }").unwrap();
+    let ExpKind::Block(items) = &out.value.kind else { panic!("{out:?}") };
+    assert_eq!(items.len(), 1);
+    let ExpKind::Let { body: outer, .. } = &items[0].kind else { panic!("{items:?}") };
+    let ExpKind::Block(inner) = &outer.kind else { panic!("{outer:?}") };
+    assert_eq!(inner.len(), 1);
+    let ExpKind::Let { body: tail, .. } = &inner[0].kind else { panic!("{inner:?}") };
+    assert!(matches!(&tail.kind, ExpKind::Block(_)));
+    // Deklaration ohne Rest behält leeren Körper (kein Geschwister zu falten).
+    let out = parse_exp("{ let x = 1 }").unwrap();
+    let ExpKind::Block(items) = &out.value.kind else { panic!("{out:?}") };
+    assert_eq!(items.len(), 1);
+    let ExpKind::Let { body, .. } = &items[0].kind else { panic!("{items:?}") };
+    assert!(matches!(&body.kind, ExpKind::Lit(_)));
+    // Def-Pfad: Funktionsrumpf mit Block-Dekl bleibt geschachtelt.
+    let out = parse_def("function f(x) = { let y = x; y }").unwrap();
+    let DefKind::Fundef { funcls, .. } = &out.value.kind else { panic!("{out:?}") };
+    let sail_ast::PExpKind::PatExp { body, .. } = &funcls[0].arm.kind else { panic!("{funcls:?}") };
+    let ExpKind::Block(items) = &body.kind else { panic!("{body:?}") };
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert!(matches!(&items[0].kind, ExpKind::Let { body, .. } if matches!(&body.kind, ExpKind::Block(_))));
+}

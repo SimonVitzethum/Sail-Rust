@@ -800,13 +800,11 @@ Block: Vec<Exp> = {
         Box::new(Exp::Lit(Lit::Unit)),
     )],
     "let" <p:Pat> "=" <e:Exp> ";" <b:Block> => {
-        let mut v = vec![Exp::Let(
+        vec![Exp::Let(
             p,
             Box::new(e),
-            Box::new(Exp::Lit(Lit::Unit)),
-        )];
-        v.extend(b);
-        v
+            Box::new(Exp::Block(b)),
+        )]
     },
     "var" <a:AtomicExp> "=" <e:Exp> => vec![Exp::Var(
         Box::new(a),
@@ -819,13 +817,11 @@ Block: Vec<Exp> = {
         Box::new(Exp::Lit(Lit::Unit)),
     )],
     "var" <a:AtomicExp> "=" <e:Exp> ";" <b:Block> => {
-        let mut v = vec![Exp::Var(
+        vec![Exp::Var(
             Box::new(a),
             Box::new(e),
-            Box::new(Exp::Lit(Lit::Unit)),
-        )];
-        v.extend(b);
-        v
+            Box::new(Exp::Block(b)),
+        )]
     },
 }
 

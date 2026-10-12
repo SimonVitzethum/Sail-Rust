@@ -1,0 +1,33 @@
+[gate] start mem=4G avail=20430MiB: bash -c export PATH=/home/simon/.elan/bin:/usr/bin:/bin; cargo test -p sail-lean --test lane70_emit --profile ci 2>&1; echo "=== LEAN RC=$?"; grep -v "mk_point\|get_x\|describe\|function is_red(Green)" target/lane70-tiny/tiny.sail > target/lane70-tiny/tiny_green.sail; ./target/ci/sail-rs --just-check target/lane70-tiny/tiny_green.sail 2>&1; echo "=== CLI-GREEN RC=$?"; ./target/ci/sail-rs --just-check target/lane70-tiny/tiny.sail 2>&1; echo "=== CLI-FULL RC=$?"; cd target/lane70-tiny && rm -rf .lake && lake build 2>&1; echo "=== LAKE RC=$?"; mkdir -p nosorry/Lane70tiny; SYSROOT=$(lean --print-prefix); LEAN_PATH=$PWD/nosorry LEAN_SYSROOT=$SYSROOT lean -o $PWD/nosorry/Lane70tiny/Tiny.olean Lane70tiny/Tiny.lean 2>&1; echo "=== OLEANTINY RC=$?"; LEAN_PATH=$PWD/nosorry LEAN_SYSROOT=$SYSROOT lean -o $PWD/nosorry/Lane70tiny.olean Lane70tiny.lean 2>&1; echo "=== OLEANROOT RC=$?"; printf "Lane70tiny.Tiny\nLane70tiny\n" > nosorry/modules.txt; LEAN_PATH=$PWD/nosorry LEAN_SYSROOT=$SYSROOT lean --run ../../scripts/CheckLeanNoSorry.lean nosorry/modules.txt 2>&1; echo "=== NOSORRY RC=$?"
+Running as unit: run-p176083-i170403.service
+   Compiling sail-lean v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-70/crates/sail-lean)
+    Finished `ci` profile [optimized] target(s) in 0.39s
+     Running tests/lane70_emit.rs (target/ci/deps/lane70_emit-8e1aeb7d9af5edd2)
+
+running 1 test
+test lane70_tiny_emit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== LEAN RC=0
+sail-rs: frontend converted 36 definitions from 2 files using 16 workers; 82548 AST bytes spooled
+sail-rs: typechecked 36 definitions and 16 expressions using 16 workers
+sail-rs: compilation incomplete: full Sail typechecking, rewrite integration and Lean body emission are not implemented; frontend conversion is not a successful model build
+=== CLI-GREEN RC=1
+frontend name resolution: duplicate function 'is_red' (first at file1:506-534, again at file1:534-566) (1 error(s))
+=== CLI-FULL RC=1
+✔ [2/4] Built Lane70tiny.Tiny (460ms)
+✔ [3/4] Built Lane70tiny (101ms)
+Build completed successfully (4 jobs).
+=== LAKE RC=0
+=== OLEANTINY RC=0
+=== OLEANROOT RC=0
+Lean no-sorry check passed for 2 modules and their imports.
+=== NOSORRY RC=0
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4.668s
+             CPU time consumed: 3.219s
+                   Memory peak: 1.8G (swap: 0B)
+[gate] ende rc=0 avail=20481MiB
+RC=0
