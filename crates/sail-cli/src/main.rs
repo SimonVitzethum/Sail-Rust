@@ -7,8 +7,10 @@ mod args;
 mod e2e;
 mod frontend;
 mod memo;
+mod lean_stage;
 mod ooc;
 mod profile;
+mod rewrite_stage;
 mod typecheck;
 
 use std::io::Write;
@@ -122,6 +124,10 @@ fn run_compiler(opts: &Options, profiler: &mut Profiler) -> Result<(), CliError>
         summary.definitions, summary.files, summary.workers, summary.ast_bytes);
     let checked = profiler.phase("typecheck", || typecheck::run(&frontend))?;
     eprintln!("sail-rs: typechecked {} definitions and {} expressions using {} workers", checked.definitions, checked.expressions, summary.workers);
+    let rewritten = profiler.phase("rewrite", || rewrite_stage::run(&frontend, &checked))?;
+    eprintln!("sail-rs: rewrote {} definitions through {} passes ({})",
+        rewritten.definitions, rewritten.passes.len(), rewritten.passes.join(", "));
+    rewritten.require_lean_emit()?;
     Err(CliError {
         exit_code: EXIT_ERROR,
         message: "sail-rs: compilation incomplete: full Sail typechecking, rewrite integration and Lean body emission are not implemented; frontend conversion is not a successful model build".into(),

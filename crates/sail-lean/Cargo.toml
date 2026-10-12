@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 sail-ast = { path = "../sail-ast" }
+sail-effects = { path = "../sail-effects" }
 sail-except = { path = "../sail-except" }
 sail-shard = { path = "../sail-shard" }
 

@@ -27,9 +27,12 @@
 //!
 //! The printer logic itself is untouched.
 
-use sail_ast::{Interner, NExp as AstNExp, NExpKind, Typ as AstTyp, TypArg as AstTypArg, TypArgKind, TypKind};
+use sail_ast::{
+    Interner, Lit as AstLit, LitKind, NExp as AstNExp, NExpKind, Typ as AstTyp, TypArg as AstTypArg, TypArgKind,
+    TypKind,
+};
 
-use crate::{Nexp, Typ, TypArg};
+use crate::{Lit, Nexp, Typ, TypArg};
 
 /// Lower a canonical nexp onto the printer subset.
 pub fn nexp_from_ast(n: &AstNExp, it: &impl Interner) -> Option<Nexp> {
@@ -137,5 +140,34 @@ pub fn typarg_from_ast(a: &AstTypArg, it: &impl Interner) -> Option<TypArg> {
         TypArgKind::Typ(t) => typ_from_ast(t, it).map(TypArg::Typ),
         TypArgKind::NExp(n) => nexp_from_ast(n, it).map(TypArg::Nexp),
         TypArgKind::Bool(_) => None,
+    }
+}
+
+/// Lower a canonical literal onto the printer subset.
+///
+/// Hex/binary widths follow the OCaml `doc_lit` convention
+/// (`pretty_print_lean.ml#397-415`): the `#w` suffix counts literal bits
+/// (`hex_lit_length` = 4 bits per digit, `bin_lit_length` = bits), so the
+/// width is recomputed from the digit count here. Real literals have no
+/// printer counterpart (they need the `Real`/`FakeReal` support modules,
+/// a later lane) and map to `None`.
+pub fn lit_from_ast(l: &AstLit, it: &impl Interner) -> Option<Lit> {
+    match &l.kind {
+        LitKind::Unit => Some(Lit::Unit),
+        LitKind::True => Some(Lit::True),
+        LitKind::False => Some(Lit::False),
+        LitKind::Num(sym) => it.resolve(*sym)?.parse::<i128>().ok().map(Lit::Num),
+        LitKind::Hex(sym) => {
+            let digits = it.resolve(*sym)?.to_owned();
+            let width = u32::try_from(digits.len()).ok()?.checked_mul(4)?;
+            Some(Lit::Hex { digits, width: Some(width) })
+        }
+        LitKind::Bin(sym) => {
+            let bits = it.resolve(*sym)?.to_owned();
+            let width = u32::try_from(bits.len()).ok()?;
+            Some(Lit::Bin { bits, width: Some(width) })
+        }
+        LitKind::String(sym) => Some(Lit::Str(it.resolve(*sym)?.to_owned())),
+        LitKind::Real(_) => None,
     }
 }

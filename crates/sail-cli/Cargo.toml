@@ -22,6 +22,7 @@ sail-ast = { path = "../sail-ast" }
 sail-shard = { path = "../sail-shard" }
 sail-ooc = { path = "../sail-ooc" }
 sail-resolve = { path = "../sail-resolve" }
+sail-rewrite = { path = "../sail-rewrite" }
 sail-ty = { path = "../sail-ty" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

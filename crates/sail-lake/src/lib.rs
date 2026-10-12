@@ -11,6 +11,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod emission;
+
 use std::collections::HashSet;
 use std::fmt::Write as _;
 
@@ -36,7 +38,8 @@ pub const MATHLIB_GIT: &str = "https://github.com/leanprover-community/mathlib4-
 pub const ARM_EXTRAS_MODULE: &str = "Sail.ArmExtras";
 
 /// Marker documenting the no-`sorry` policy of this crate.
-pub const NO_SORRY_NOTE: &str = "sail-lake never emits `sorry`; `decreasing_trivial` is only used via `Sail.ArmExtras`";
+pub const NO_SORRY_NOTE: &str =
+    "sail-lake never emits `sorry`; `decreasing_trivial` is only used via `Sail.ArmExtras`";
 
 /// Concurrency interface version selecting the `Sail` interface module
 /// and the `Specialization*` file, mirroring
@@ -134,7 +137,9 @@ impl LakeOptions {
     /// Validate mutually exclusive support-library sources.
     pub fn validate(&self) -> Result<(), String> {
         if self.lib_git.is_some() && self.lib_path.is_some() {
-            return Err("--lean-lib-git and --lean-lib-path cannot be set simultaneously".to_string());
+            return Err(
+                "--lean-lib-git and --lean-lib-path cannot be set simultaneously".to_string(),
+            );
         }
         if self.out_name.is_empty() {
             return Err("out_name must not be empty".to_string());
@@ -198,8 +203,16 @@ pub fn render_gitignore() -> String {
 /// linter options, `open Sail[.Interface]`, optional `noncomputable
 /// section`, and the target namespace.
 #[must_use]
-pub fn render_file_prelude(interface: InterfaceVersion, namespace: &str, noncomputable: bool) -> String {
-    let noncomputable_line = if noncomputable { "noncomputable section\n" } else { "" };
+pub fn render_file_prelude(
+    interface: InterfaceVersion,
+    namespace: &str,
+    noncomputable: bool,
+) -> String {
+    let noncomputable_line = if noncomputable {
+        "noncomputable section\n"
+    } else {
+        ""
+    };
     format!(
         "set_option maxHeartbeats 1_000_000_000\n\
          set_option maxRecDepth 1_000_000\n\
@@ -262,7 +275,11 @@ pub fn render_function_file_prelude(
         let _ = writeln!(s, "import {ARM_EXTRAS_MODULE}");
     }
     s.push('\n');
-    s.push_str(&render_file_prelude(options.interface, &camel, options.noncomputable));
+    s.push_str(&render_file_prelude(
+        options.interface,
+        &camel,
+        options.noncomputable,
+    ));
     let _ = writeln!(s, "open {}\n", options.interface.module_name());
     s.push_str("namespace Functions\n\n");
     s
@@ -277,7 +294,9 @@ pub fn render_support_lib_require(options: &LakeOptions) -> Result<String, Strin
     s.push_str("\n\n[[require]]\nname = \"Sail\"\n");
     match (&options.lib_git, &options.lib_path) {
         (Some(_), Some(_)) => {
-            return Err("--lean-lib-git and --lean-lib-path cannot be set simultaneously".to_string());
+            return Err(
+                "--lean-lib-git and --lean-lib-path cannot be set simultaneously".to_string(),
+            );
         }
         (None, Some(path)) => {
             let _ = writeln!(s, "path = \"{path}\"");
@@ -332,7 +351,212 @@ pub fn render_lake_manifest(options: &LakeOptions) -> String {
 
 /// A single register entry for the `Register` inductive template:
 /// `(constructor_name, lean_type)`.
+///
+/// This is the exact shape produced by `sail-lean::emit::register_entry`:
+/// the constructor name verbatim plus the printed Lean type. Constructor
+/// spelling stays owned by the templates below (goldens unchanged); use
+/// [`validate_register_entry`] / [`LakeProject::push_register_entry`] to
+/// ingest such pairs with loud validation instead of pushing unchecked.
 pub type RegisterEntry = (String, String);
+
+/// Validate one `sail-lean::emit::register_entry` pair before it reaches
+/// the templates.
+///
+/// - `ctor` must be non-empty, single-line, without whitespace, `|` or `:`.
+/// - `ty` must be non-empty and single-line (it may contain spaces, e.g.
+///   `(BitVec 64)`).
+/// - Neither side may contain a proof hole token (`sorry`/`admit` as Lean
+///   code tokens; string literals and `--` / `/- -/` comments are skipped).
+pub fn validate_register_entry(ctor: &str, ty: &str) -> Result<(), String> {
+    if ctor.is_empty() {
+        return Err("register constructor must not be empty".to_string());
+    }
+    if ctor.chars().any(|c| c.is_whitespace()) {
+        return Err(format!(
+            "register constructor `{ctor}` must not contain whitespace"
+        ));
+    }
+    if ctor.contains('|') || ctor.contains(':') {
+        return Err(format!(
+            "register constructor `{ctor}` must not contain `|` or `:`"
+        ));
+    }
+    if ctor.contains('\n') || ctor.contains('\r') {
+        return Err(format!("register constructor `{ctor}` must be single-line"));
+    }
+    if ty.is_empty() {
+        return Err(format!("register `{ctor}` type must not be empty"));
+    }
+    if ty.contains('\n') || ty.contains('\r') {
+        return Err(format!("register `{ctor}` type must be single-line"));
+    }
+    if emitted_text_has_hole(ctor) {
+        return Err(format!(
+            "register constructor `{ctor}` contains a proof hole"
+        ));
+    }
+    if emitted_text_has_hole(ty) {
+        return Err(format!("register `{ctor}` type contains a proof hole"));
+    }
+    Ok(())
+}
+
+/// Whether Lean source text contains a proof hole token.
+///
+/// Token scan over `sorry` / `admit` as standalone Lean identifiers.
+/// String literals (`"…"`, Lean `\"` escapes), line comments (`-- …`),
+/// block comments (`/- … -/`, nested) and character literals (`'x'`) are
+/// skipped first, mirroring `sail-lean::emit::body_has_hole`. This is the
+/// shared guard for [`validate_register_entry`] and
+/// [`validate_emitted_def`]; the authoritative gate stays the elaborated
+/// `scripts/CheckLeanNoSorry.lean`.
+#[must_use]
+pub fn emitted_text_has_hole(text: &str) -> bool {
+    for token in lean_code_tokens(text) {
+        if token == "sorry" || token == "admit" {
+            return true;
+        }
+    }
+    false
+}
+
+/// Validate one `sail-lean::emit::emit_def` / `render_def` output before it
+/// enters the project layout.
+///
+/// - Must be non-empty (after trimming) and end up as one or more `def`s:
+///   the trimmed text must start with `def `, `noncomputable `, `partial `
+///   or `@[` (the printer's `print_sig_header` prefixes).
+/// - Must not contain a proof hole token (see [`emitted_text_has_hole`]).
+/// - The text itself is stored verbatim (plus a guaranteed trailing `\n`);
+///   this crate never invents or rewrites bodies.
+pub fn validate_emitted_def(text: &str) -> Result<(), String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("emitted def must not be empty".to_string());
+    }
+    let ok_start = trimmed.starts_with("def ")
+        || trimmed.starts_with("noncomputable ")
+        || trimmed.starts_with("partial ")
+        || trimmed.starts_with("@[");
+    if !ok_start {
+        return Err(
+            "emitted def must start with `def` (or `noncomputable`/`partial`/`@[...]`)".to_string(),
+        );
+    }
+    if emitted_text_has_hole(text) {
+        return Err(
+            "emitted def contains a proof hole (sorry/admit): refusing to emit".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Normalize an emitted def for layout: validated verbatim plus exactly one
+/// trailing `\n`.
+fn normalize_emitted_def(text: &str) -> String {
+    let mut s = text.to_string();
+    // Strip trailing `\r`/`\n` sprawl, then exactly one `\n`.
+    while s.ends_with('\n') || s.ends_with('\r') {
+        s.pop();
+    }
+    s.push('\n');
+    s
+}
+
+/// Split Lean source into code tokens, skipping string literals, `--`
+/// line comments, nested `/- -/` block comments and `'x'` character
+/// literals. Tokens are maximal runs of `[A-Za-z0-9_']`. Mirrors
+/// `sail-lean::emit`'s scanner so both sides agree on what counts as a
+/// hole; kept local so `sail-lake` stays dependency-free.
+fn lean_code_tokens(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    let mut token_start: Option<usize> = None;
+    macro_rules! flush {
+        ($end:expr) => {
+            if let Some(s) = token_start.take() {
+                tokens.push(&text[s..$end]);
+            }
+        };
+    }
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
+            flush!(i);
+            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
+            flush!(i);
+            let mut depth = 1usize;
+            i += 2;
+            while i < bytes.len() && depth > 0 {
+                if bytes[i] == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
+                    depth += 1;
+                    i += 2;
+                } else if bytes[i] == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                    depth -= 1;
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        if c == b'"' {
+            flush!(i);
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                } else if bytes[i] == b'"' {
+                    i += 1;
+                    break;
+                } else {
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        if c == b'\'' && char_literal_len(&bytes[i..]).is_some() {
+            flush!(i);
+            i += char_literal_len(&bytes[i..]).unwrap_or(1);
+            continue;
+        }
+        if c.is_ascii_alphanumeric() || c == b'_' || c == b'\'' {
+            if token_start.is_none() {
+                token_start = Some(i);
+            }
+        } else {
+            flush!(i);
+        }
+        i += 1;
+    }
+    flush!(text.len());
+    tokens
+}
+
+/// Length of a Lean character literal at the start of `rest` (`'x'`,
+/// `'\n'`, `'\\'`, `'\''`), or `None` when it is not one.
+fn char_literal_len(rest: &[u8]) -> Option<usize> {
+    if rest.len() < 3 || rest[0] != b'\'' {
+        return None;
+    }
+    if rest[1] == b'\\' {
+        if rest.len() >= 4 && rest[3] == b'\'' {
+            return Some(4);
+        }
+        return None;
+    }
+    if rest[2] == b'\'' {
+        return Some(3);
+    }
+    None
+}
 
 /// `inductive Register` block, mirroring `register_enums`.
 ///
@@ -364,13 +588,17 @@ pub fn render_register_type(registers: &[RegisterEntry]) -> String {
 /// Empty-register fallback used when a model declares no registers.
 #[must_use]
 pub fn render_empty_registers() -> String {
-    "abbrev Register := PEmpty\nabbrev RegisterType : Register -> Type := PEmpty.elim\n\n".to_string()
+    "abbrev Register := PEmpty\nabbrev RegisterType : Register -> Type := PEmpty.elim\n\n"
+        .to_string()
 }
 
 /// `Inhabited (RegisterRef ...)` instances, one per distinct register
 /// type, mirroring `inhabit_enum_v1` / `inhabit_enum_v2`.
 #[must_use]
-pub fn render_register_inhabited(interface: InterfaceVersion, registers: &[RegisterEntry]) -> String {
+pub fn render_register_inhabited(
+    interface: InterfaceVersion,
+    registers: &[RegisterEntry],
+) -> String {
     // Deduplicate by Lean type, keeping the first constructor per type.
     // `HashSet` statt O(n²)-Scan (`seen.iter().any(…)`); der `seen`-Vektor
     // hält die Erstauftretens-Reihenfolge, Ausgabe identisch.
@@ -572,6 +800,12 @@ pub struct GeneratedFile {
 
 /// High-level project generator: options plus the shard layout and
 /// register model needed to render every file.
+///
+/// Lane 65: the generator consumes `sail-lean::emit` output without
+/// depending on it — [`RegisterEntry`] pairs from `register_entry` via
+/// [`LakeProject::push_register_entry`], Lean `def` texts from
+/// `emit_def`/`render_def` via [`LakeProject::push_emitted_def`]. Both
+/// paths validate loudly and never emit `sorry` (see [`NO_SORRY_NOTE`]).
 #[derive(Debug, Clone)]
 pub struct LakeProject {
     /// Global rendering options.
@@ -585,6 +819,11 @@ pub struct LakeProject {
     pub root_import_refs: Vec<String>,
     /// Register model for the `Defs.lean` register/instance templates.
     pub registers: Vec<RegisterEntry>,
+    /// Emitted Lean `def`s (validated `emit_def` output) appended to
+    /// `<Camel>/Defs.lean` after the register section, in push order.
+    /// Empty by default, in which case [`LakeProject::layout`] is
+    /// byte-identical to the register-only layout (goldens unchanged).
+    pub emitted_defs: Vec<String>,
     /// Whether the model defines its own `exception` type.
     pub has_exception_type: bool,
     /// V1 arch fields (used when [`InterfaceVersion::V1`]).
@@ -601,10 +840,42 @@ impl LakeProject {
             extra_imports: Vec::new(),
             root_import_refs: Vec::new(),
             registers: Vec::new(),
+            emitted_defs: Vec::new(),
             has_exception_type: false,
             arch_v1: ArchFieldsV1::default(),
             arch_v2: ArchFieldsV2::default(),
         }
+    }
+
+    /// Ingest one `register_entry` pair (`(constructor, lean_type)`) with
+    /// loud validation. Constructor spelling stays owned by the templates;
+    /// the pair is stored verbatim on success.
+    pub fn push_register_entry(&mut self, ctor: String, ty: String) -> Result<(), String> {
+        validate_register_entry(&ctor, &ty)?;
+        self.registers.push((ctor, ty));
+        Ok(())
+    }
+
+    /// Ingest one `emit_def` / `render_def` text with loud validation.
+    /// Stored verbatim (plus a guaranteed trailing `\n`); proof holes are
+    /// refused, never rendered.
+    pub fn push_emitted_def(&mut self, def: String) -> Result<(), String> {
+        validate_emitted_def(&def)?;
+        self.emitted_defs.push(normalize_emitted_def(&def));
+        Ok(())
+    }
+
+    /// Render the ingested emitted `def`s as one section for
+    /// `<Camel>/Defs.lean`: the defs in push order, each exactly
+    /// `\n`-terminated. Empty when no defs were pushed, so `layout()`
+    /// stays byte-identical (goldens unchanged).
+    #[must_use]
+    pub fn render_emitted_defs_section(&self) -> String {
+        let mut s = String::new();
+        for def in &self.emitted_defs {
+            s.push_str(def);
+        }
+        s
     }
 
     /// Render the `Defs.lean` register/instance section for the
@@ -626,16 +897,28 @@ impl LakeProject {
                     s.push('\n');
                 }
                 s.push('\n');
-                s.push_str(&render_monad_abbrev(InterfaceVersion::V1, self.has_exception_type));
+                s.push_str(&render_monad_abbrev(
+                    InterfaceVersion::V1,
+                    self.has_exception_type,
+                ));
                 s.push_str("\n\n");
-                s.push_str(&render_register_inhabited(InterfaceVersion::V1, &self.registers));
+                s.push_str(&render_register_inhabited(
+                    InterfaceVersion::V1,
+                    &self.registers,
+                ));
             }
             InterfaceVersion::V2 => {
                 s.push_str(&self.arch_v2.render());
                 s.push('\n');
-                s.push_str(&render_monad_abbrev(InterfaceVersion::V2, self.has_exception_type));
+                s.push_str(&render_monad_abbrev(
+                    InterfaceVersion::V2,
+                    self.has_exception_type,
+                ));
                 s.push_str("\n\n");
-                s.push_str(&render_register_inhabited(InterfaceVersion::V2, &self.registers));
+                s.push_str(&render_register_inhabited(
+                    InterfaceVersion::V2,
+                    &self.registers,
+                ));
             }
         }
         s.push('\n');
@@ -646,7 +929,14 @@ impl LakeProject {
     /// pairs, mirroring the file layout created by `start_lean_output`:
     /// `.gitignore`, `lean-toolchain`, `lakefile.toml`,
     /// `lake-manifest.json`, `<Camel>/Defs.lean` (header + register
-    /// templates), and the `<Camel>.lean` root file.
+    /// templates + ingested emitted `def`s), and the `<Camel>.lean` root
+    /// file.
+    ///
+    /// Lane 65: `emitted_defs` (via [`LakeProject::push_emitted_def`])
+    /// are appended after the register section in push order. With no
+    /// defs the output is byte-identical to the previous register-only
+    /// layout, so existing goldens only change on deliberate template
+    /// edits — never to fit a failing test.
     pub fn layout(&self) -> Result<Vec<GeneratedFile>, String> {
         self.options.validate()?;
         let camel = self.options.module_name();
@@ -670,13 +960,18 @@ impl LakeProject {
         ];
         let mut defs = render_defs_header(&self.options);
         defs.push_str(&self.render_register_section());
+        defs.push_str(&self.render_emitted_defs_section());
         files.push(GeneratedFile {
             path: format!("{camel}/Defs.lean"),
             contents: defs,
         });
         files.push(GeneratedFile {
             path: format!("{camel}.lean"),
-            contents: render_function_file_prelude(&self.options, &self.root_import_refs, &self.extra_imports),
+            contents: render_function_file_prelude(
+                &self.options,
+                &self.root_import_refs,
+                &self.extra_imports,
+            ),
         });
         Ok(files)
     }
@@ -685,8 +980,12 @@ impl LakeProject {
     /// golden tests: `=== <path> ===` headers followed by contents.
     pub fn layout_snapshot(&self) -> Result<String, String> {
         let layout = self.layout()?;
-        let mut snap =
-            String::with_capacity(layout.iter().map(|f| f.path.len() + f.contents.len() + 16).sum());
+        let mut snap = String::with_capacity(
+            layout
+                .iter()
+                .map(|f| f.path.len() + f.contents.len() + 16)
+                .sum(),
+        );
         for f in &layout {
             let _ = writeln!(snap, "=== {} ===\n{}", f.path, f.contents);
         }
@@ -821,7 +1120,14 @@ mod tests {
     #[test]
     fn layout_snapshot_is_stable() {
         let snap = small_project().layout_snapshot().unwrap();
-        for path in [".gitignore", "lean-toolchain", "lakefile.toml", "lake-manifest.json", "TestModel/Defs.lean", "TestModel.lean"] {
+        for path in [
+            ".gitignore",
+            "lean-toolchain",
+            "lakefile.toml",
+            "lake-manifest.json",
+            "TestModel/Defs.lean",
+            "TestModel.lean",
+        ] {
             assert!(snap.contains(&format!("=== {path} ===")), "missing {path}");
         }
         // Golden content: update deliberately, never blindly.
@@ -831,6 +1137,128 @@ mod tests {
         assert!(snap.contains("inductive Register"));
         assert!(snap.contains("namespace Functions"));
         insta_check(&snap);
+    }
+
+    // Lane 65: Lake templates consume emit output (register_entry pairs +
+    // emitted defs) without touching layout/toolchain/manifest defaults.
+
+    #[test]
+    fn push_register_entry_feeds_templates_verbatim() {
+        let mut p = LakeProject::new("tiny");
+        // Shape mirrors sail-lean::emit::register_entry output.
+        p.push_register_entry("my_reg".to_string(), "Bool".to_string())
+            .unwrap();
+        p.push_register_entry("x1".to_string(), "(BitVec 64)".to_string())
+            .unwrap();
+        assert_eq!(p.registers.len(), 2);
+        let ind = render_register_inductive(&p.registers);
+        assert!(ind.contains("| my_reg"));
+        assert!(ind.contains("| x1"));
+        let ty = render_register_type(&p.registers);
+        assert!(ty.contains("| .my_reg => Bool"));
+        assert!(ty.contains("| .x1 => (BitVec 64)"));
+        let snap = p.layout_snapshot().unwrap();
+        assert!(snap.contains("| my_reg"));
+        assert!(snap.contains("| .my_reg => Bool"));
+    }
+
+    #[test]
+    fn push_register_entry_rejects_bad_pairs() {
+        let mut p = LakeProject::new("tiny");
+        assert!(p
+            .push_register_entry(String::new(), "Bool".to_string())
+            .is_err());
+        assert!(p
+            .push_register_entry("r".to_string(), String::new())
+            .is_err());
+        assert!(p
+            .push_register_entry("has space".to_string(), "Bool".to_string())
+            .is_err());
+        assert!(p
+            .push_register_entry("has|pipe".to_string(), "Bool".to_string())
+            .is_err());
+        assert!(p
+            .push_register_entry("r".to_string(), "line\nbreak".to_string())
+            .is_err());
+        assert!(p
+            .push_register_entry("r".to_string(), "sorry".to_string())
+            .is_err());
+        assert!(p.registers.is_empty());
+    }
+
+    #[test]
+    fn push_emitted_def_lands_in_defs_lean_in_order() {
+        let mut p = LakeProject::new("tiny");
+        p.push_emitted_def("def v : Nat := 42\n".to_string())
+            .unwrap();
+        p.push_emitted_def("def f (x : Int) : Int := x".to_string())
+            .unwrap();
+        // Missing trailing newline is normalized to exactly one.
+        assert_eq!(
+            p.emitted_defs,
+            vec![
+                "def v : Nat := 42\n".to_string(),
+                "def f (x : Int) : Int := x\n".to_string(),
+            ]
+        );
+        let section = p.render_emitted_defs_section();
+        assert_eq!(section, "def v : Nat := 42\ndef f (x : Int) : Int := x\n");
+        let files = p.layout().unwrap();
+        let defs = files.iter().find(|f| f.path == "Tiny/Defs.lean").unwrap();
+        let first = defs.contents.find("def v : Nat := 42").unwrap();
+        let second = defs.contents.find("def f (x : Int) : Int := x").unwrap();
+        assert!(first < second);
+        // Register section stays first; defs are appended after it.
+        assert!(defs.contents.find("abbrev Register").unwrap() < first);
+        assert!(!defs.contents.contains("sorry"));
+    }
+
+    #[test]
+    fn push_emitted_def_rejects_holes_and_non_defs() {
+        let mut p = LakeProject::new("tiny");
+        assert!(p.push_emitted_def(String::new()).is_err());
+        assert!(p.push_emitted_def("   \n".to_string()).is_err());
+        assert!(p
+            .push_emitted_def("abbrev Register := PEmpty\n".to_string())
+            .is_err());
+        assert!(p
+            .push_emitted_def("def bad := sorry\n".to_string())
+            .is_err());
+        assert!(p
+            .push_emitted_def("def bad := admit\n".to_string())
+            .is_err());
+        assert!(p.registers.is_empty());
+        assert!(p.emitted_defs.is_empty());
+        assert_eq!(p.render_emitted_defs_section(), String::new());
+    }
+
+    #[test]
+    fn emitted_hole_scan_ignores_strings_and_comments() {
+        assert!(!emitted_text_has_hole("\"sorry\""));
+        assert!(!emitted_text_has_hole("x -- sorry\n+ y"));
+        assert!(!emitted_text_has_hole("x /- sorry -/ + y"));
+        assert!(emitted_text_has_hole("\"ok\" ++ sorry"));
+        assert!(emitted_text_has_hole("-- comment\nsorry"));
+        // Substrings of larger identifiers are not holes.
+        assert!(!emitted_text_has_hole("mysorry + sorry_x"));
+        // …but a validated def carrying only those passes.
+        validate_emitted_def("def ok : String := \"sorry\"\n").unwrap();
+    }
+
+    #[test]
+    fn empty_emit_section_keeps_layout_byte_identical() {
+        // No defs pushed: layout must equal the register-only rendering so
+        // existing goldens stay valid; templates change only deliberately.
+        let mut with_api = LakeProject::new("tiny_arm");
+        with_api.registers = vec![("x1".to_string(), "(BitVec 64)".to_string())];
+        assert_eq!(with_api.render_emitted_defs_section(), String::new());
+        let snap_api = with_api.layout_snapshot().unwrap();
+        let mut manual = LakeProject::new("tiny_arm");
+        manual.registers = vec![("x1".to_string(), "(BitVec 64)".to_string())];
+        manual.emitted_defs = Vec::new();
+        let snap_manual = manual.layout_snapshot().unwrap();
+        assert_eq!(snap_api, snap_manual);
+        assert!(!snap_api.contains("def x1"));
     }
 
     /// Minimal inline snapshot guard: the full layout hash is pinned so
@@ -849,7 +1277,10 @@ mod tests {
             std::eprintln!("BLESS snapshot hash: {got}");
             return;
         }
-        assert_eq!(got, want, "layout snapshot drifted; inspect diff with BLESS=1");
+        assert_eq!(
+            got, want,
+            "layout snapshot drifted; inspect diff with BLESS=1"
+        );
     }
 
     fn snapshot_hash() -> String {

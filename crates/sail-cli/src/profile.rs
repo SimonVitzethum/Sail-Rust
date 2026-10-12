@@ -50,6 +50,41 @@ pub fn peak_rss_mb() -> u64 {
     0
 }
 
+/// Kanonische Prover-Zähler einer Phase (Lane 15).
+///
+/// Quelle sind die Pool-/Cache-Zähler aus `sail-solver`
+/// (`SolverPool::smt_totals`, `MemoCache::smt_totals`): Der Aufrufer
+/// snapshotet vor/nach der Phase und übergibt das Delta via
+/// [`Profiler::phase_with_counters`]. Dadurch sind `smt_calls`/`smt_s`
+/// im `[profile]`-Log echte Messwerte statt Nullen (TESTING.md:
+/// SMT-Nullzähler waren bisher nicht verdrahtet).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ProverCounters {
+    /// Anzahl SMT-Rundläufe (Solver-Kontakt, Cache-Misses).
+    pub calls: u64,
+    /// Summierte SMT-Wandzeit in Sekunden.
+    pub secs: f64,
+}
+
+impl ProverCounters {
+    pub const ZERO: Self = Self {
+        calls: 0,
+        secs: 0.0,
+    };
+
+    pub fn new(calls: u64, secs: f64) -> Self {
+        Self { calls, secs }
+    }
+
+    /// Sättigendes Delta `after - before` (Zähler sind monoton).
+    pub fn diff(before: Self, after: Self) -> Self {
+        Self {
+            calls: after.calls.saturating_sub(before.calls),
+            secs: (after.secs - before.secs).max(0.0),
+        }
+    }
+}
+
 /// Sammler fuer Phasen-Timings. `emit_stderr` druckt im obigen Format.
 #[derive(Debug, Default)]
 pub struct Profiler {
@@ -67,7 +102,27 @@ impl Profiler {
     }
 
     /// Misst `f` als Phase `phase` und speichert das Sample.
+    ///
+    /// Ohne Prover-Anbindung (keine Zähler übergeben): `smt_calls`/`smt_s`
+    /// bleiben 0. Mit Anbindung [`Profiler::phase_with_counters`] nutzen.
     pub fn phase<T, F>(&mut self, phase: &'static str, f: F) -> T
+    where
+        F: FnOnce() -> T,
+    {
+        self.phase_with_counters(phase, ProverCounters::ZERO, f)
+    }
+
+    /// Misst `f` als Phase `phase` mit Prover-Zähler-Delta.
+    ///
+    /// Verdrahtung (Call-Site, z. B. `typecheck`): Pool-Zähler vorher/nachher
+    /// snapshoten (`pool.smt_totals()`), [`ProverCounters::diff`] bilden,
+    /// hier übergeben. Wandzeit/RSS misst der Profiler selbst.
+    pub fn phase_with_counters<T, F>(
+        &mut self,
+        phase: &'static str,
+        counters: ProverCounters,
+        f: F,
+    ) -> T
     where
         F: FnOnce() -> T,
     {
@@ -77,10 +132,27 @@ impl Profiler {
             phase,
             wall_s: start.elapsed().as_secs_f64(),
             rss_peak_mb: peak_rss_mb(),
-            smt_calls: 0,
-            smt_s: 0.0,
+            smt_calls: counters.calls,
+            smt_s: counters.secs,
         });
         result
+    }
+
+    /// Rechnet Prover-Zähler nachträglich auf das jüngste Sample an
+    /// (für Worker-Aggregation, deren Pool-Stats erst nach Phasenende
+    /// zusammengeführt werden). Trifft auf die jüngste Phase mit
+    /// passendem Namen zu, sonst auf das jüngste Sample überhaupt.
+    pub fn add_smt_to_last(&mut self, phase: &'static str, counters: ProverCounters) {
+        let target = self
+            .samples
+            .iter()
+            .rposition(|s| s.phase == phase)
+            .or_else(|| self.samples.len().checked_sub(1));
+        if let Some(i) = target {
+            let s = &mut self.samples[i];
+            s.smt_calls = s.smt_calls.saturating_add(counters.calls);
+            s.smt_s += counters.secs;
+        }
     }
 
     /// Simulierte Phase (fuer `--dry-run`: Format bleibt testbar, ohne Arbeit).
@@ -164,5 +236,42 @@ mod tests {
     #[test]
     fn peak_rss_does_not_panic() {
         let _ = peak_rss_mb();
+    }
+
+    #[test]
+    fn phase_with_counters_records_prover_delta() {
+        let mut p = Profiler::new();
+        p.begin_total();
+        let before = ProverCounters::new(10, 1.5);
+        let after = ProverCounters::new(13, 1.75);
+        p.phase_with_counters("typecheck", ProverCounters::diff(before, after), || {});
+        let s = &p.samples()[0];
+        assert_eq!(s.smt_calls, 3);
+        assert!((s.smt_s - 0.25).abs() < 1e-9);
+        p.finish_total();
+        let total = p.samples().last().unwrap();
+        assert_eq!(total.smt_calls, 3);
+        assert!(total.phase == "total");
+    }
+
+    #[test]
+    fn add_smt_to_last_attaches_to_named_phase() {
+        let mut p = Profiler::new();
+        p.begin_total();
+        p.phase("frontend", || {});
+        p.phase("typecheck", || {});
+        p.add_smt_to_last("typecheck", ProverCounters::new(2, 0.5));
+        // `frontend` behält Nullen, `typecheck` trägt echte Zähler.
+        assert_eq!(p.samples()[0].smt_calls, 0);
+        assert_eq!(p.samples()[1].smt_calls, 2);
+        assert!((p.samples()[1].smt_s - 0.5).abs() < 1e-9);
+        p.finish_total();
+        assert_eq!(p.samples().last().unwrap().smt_calls, 2);
+    }
+
+    #[test]
+    fn prover_counters_diff_saturates() {
+        let d = ProverCounters::diff(ProverCounters::new(5, 2.0), ProverCounters::new(3, 1.0));
+        assert_eq!(d, ProverCounters::ZERO);
     }
 }

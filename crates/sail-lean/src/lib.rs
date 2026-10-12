@@ -38,11 +38,12 @@
 //! `(SailM, SailME, ExceptM, Id)` — see
 //! [`LeanPrinter::print_ascribed_monad`].
 //!
-//! Loop idioms (stub rule, body printing is out of scope for lane 10):
-//! - `while#` → Lean `while … do`, `until#` → `repeat … until`,
-//!   `foreach#` → `for x in [from:to:step]i do`.
-//! - Bitvector case-split on a scrutinee of type `BitVec n` uses
-//!   `match_bv …` (bit-indexed patterns), otherwise plain `match …`.
+//! Loop idioms: `E_for` prints directly as
+//! `for x in [from:to:step]i do` (pure bodies under `Id.run`); `while#`,
+//! `until#` and `foreach#` combinator applications stay hard errors until
+//! loop-variable desugaring lands. Bitvector case-split on a scrutinee of
+//! type `BitVec n` uses `match_bv …` (bit-indexed patterns), otherwise
+//! plain `match …`.
 //!
 //! Anything outside the supported subset is a hard [`Error::Unsupported`]
 //! carrying a [`Span`]. There is deliberately **no** silent `sorry` fallback.
@@ -52,6 +53,10 @@ use std::fmt;
 use std::sync::Arc;
 
 pub mod conv;
+pub mod effects_infer;
+pub mod emit;
+pub mod exps;
+pub mod funsig_ext;
 pub mod pats;
 
 /// Source position for hard errors: the canonical `sail-ast` span

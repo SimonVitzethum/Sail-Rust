@@ -33,7 +33,13 @@
 
 use std::fmt;
 
-use crate::{Error, LeanPrinter, Lit, Nexp, Typ, fixup_match_id};
+use sail_ast::{Interner, Pat as AstPat, PatKind, StructName};
+
+use crate::{
+    Error, LeanPrinter, Lit, Nexp, Typ,
+    conv::{lit_from_ast, typ_from_ast},
+    fixup_match_id,
+};
 
 /// Lean-druckbares Wert-Pattern (druckbare Teilmenge von
 /// `sail_ast::PatKind`; harte-Fehler-Formen als eigene Varianten, damit
@@ -360,6 +366,74 @@ pub fn is_bitvector_pattern(pat: &Pat) -> bool {
 #[must_use]
 pub fn is_match_bv(arms: &[Pat]) -> bool {
     arms.iter().any(is_bitvector_pattern)
+}
+
+/// Lower a canonical value pattern onto the printer subset
+/// ([`Pat`]). Returns `None` when the pattern needs type information or
+/// name resolution the caller cannot provide:
+/// - unresolvable identifiers / literals (see
+///   [`lit_from_ast`][crate::conv::lit_from_ast]; real literals have no
+///   printer counterpart),
+/// - `P_typ` whose type does not lower ([`typ_from_ast`][crate::conv::typ_from_ast]).
+///
+/// `P_not`/`P_or`/`P_vector_subrange`/`P_string_append` lower to their
+/// hard-error [`Pat`] variants on purpose, so printing still fails with
+/// [`Error::Unsupported`] at the exact OCaml `failwith` site instead of
+/// succeeding silently.
+#[must_use]
+pub fn pat_from_ast(p: &AstPat, it: &impl Interner) -> Option<Pat> {
+    fn lower_all<I: Interner>(ps: &[AstPat], it: &I) -> Option<Vec<Pat>> {
+        ps.iter().map(|q| pat_from_ast(q, it)).collect()
+    }
+    match &p.kind {
+        PatKind::Wild => Some(Pat::Wild),
+        PatKind::Lit(l) => lit_from_ast(l, it).map(Pat::Lit),
+        PatKind::Id(name) => it.resolve(name.symbol).map(|s| Pat::Id(s.to_owned())),
+        PatKind::Tuple(ps) => lower_all(ps, it).map(Pat::Tuple),
+        PatKind::List(ps) => lower_all(ps, it).map(Pat::List),
+        PatKind::Cons(hd, tl) => Some(Pat::Cons(
+            Box::new(pat_from_ast(hd, it)?),
+            Box::new(pat_from_ast(tl, it)?),
+        )),
+        PatKind::Vector(ps) => lower_all(ps, it).map(Pat::Vector),
+        PatKind::VectorConcat(ps) => lower_all(ps, it).map(Pat::VectorConcat),
+        PatKind::App { func, args } => Some(Pat::App {
+            func: it.resolve(func.symbol)?.to_owned(),
+            args: lower_all(args, it)?,
+        }),
+        PatKind::Struct { name, fields, .. } => {
+            let struct_name = match name {
+                StructName::Id(n) => it.resolve(n.symbol)?.to_owned(),
+                StructName::Anon => String::new(),
+            };
+            let mut out = Vec::with_capacity(fields.len());
+            for (id, fp) in fields {
+                out.push((it.resolve(id.symbol)?.to_owned(), pat_from_ast(fp, it)?));
+            }
+            Some(Pat::Struct { name: struct_name, fields: out })
+        }
+        PatKind::As { pat, id } => Some(Pat::As {
+            pat: Box::new(pat_from_ast(pat, it)?),
+            id: it.resolve(id.symbol)?.to_owned(),
+        }),
+        PatKind::Typ { typ, pat } => Some(Pat::Typ {
+            typ: typ_from_ast(typ, it)?,
+            pat: Box::new(pat_from_ast(pat, it)?),
+        }),
+        // `P_var` prints only the inner pattern (#556).
+        PatKind::Var { pat, .. } => Some(Pat::Var { pat: Box::new(pat_from_ast(pat, it)?) }),
+        PatKind::Not(inner) => Some(Pat::Not(Box::new(pat_from_ast(inner, it)?))),
+        PatKind::Or(a, b) => Some(Pat::Or(
+            Box::new(pat_from_ast(a, it)?),
+            Box::new(pat_from_ast(b, it)?),
+        )),
+        PatKind::VectorSubrange { id, lo, hi } => Some(Pat::VectorSubrange {
+            id: it.resolve(id.symbol)?.to_owned(),
+            lo: lo.clone(),
+            hi: hi.clone(),
+        }),
+        PatKind::StringAppend(ps) => lower_all(ps, it).map(Pat::StringAppend),
+    }
 }
 
 #[cfg(test)]

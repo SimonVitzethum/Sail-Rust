@@ -18,7 +18,6 @@ fn funsig(name: &str, ret: Typ, is_monadic: bool, early_return: bool, has_loop: 
         span: Span::new(FileId(0), 1, 1),
     }
 }
-
 #[test]
 fn prints_core_types() {
     let p = printer();
@@ -256,16 +255,16 @@ fn prelude_uses_presail_monads() {
 fn untranslatable_is_hard_error_with_span() {
     let p = printer();
     let mut bad = funsig("bad", Typ::Nat, false, false, false);
-    bad.span = Span::new(FileId(0), 7, 3);
+    bad.span = Span::new(FileId(0), 7, 13);
     let err = p.render_fun_stub(&bad, None).unwrap_err();
     assert_eq!(
         err,
         Error::Unsupported {
             msg: "function `bad` body is not translatable (no silent sorry)".into(),
-            span: Span::new(FileId(0), 7, 3),
+            span: Span::new(FileId(0), 7, 13),
         }
     );
-    assert!(err.to_string().contains("file0:7-3"));
+    assert!(err.to_string().contains("file0:7-13"));
     assert!(!err.to_string().contains("sorry") || err.to_string().contains("no silent sorry"));
 
     // Anonymous named type is also a hard error.

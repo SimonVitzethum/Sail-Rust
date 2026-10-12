@@ -238,6 +238,24 @@ mod tests {
     }
 
     #[test]
+    fn profiler_felder_tragen_ooc_fenster() {
+        let summary = FrontendSummary {
+            files: 1,
+            definitions: 4096,
+            ast_bytes: 200 << 20,
+            workers: 16,
+            window_peak_defs: 1,
+            window_peak_bytes: 1 << 20,
+            warm_live_peak: 0,
+        };
+        let fields = summary.profile_fields();
+        assert!(fields.contains("defs=4096"), "{fields}");
+        assert!(fields.contains("window_peak_defs=1"), "{fields}");
+        assert!(fields.contains("warm_live_peak=0"), "{fields}");
+        assert!(fields.contains("workers=16"), "{fields}");
+    }
+
+    #[test]
     fn library_extern_options_extend_the_effective_compiler_configuration() {
         let mut opts = Options::default();
         opts.lean_extern_types.push("Existing".into());
@@ -258,6 +276,31 @@ pub struct FrontendSummary {
     pub definitions: usize,
     pub ast_bytes: u64,
     pub workers: usize,
+    /// Geordnete Consumer-Spitze: höchstens eine Definition gleichzeitig
+    /// materialisiert (1 sobald ≥ 1 Definition, sonst 0).
+    pub window_peak_defs: usize,
+    /// Größter einzelner AST-Blob im Fenster (muss samt
+    /// Zwischenrepräsentation in RAM passen).
+    pub window_peak_bytes: u64,
+    /// Peak live gehaltener Warm-Bytes (0 per Konstruktion: `store`/`reader`
+    /// halten nichts live; Bodies werden nach Verarbeitung verworfen).
+    pub warm_live_peak: u64,
+}
+
+impl FrontendSummary {
+    /// Stabile `key=value`-Felder für Profiler-/Verbose-Zeilen (Lane 12).
+    #[must_use]
+    pub fn profile_fields(&self) -> String {
+        format!(
+            "defs={} ast_bytes={} window_peak_defs={} window_peak_bytes={} warm_live_peak={} workers={}",
+            self.definitions,
+            self.ast_bytes,
+            self.window_peak_defs,
+            self.window_peak_bytes,
+            self.warm_live_peak,
+            self.workers,
+        )
+    }
 }
 
 pub struct FrontendProgram {
@@ -383,6 +426,9 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
     let mut resolver = Resolver::new();
     let mut definitions = 0;
     let mut ast_bytes = 0;
+    // OOC-Fenster (Lane 12): der geordnete Consumer materialisiert höchstens
+    // eine Definition gleichzeitig; nur die Blob-Spitze wird beobachtet.
+    let mut window_peak_bytes = 0;
     // Descriptors also stay on disk. Later compiler phases can stream the
     // (AST, local interner) blobs without loading previous bodies into RAM.
     let mut snapshots = BufWriter::new(
@@ -429,6 +475,7 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
             snapshots.write_all(b"\n").map_err(|e| CliError::fatal(e.to_string()))?;
             definitions += 1;
             ast_bytes += bytes;
+            window_peak_bytes = window_peak_bytes.max(bytes);
             Ok::<_, CliError>(())
         },
     )?;
@@ -458,6 +505,9 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
         definitions,
         ast_bytes,
         workers,
+        window_peak_defs: usize::from(definitions > 0),
+        window_peak_bytes,
+        warm_live_peak: warm.live_bytes(),
     };
     let mut source_paths = vec![String::new(); files.len()];
     for (path, id) in files { source_paths[id.0 as usize] = path; }

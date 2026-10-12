@@ -578,4 +578,55 @@ mod tests {
         pipe.fails.extend(static_fails());
         assert_eq!(exit_code_for(&pipe), 1);
     }
+
+    #[test]
+    fn jede_luecke_hat_genau_einen_owner() {
+        for fail in static_fails() {
+            assert!(!fail.stage.is_empty(), "{fail}");
+            assert!(!fail.owner.is_empty(), "{fail}");
+            assert!(
+                !fail.owner.contains([',', ' ', '/']),
+                "genau ein Owner-Lane erwartet: {fail}"
+            );
+            assert!(!fail.detail.is_empty(), "{fail}");
+        }
+    }
+
+    #[test]
+    fn fehlende_eingabe_ist_io_fehler_ohne_ooc_zaehler() {
+        let args = E2eArgs::with_input(
+            "lane-12-gibt-es-nicht.sail".to_string(),
+            None,
+            None,
+        );
+        let out = run(&args);
+        assert!(out.emitted.is_empty());
+        assert!(out.fails.iter().any(|f| f.stage == "read-input"));
+        assert_eq!(exit_code_for(&out), 2);
+        assert_eq!(out.ooc, crate::ooc::OocStats::default());
+    }
+
+    #[test]
+    fn gezaehlte_definitionen_gelten_nie_als_typisiertes_programm() {
+        // Lane-17-Grenze: die kanonische Prüfung emittiert TypedDefs, aber
+        // keine Downstream-Stufe konsumiert sie — der Fehlerpfad ist explizit
+        // Exit 1.
+        let checked = crate::typecheck::Checked {
+            definitions: 0,
+            expressions: 1_052_672,
+            ooc: crate::typecheck::TypecheckOoc::default(),
+            typed: crate::typecheck::TypedProgramStatus::Missing {
+                stage: "typed-program",
+                owner: "lane-17",
+            },
+            defs: Vec::new(),
+            smt_calls: 0,
+            smt_seconds: 0.0,
+        };
+        let err = checked
+            .require_typed_program()
+            .expect_err("Zähler sind kein erfolgreicher Build");
+        assert_eq!(err.exit_code, 1);
+        assert!(err.message.contains("typed-program"), "{err}");
+    }
 }

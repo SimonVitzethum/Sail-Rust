@@ -1,4 +1,4 @@
-//! Lane 62 — OoC-Hooks im Pipeline-Treiber (E4-bindend, E3-Moratorium).
+//! Lane 12 — OoC-Fenster und Profiler-Anschluss im Pipeline-Treiber.
 //!
 //! Verdrahtet Out-of-core in die Treiber-Skizze (`e2e.rs`): Barriere um die
 //! Rewrite-Pässe (höchstens ein heißer Shard), Warm-Layer für fertige Shards,
@@ -6,9 +6,10 @@
 //!
 //! # Herkunft — nichts gedoppelt
 //!
-//! Die kanonische OoC-Implementierung ist `sail-ooc` (Lane 60; gelesen im
-//! Haupt-Repo unter `crates/sail-ooc` — in diesem Branch-Stand NICHT
-//! vorhanden, deshalb hier nicht kopiert, nur referenziert):
+//! Die kanonische OoC-Implementierung ist `sail-ooc` (Lane 60). Dieser Treiber
+//! hält nur die Ein-Shard-Barriere und die Zähler; Storage, Content-Hashes
+//! und Schranken kommen aus `sail-ooc` und sind hier verankert (keine
+//! Zweit-Literale):
 //!
 //! | Hook hier | Kanonisch dort |
 //! |---|---|
@@ -20,10 +21,10 @@
 //!
 //! Dieses Modul hasht NICHT selbst (kein blake3-Dep, keine Zähler-IDs — E4
 //! verlangt stabile Content-Hashes, Zähler würden jeden Lauf den Cache
-//! invalidieren). Schlüssel berechnen die Aufrufer bzw. später `sail-ooc`;
-//! der Treiber trägt sie nur als opake Strings durch. Sobald `sail-ooc` in
-//! diesem Branch landet, bekommt es ein `impl OocHooks` — der Treiber
-//! (`e2e.rs`) ändert sich dadurch nicht.
+//! invalidieren). Schlüssel berechnen die Aufrufer über `sail-ooc`
+//! (`ContentId`); der Treiber trägt sie nur als opake Strings durch. Die
+//! file-backed Bindung an `sail-ooc` erfolgt über `run_with_ooc` in
+//! `e2e.rs` — der Treiber ändert sich dadurch nicht.
 //!
 //! # E4-Regeln im Treiber
 //!
@@ -42,17 +43,17 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-/// Spiegel von `sail_ooc::MAX_SUMMARY_BYTES` (Herkunft s. Modul-Doku):
+/// Anker an `sail_ooc::MAX_SUMMARY_BYTES` (Herkunft s. Modul-Doku):
 /// harte Obergrenze je Summary-Eintrag (RAM-Schutz). Bodies gehören auf Platte.
-pub const MAX_SUMMARY_BYTES: usize = 64 * 1024;
+pub const MAX_SUMMARY_BYTES: usize = sail_ooc::MAX_SUMMARY_BYTES;
 
 /// Pass-Version dieses Treiber-Standes. Geht kanonisch in jeden Content-Key
 /// ein (`sail_ooc::ContentId::shard_content`); hier nur dokumentiert, weil
 /// dieser Treiber noch Stub-Bytes spillt (s. `e2e.rs`).
 pub const OOC_PASS_VERSION: &str = "sail-cli-ooc-wire-v1";
 
-/// Domänen-Präfix für Solver-Memo-Keys, Spiegel von
-/// `sail_ooc::MEMO_DOMAIN_PREFIX` + Domäne (`"solver/z3-v1"`).
+/// Domänen-Präfix für Solver-Memo-Keys: kanonisch
+/// `sail_ooc::MEMO_DOMAIN_PREFIX` plus Domäne (`"solver/z3-v1"`).
 pub const MEMO_DOMAIN_SOLVER_Z3: &str = "ooc/memo-v1/solver/z3-v1";
 
 /// Fehler der OoC-Verdrahtung (Treiber-Seite; Storage-Fehler der kanonischen
@@ -565,6 +566,126 @@ impl<H: OocHooks> OocDriver<H> {
     }
 }
 
+/// Begrenztes Definitions-Fenster (Lane 12): höchstens `max_in_flight`
+/// materialisierte Definitionen und höchstens `max_live_bytes` live
+/// gehaltene Blob-Bytes. Wer das Budget sprengen würde, bekommt
+/// [`OocError::WarmBudget`] und muss erst einen expliziten Drop-Punkt
+/// (`release`/`release_all`) erreichen — kein implizites Räumen.
+#[derive(Debug)]
+pub struct OocWindow {
+    in_flight: usize,
+    max_in_flight: usize,
+    live_bytes: u64,
+    max_live_bytes: u64,
+    /// Explizite Drop-Punkte (verbrauchte Fenster-Slots).
+    pub evictions: u64,
+}
+
+impl OocWindow {
+    /// Neues Fenster. `max_in_flight == 0` oder ein Null-Budget lehnt jede
+    /// Aufnahme ab (Aufrufer müssen dann erst Kapazität schaffen).
+    #[must_use]
+    pub fn new(max_in_flight: usize, max_live_bytes: u64) -> Self {
+        Self {
+            in_flight: 0,
+            max_in_flight,
+            live_bytes: 0,
+            max_live_bytes,
+            evictions: 0,
+        }
+    }
+
+    /// Belegt einen Fenster-Slot für `bytes` Blob-Bytes.
+    pub fn acquire(&mut self, bytes: u64) -> Result<(), OocError> {
+        if self.in_flight >= self.max_in_flight {
+            return Err(OocError::WarmBudget {
+                live: self.in_flight as u64,
+                add: 1,
+                max: self.max_in_flight as u64,
+            });
+        }
+        if self.live_bytes.saturating_add(bytes) > self.max_live_bytes {
+            return Err(OocError::WarmBudget {
+                live: self.live_bytes,
+                add: bytes,
+                max: self.max_live_bytes,
+            });
+        }
+        self.in_flight += 1;
+        self.live_bytes = self.live_bytes.saturating_add(bytes);
+        Ok(())
+    }
+
+    /// Gibt einen Slot mit `bytes` Blob-Bytes frei (verarbeitete Definition
+    /// verwerfen — Bodies bleiben auf Platte, nur Summaries in RAM).
+    pub fn release(&mut self, bytes: u64) {
+        self.in_flight = self.in_flight.saturating_sub(1);
+        self.live_bytes = self.live_bytes.saturating_sub(bytes);
+        self.evictions += 1;
+    }
+
+    /// Drop-Punkt am Phasenende: alle Slots frei, Zähler bleiben (Dateien,
+    /// Memos und Summaries bestehen weiter).
+    pub fn release_all(&mut self) {
+        self.in_flight = 0;
+        self.live_bytes = 0;
+    }
+
+    /// Belegte Slots.
+    #[must_use]
+    pub fn in_flight(&self) -> usize {
+        self.in_flight
+    }
+
+    /// Live gehaltene Blob-Bytes.
+    #[must_use]
+    pub fn live_bytes(&self) -> u64 {
+        self.live_bytes
+    }
+}
+
+/// Profiler-Anschluss (Lane 12): flache Zähler für `-dprofile`-Zeilen und
+/// Verbose-Logs. Solver-Felder bleiben 0, solange `sail-ty` keine
+/// kanonischen Beweiszähler publiziert; OOC-Felder sind echte
+/// Durchlauf-Beobachtungen.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProfileCounters {
+    /// Z3-Beweisanfragen (heute 0 — kanonische Zähler noch nicht verdrahtet).
+    pub smt_calls: u64,
+    /// Z3-Wandzeit in Sekunden (heute 0.0 — s. `smt_calls`).
+    pub smt_seconds: f64,
+    /// Gestreamte Definitionen (OOC-Fenster).
+    pub ooc_streamed: u64,
+    /// Gestreamte Blob-Bytes (OOC-Fenster).
+    pub ooc_streamed_bytes: u64,
+    /// Explizite Fenster-Freigaben.
+    pub ooc_evicted: u64,
+}
+
+impl ProfileCounters {
+    /// Baut Zähler aus einem Treiber-Durchlauf (`smt_*` bleiben 0, s. oben).
+    #[must_use]
+    pub fn from_ooc(stats: &OocStats) -> Self {
+        Self {
+            smt_calls: 0,
+            smt_seconds: 0.0,
+            ooc_streamed: stats.sealed + stats.evicted,
+            ooc_streamed_bytes: 0,
+            ooc_evicted: stats.evicted,
+        }
+    }
+
+    /// Stabile `key=value`-Felder für Profiler-/Verbose-Zeilen.
+    #[must_use]
+    pub fn log_fields(&self) -> String {
+        format!(
+            "smt_calls={} smt_s={:.6} ooc_streamed={} ooc_streamed_bytes={} ooc_evicted={}",
+            self.smt_calls, self.smt_seconds, self.ooc_streamed, self.ooc_streamed_bytes,
+            self.ooc_evicted,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,5 +820,43 @@ mod tests {
         d.run_shard("b", "key-b", || b"bb".to_vec(), b"s".to_vec())
             .expect("nach finish weiter");
         assert_eq!(d.stats().sealed, 1);
+    }
+
+    #[test]
+    fn schranken_sind_an_sail_ooc_verankert() {
+        assert_eq!(MAX_SUMMARY_BYTES, sail_ooc::MAX_SUMMARY_BYTES);
+        assert!(
+            MEMO_DOMAIN_SOLVER_Z3.starts_with(sail_ooc::MEMO_DOMAIN_PREFIX),
+            "Memo-Domäne muss unter dem kanonischen Präfix liegen"
+        );
+    }
+
+    #[test]
+    fn fenster_verweigert_ueber_budget_und_zaehlt_drop_punkte() {
+        let mut w = OocWindow::new(1, 4);
+        w.acquire(4).expect("passt genau");
+        assert_eq!((w.in_flight(), w.live_bytes()), (1, 4));
+        assert!(matches!(w.acquire(1), Err(OocError::WarmBudget { .. })));
+        w.release(4);
+        assert_eq!((w.in_flight(), w.live_bytes()), (0, 0));
+        assert_eq!(w.evictions, 1);
+        w.acquire(2).expect("nach release");
+        w.release_all();
+        assert_eq!((w.in_flight(), w.live_bytes()), (0, 0));
+    }
+
+    #[test]
+    fn profiler_zaehler_sind_stabil_parsbar() {
+        let c = ProfileCounters::from_ooc(&OocStats {
+            sealed: 3,
+            evicted: 1,
+            ..OocStats::default()
+        });
+        assert_eq!(c.smt_calls, 0);
+        assert_eq!((c.ooc_streamed, c.ooc_evicted), (4, 1));
+        let fields = c.log_fields();
+        assert!(fields.contains("smt_calls=0"), "{fields}");
+        assert!(fields.contains("ooc_streamed=4"), "{fields}");
+        assert!(fields.contains("ooc_evicted=1"), "{fields}");
     }
 }
