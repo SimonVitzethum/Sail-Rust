@@ -13,9 +13,11 @@ use sail_ty::{
 };
 use sail_ty::kind::{KindEnv, check_constraint_kind, check_nexp_kind, check_typ_kind};
 use sail_ty::subsume::{
-    Coercion, Subsumption, check_subtype, freshen_scheme, instantiate_scheme,
-    subtype_obligation,
+    Coercion, Subsumption, apply_simple_equations, check_subtype, expand_synonyms_typ,
+    freshen_scheme, instantiate_scheme, instantiate_with_equations, subtype_obligation,
 };
+use sail_ty::nexp::{normalize_constraint, normalize_nexp, solve_for_var};
+use sail_ty::quant::simple_equations;
 
 fn dummy() -> Span {
     Span::DUMMY
@@ -703,8 +705,9 @@ fn check_literal_range() {
     let r = range(const_(0), const_(10));
     c.check(&MiniExp::IntLit(5), &r, &env, dummy()).unwrap();
     assert!(c.check(&MiniExp::IntLit(99), &r, &env, dummy()).is_err());
-    // C-LitRangeSolver: symbolic bounds go to the solver. The stub cannot
-    // decide them (sound error) …
+    // C-LitRangeSolver: symbolic bounds go to the solver. Lane 10: the
+    // stub normalizes pure identities (`n-n` → `0`), so this obligation
+    // (`0 <= 5 <= 5`) now folds to ground and proves on the stub path …
     let sym = range(
         Nexp::Sub(Box::new(var("n")), Box::new(var("n"))),
         Nexp::Add(
@@ -712,7 +715,10 @@ fn check_literal_range() {
             Box::new(Nexp::Sub(Box::new(var("m")), Box::new(var("m")))),
         ),
     );
-    assert!(c.check(&MiniExp::IntLit(5), &sym, &env, dummy()).is_err());
+    c.check(&MiniExp::IntLit(5), &sym, &env, dummy()).unwrap();
+    // … while genuinely open bounds stay a sound error on the stub …
+    let open = range(var("n"), const_(10));
+    assert!(c.check(&MiniExp::IntLit(5), &open, &env, dummy()).is_err());
     // … while a normalising backend (Z3-class, trait-only) proves the
     // obligation `n-n <= 5 <= 5+(m-m)`.
     let p = ProvingSolver;
@@ -737,20 +743,31 @@ fn check_bits_and_fallback() {
         dummy(),
     )
     .unwrap();
-    // … provably-equal lengths need the solver: stub says Unknown (error) …
+    // … provably-equal lengths need the solver. Lane 10: the stub
+    // normalizes pure identities, so `n+0 == n` now proves on the stub
+    // path (canonical `nexp_simp` parity) …
     with_bits.add_local("w", MiniTyp::Bits(Box::new(Nexp::Add(
         Box::new(var("n")),
         Box::new(const_(0)),
     ))));
+    c.check(
+        &MiniExp::Var("w".into()),
+        &MiniTyp::Bits(Box::new(var("n"))),
+        &with_bits,
+        dummy(),
+    )
+    .unwrap();
+    // … while genuinely open lengths stay a sound error on the stub …
+    with_bits.add_local("u", MiniTyp::Bits(Box::new(var("m"))));
     assert!(c
         .check(
-            &MiniExp::Var("w".into()),
+            &MiniExp::Var("u".into()),
             &MiniTyp::Bits(Box::new(var("n"))),
             &with_bits,
             dummy()
         )
         .is_err());
-    // … a stronger backend proves `n+0 == n`.
+    // … a stronger backend proves `n+0 == n` (trait-only).
     let p = ProvingSolver;
     let cp = checker(&p);
     cp.check(
@@ -826,10 +843,14 @@ fn subsumption_range_bits() {
         .unwrap(),
         Coercion::Identity // Reflexivity precedes structural coercions.
     );
-    // … `n+0 == n` needs a normalising backend.
+    // … `n+0 == n` now also proves on the stub (Lane-10 canonical
+    // `nexp_simp` parity: identities normalize before proving).
     let plus0 = MiniTyp::Bits(Box::new(Nexp::Add(Box::new(var("n")), Box::new(const_(0)))));
     let plain = MiniTyp::Bits(Box::new(var("n")));
-    assert!(check_subtype(&s, &plus0, &plain, dummy()).is_err());
+    assert_eq!(
+        check_subtype(&s, &plus0, &plain, dummy()).unwrap(),
+        Coercion::BitsCongruence
+    );
     let p = ProvingSolver;
     assert_eq!(
         check_subtype(&p, &plus0, &plain, dummy()).unwrap(),
@@ -945,16 +966,25 @@ fn patterns() {
 #[test]
 fn solver_trait_only_backend() {
     // Z-TraitOnly: both backends reach the checker through `Solver::prove`
-    // alone — this file imports no `z3` crate, yet the stronger backend
-    // decides strictly more (normalisation beyond constant folding).
-    let open = NConstraint::Eq(
+    // alone — this file imports no `z3` crate. Lane 10: the stub normalizes
+    // pure identities (canonical `nexp_simp` parity), so `n+0 == n` now
+    // proves on both paths; genuinely open goals stay `Unknown` on both.
+    let ident = NConstraint::Eq(
         Box::new(Nexp::Add(Box::new(var("n")), Box::new(const_(0)))),
         Box::new(var("n")),
     );
     let stub = StubSolver::new();
-    assert_eq!(stub.prove(&open), ProveResult::Unknown);
+    assert_eq!(stub.prove(&ident), ProveResult::Proved);
     let prover = ProvingSolver;
-    assert_eq!(prover.prove(&open), ProveResult::Proved);
+    assert_eq!(prover.prove(&ident), ProveResult::Proved);
+    // Non-linear goals (`2*n == n+n`) need a real SMT backend: sound
+    // `Unknown` here, never a fabricated proof.
+    let open = NConstraint::Eq(
+        Box::new(Nexp::Mul(Box::new(const_(2)), Box::new(var("n")))),
+        Box::new(Nexp::Add(Box::new(var("n")), Box::new(var("n")))),
+    );
+    assert_eq!(stub.prove(&open), ProveResult::Unknown);
+    assert_eq!(prover.prove(&open), ProveResult::Unknown);
     // Z-StubTotal: the stub decides the obvious and always terminates …
     assert_eq!(stub.prove(&NConstraint::True), ProveResult::Proved);
     assert_eq!(stub.prove(&NConstraint::False), ProveResult::Refuted);
@@ -1038,6 +1068,214 @@ fn env_scoping() {
 }
 
 // ---------------------------------------------------------------------------
+// Lane 10: implicit args / backward inference / synonyms / SMT powers +
+// general constraint/numeric apps on the canonical path.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lane10_implicit_atom_synonyms() {
+    let s = StubSolver::new();
+    let atom = |n: Nexp| MiniTyp::Named { name: "atom".to_string(), args: vec![n] };
+    let implicit = |n: Nexp| MiniTyp::Named { name: "implicit".to_string(), args: vec![n] };
+    // `implicit('n)` ≡ `atom('n)`: expansion is head-canonical …
+    assert_eq!(
+        expand_synonyms_typ(&implicit(var("n"))),
+        atom(var("n"))
+    );
+    // … `bitvector('n)` ≡ `bits('n)`, `atom_bool` ≡ `bool` …
+    assert_eq!(
+        expand_synonyms_typ(&MiniTyp::Named {
+            name: "bitvector".to_string(),
+            args: vec![var("n")]
+        }),
+        MiniTyp::Bits(Box::new(var("n")))
+    );
+    assert_eq!(
+        expand_synonyms_typ(&MiniTyp::Named {
+            name: "atom_bool".to_string(),
+            args: vec![]
+        }),
+        MiniTyp::Bool
+    );
+    // … and unknown heads pass through.
+    let other = MiniTyp::Named { name: "fancy".to_string(), args: vec![var("n")] };
+    assert_eq!(expand_synonyms_typ(&other), other);
+    // `atom('n)` / `implicit('n)` <: `int`: value forgotten (new coercion).
+    assert_eq!(
+        check_subtype(&s, &atom(var("n")), &MiniTyp::Int, dummy()).unwrap(),
+        Coercion::AtomToInt
+    );
+    assert_eq!(
+        check_subtype(&s, &implicit(var("n")), &MiniTyp::Int, dummy()).unwrap(),
+        Coercion::AtomToInt
+    );
+    assert_eq!(Coercion::AtomToInt.to_string(), "atom-to-int");
+    // `int` <: `atom(..)` needs a value site (mirrors S-IntRangeFail).
+    assert!(check_subtype(&s, &MiniTyp::Int, &atom(const_(3)), dummy()).is_err());
+    // Ground singleton bounds prove through the stub …
+    assert_eq!(
+        check_subtype(&s, &range(const_(3), const_(3)), &atom(const_(3)), dummy())
+            .unwrap(),
+        Coercion::NamedUnfold("atom".to_string())
+    );
+    assert_eq!(
+        check_subtype(&s, &atom(const_(3)), &range(const_(0), const_(10)), dummy())
+            .unwrap(),
+        Coercion::RangeNarrow
+    );
+    // … mismatched singletons are refuted, open ones stay sound errors.
+    assert!(check_subtype(&s, &range(const_(0), const_(10)), &atom(const_(3)), dummy()).is_err());
+    assert!(check_subtype(&s, &atom(var("n")), &range(const_(0), const_(10)), dummy()).is_err());
+    // `atom_bool` checks as `bool` after expansion.
+    let c = checker(&s);
+    let env = TypeEnv::new();
+    let ab = MiniTyp::Named { name: "atom_bool".to_string(), args: vec![] };
+    assert!(matches!(subtype_obligation(&ab, &MiniTyp::Bool), Subsumption::Holds(_)));
+    c.check(&MiniExp::BoolLit(true), &ab, &env, dummy()).unwrap();
+}
+
+#[test]
+fn lane10_simple_equations() {
+    // Omitted implicits solved by `Var == nexp` conjuncts (OCaml
+    // `instantiate_simple_equations`): `'n` determined by `'n == 8`.
+    let scheme = TypQuant {
+        quants: vec![("n".to_string(), Kind::KInt)],
+        constraint: NConstraint::Eq(Box::new(var("n")), Box::new(const_(8))),
+        typ: MiniTyp::Bits(Box::new(var("n"))),
+    };
+    // Equation extraction finds the conjunct in either orientation, with
+    // occurs check …
+    assert_eq!(simple_equations(&scheme.constraint), vec![("n".to_string(), const_(8))]);
+    let flipped = NConstraint::Eq(Box::new(const_(8)), Box::new(var("n")));
+    assert_eq!(simple_equations(&flipped), vec![("n".to_string(), const_(8))]);
+    let cyclic = NConstraint::Eq(
+        Box::new(var("n")),
+        Box::new(Nexp::Add(Box::new(var("n")), Box::new(const_(1)))),
+    );
+    assert!(simple_equations(&cyclic).is_empty());
+    // … unbound names are never solved …
+    let foreign = NConstraint::Eq(Box::new(var("m")), Box::new(const_(8)));
+    assert_eq!(
+        apply_simple_equations(&TypQuant {
+            quants: vec![("n".to_string(), Kind::KInt)],
+            constraint: foreign.clone(),
+            typ: MiniTyp::Bits(Box::new(var("n"))),
+        })
+        .constraint,
+        foreign
+    );
+    // … and solved telescopes drop the quantifier with the substitution
+    // applied to body and residual obligation.
+    let solved = apply_simple_equations(&scheme);
+    assert!(solved.quants.is_empty());
+    assert_eq!(solved.typ, MiniTyp::Bits(Box::new(const_(8))));
+    // Freshened instantiation solves freshened implicits the same way
+    // (gensym names, never the bound `n`).
+    let (obl, typ) = instantiate_with_equations(&scheme);
+    assert_eq!(typ, MiniTyp::Bits(Box::new(const_(8))));
+    assert!(matches!(obl, NConstraint::Eq(_, _)));
+    // Chained equations solve in telescope order (`'a` then `'b`).
+    let chained = TypQuant {
+        quants: vec![("a".to_string(), Kind::KInt), ("b".to_string(), Kind::KInt)],
+        constraint: NConstraint::And(
+            Box::new(NConstraint::Eq(Box::new(var("a")), Box::new(const_(4)))),
+            Box::new(NConstraint::Eq(
+                Box::new(var("b")),
+                Box::new(Nexp::Add(Box::new(var("a")), Box::new(const_(1)))),
+            )),
+        ),
+        typ: MiniTyp::Bits(Box::new(var("b"))),
+    };
+    let solved = apply_simple_equations(&chained);
+    assert!(solved.quants.is_empty());
+    assert_eq!(solved.typ, MiniTyp::Bits(Box::new(const_(5))));
+}
+
+#[test]
+fn lane10_backward_inference() {
+    // Arithmetic backward inference (OCaml `unify_nexp`, linear skeleton):
+    // `?x + 1 == 5` solves `?x = 4`, mirrored orientations included.
+    let add = Nexp::Add(Box::new(var("x")), Box::new(const_(1)));
+    assert_eq!(solve_for_var("x", &add, &const_(5)), Some(const_(4)));
+    assert_eq!(solve_for_var("x", &const_(5), &add), Some(const_(4)));
+    // Subtraction inverts on either side: `?x - 2 == 3` and `10 - ?x == 3`.
+    let sub = Nexp::Sub(Box::new(var("x")), Box::new(const_(2)));
+    assert_eq!(solve_for_var("x", &sub, &const_(3)), Some(const_(5)));
+    let rsub = Nexp::Sub(Box::new(const_(10)), Box::new(var("x")));
+    assert_eq!(solve_for_var("x", &rsub, &const_(3)), Some(const_(7)));
+    // Constant multiplication/division with exact division …
+    let mul = Nexp::Mul(Box::new(const_(3)), Box::new(var("x")));
+    assert_eq!(solve_for_var("x", &mul, &const_(12)), Some(const_(4)));
+    let div = Nexp::Div(Box::new(var("x")), Box::new(const_(2)));
+    assert_eq!(solve_for_var("x", &div, &const_(6)), Some(const_(12)));
+    // … non-linear / under-constrained / cyclic shapes stay `None`.
+    assert_eq!(solve_for_var("x", &mul, &const_(10)), None);
+    let nonlinear = Nexp::Mul(Box::new(var("x")), Box::new(var("y")));
+    assert_eq!(solve_for_var("x", &nonlinear, &const_(6)), None);
+    assert_eq!(solve_for_var("z", &add, &const_(5)), None);
+    // Normalization feeds the solver: `n-n` folds before proving.
+    assert_eq!(normalize_nexp(&Nexp::Sub(Box::new(var("n")), Box::new(var("n")))), const_(0));
+    assert_eq!(
+        normalize_nexp(&Nexp::Add(Box::new(var("n")), Box::new(const_(0)))),
+        var("n")
+    );
+    assert_eq!(
+        normalize_constraint(&NConstraint::And(
+            Box::new(NConstraint::True),
+            Box::new(NConstraint::Eq(Box::new(var("n")), Box::new(var("n")))),
+        )),
+        NConstraint::True
+    );
+}
+
+#[test]
+fn lane10_power_apps_canonical() {
+    let s = StubSolver::new();
+    // Ground SMT powers fold and prove (`2^3 == 8`).
+    let pow3 = Nexp::Exp(Box::new(const_(3)));
+    assert_eq!(pow3.as_const(), Some(8));
+    assert!(!pow3.has_power());
+    assert_eq!(
+        s.prove(&NConstraint::Eq(Box::new(pow3.clone()), Box::new(const_(8)))),
+        ProveResult::Proved
+    );
+    // Symbolic powers are detected and stay soundly `Unknown` on the
+    // stub (the canonical SMT emitter needs elaboration for them —
+    // `sail-solver/src/canonical.rs`, read-only reference).
+    assert!(!var("n").has_power());
+    assert!(Nexp::Exp(Box::new(var("n"))).has_power());
+    assert_eq!(
+        s.prove(&NConstraint::Eq(
+            Box::new(Nexp::Exp(Box::new(var("n")))),
+            Box::new(const_(8)),
+        )),
+        ProveResult::Unknown
+    );
+    // Reflexive symbolic powers still hold syntactically …
+    assert_eq!(
+        s.prove(&NConstraint::Eq(
+            Box::new(Nexp::Exp(Box::new(var("n")))),
+            Box::new(Nexp::Exp(Box::new(var("n")))),
+        )),
+        ProveResult::Proved
+    );
+    // … while general constraint/numeric apps stay opaque (`Unknown`,
+    // never fabricated): uninterpreted predicates, bool vars, opaque ids.
+    assert_eq!(
+        s.prove(&NConstraint::App("sorted".to_string(), vec![var("n")])),
+        ProveResult::Unknown
+    );
+    assert_eq!(s.prove(&NConstraint::Var("b".to_string())), ProveResult::Unknown);
+    assert_eq!(s.prove(&NConstraint::Id("REP".to_string())), ProveResult::Unknown);
+    // `Set` sort/dedup is canonical: membership order never matters.
+    let set = NConstraint::Set(Box::new(var("n")), vec![3, 1, 3, 2]);
+    assert_eq!(
+        normalize_constraint(&set),
+        NConstraint::Set(Box::new(var("n")), vec![1, 2, 3])
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Catalogue integrity
 // ---------------------------------------------------------------------------
 
@@ -1086,6 +1324,14 @@ fn rule_table_complete() {
         ("solver_trait_only_backend", solver_trait_only_backend),
         ("caching_and_fuel", caching_and_fuel),
         ("env_scoping", env_scoping),
+        // Lane-10 canonical-path coverage (implicit/atom synonyms,
+        // simple-equation instantiation, backward inference, SMT
+        // powers + general apps): same subsumption/solver rules as
+        // above, pinned by dedicated tests.
+        ("subsumption_base", lane10_implicit_atom_synonyms),
+        ("quant_freshen_instantiate", lane10_simple_equations),
+        ("quant_freshen_instantiate", lane10_backward_inference),
+        ("solver_trait_only_backend", lane10_power_apps_canonical),
         ("deferred_documented", deferred_documented),
         // Lane-107 prove paths live in `tests/prove_ctx.rs` (separate test
         // target, so no `fn()` pin here — the names below must match the

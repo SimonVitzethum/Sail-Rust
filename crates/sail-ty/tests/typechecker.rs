@@ -348,3 +348,390 @@ fn types_are_send_sync_for_workers() {
     assert_send_sync::<StubSolver>();
     assert_send_sync::<CachingSolver<StubSolver>>();
 }
+
+#[test]
+fn inline_signature_supplements_return_with_arg_patterns() {
+    // Signatur-Ergänzungsregel (OCaml `infer_funtyp::typ_from_pat`):
+    // literals classify, `(p : t)` yields `t`, tuples map pointwise.
+    use sail_ty::MiniPat;
+    use sail_ty::check::synthesize_inline_scheme;
+    use sail_ty::conv::typ_from_mini_pat;
+
+    assert_eq!(
+        typ_from_mini_pat(&MiniPat::IntLit(7), dummy()).unwrap(),
+        MiniTyp::Int
+    );
+    assert_eq!(
+        typ_from_mini_pat(&MiniPat::BoolLit(true), dummy()).unwrap(),
+        MiniTyp::Bool
+    );
+    let ann = MiniPat::Annot(Box::new(MiniPat::Var("x".into())), MiniTyp::Int);
+    assert_eq!(typ_from_mini_pat(&ann, dummy()).unwrap(), MiniTyp::Int);
+    let tup = MiniPat::Tuple(vec![
+        MiniPat::Annot(Box::new(MiniPat::Var("x".into())), MiniTyp::Int),
+        MiniPat::IntLit(7),
+        MiniPat::Tuple(vec![MiniPat::BoolLit(false)]),
+    ]);
+    assert_eq!(
+        typ_from_mini_pat(&tup, dummy()).unwrap(),
+        MiniTyp::Tuple(vec![
+            MiniTyp::Int,
+            MiniTyp::Int,
+            MiniTyp::Tuple(vec![MiniTyp::Bool])
+        ])
+    );
+    // Bare binders carry no type information (OCaml + canonical
+    // "cannot infer an argument type from an unannotated pattern").
+    let err = typ_from_mini_pat(&MiniPat::Var("x".into()), dummy()).unwrap_err();
+    assert!(
+        err.to_string().contains("cannot infer an argument type"),
+        "{err}"
+    );
+    assert!(typ_from_mini_pat(&MiniPat::Wild, dummy()).is_err());
+
+    // Completed scheme: telescope + return from the header, domain from
+    // the patterns.
+    let scheme = synthesize_inline_scheme(
+        vec![("n".to_string(), Kind::KInt)],
+        NConstraint::True,
+        &tup,
+        &MiniTyp::Bits(Box::new(Nexp::Var("n".into()))),
+        dummy(),
+    )
+    .unwrap();
+    assert_eq!(scheme.quants, vec![("n".to_string(), Kind::KInt)]);
+    assert_eq!(
+        scheme.typ,
+        MiniTyp::Fun(
+            Box::new(MiniTyp::Tuple(vec![
+                MiniTyp::Int,
+                MiniTyp::Int,
+                MiniTyp::Tuple(vec![MiniTyp::Bool])
+            ])),
+            Box::new(MiniTyp::Bits(Box::new(Nexp::Var("n".into())))),
+        )
+    );
+}
+
+#[test]
+fn inline_header_alias_expansion_matches_val_signature() {
+    // Alias-Fälle (OCaml `expanded_typ_identical`): direct, single,
+    // chained, nested, unknown, arity mismatch, cycles, budget.
+    use sail_ty::check::check_inline_header;
+    use sail_ty::conv::AliasEnv;
+
+    fn val_of(ret: MiniTyp) -> TypQuant {
+        TypQuant {
+            quants: vec![],
+            constraint: NConstraint::True,
+            typ: MiniTyp::Fun(Box::new(MiniTyp::Int), Box::new(ret)),
+        }
+    }
+    fn named(name: &str, args: Vec<Nexp>) -> MiniTyp {
+        MiniTyp::Named { name: name.to_string(), args }
+    }
+    let val_span = dummy();
+    let inline_span = dummy();
+
+    // No aliases: direct match passes, mismatch fails loudly.
+    let aliases = AliasEnv::new();
+    assert!(aliases.is_empty());
+    check_inline_header(
+        &val_of(MiniTyp::Int),
+        &[],
+        &MiniTyp::Int,
+        val_span,
+        inline_span,
+        &aliases,
+    )
+    .unwrap();
+    assert!(
+        check_inline_header(
+            &val_of(MiniTyp::Bool),
+            &[],
+            &MiniTyp::Int,
+            val_span,
+            inline_span,
+            &aliases,
+        )
+        .is_err()
+    );
+
+    // Single expansion: `type Integer = int` matches `int` from either side.
+    let mut aliases = AliasEnv::new();
+    aliases.insert("Integer".to_string(), vec![], MiniTyp::Int);
+    assert_eq!(aliases.len(), 1);
+    assert!(aliases.lookup("Integer").is_some());
+    assert!(aliases.lookup("Missing").is_none());
+    check_inline_header(
+        &val_of(MiniTyp::Int),
+        &[],
+        &named("Integer", vec![]),
+        val_span,
+        inline_span,
+        &aliases,
+    )
+    .unwrap();
+    check_inline_header(
+        &val_of(named("Integer", vec![])),
+        &[],
+        &MiniTyp::Int,
+        val_span,
+        inline_span,
+        &aliases,
+    )
+    .unwrap();
+
+    // Chained expansion: `A -> B -> int`, compared nested in a tuple.
+    let mut aliases = AliasEnv::new();
+    aliases.insert("B".to_string(), vec![], MiniTyp::Int);
+    aliases.insert("A".to_string(), vec![], named("B", vec![]));
+    let nested_val = MiniTyp::Tuple(vec![MiniTyp::Int, named("A", vec![])]);
+    let nested_inline = MiniTyp::Tuple(vec![MiniTyp::Int, MiniTyp::Int]);
+    check_inline_header(
+        &val_of(nested_val),
+        &[],
+        &nested_inline,
+        val_span,
+        inline_span,
+        &aliases,
+    )
+    .unwrap();
+
+    // Parametrized: `type Wrap('n) = bits('n)`; substitution on expansion.
+    let mut aliases = AliasEnv::new();
+    aliases.insert(
+        "Wrap".to_string(),
+        vec!["n".to_string()],
+        MiniTyp::Bits(Box::new(Nexp::Var("n".into()))),
+    );
+    let bits8 = MiniTyp::Bits(Box::new(Nexp::Const(8)));
+    check_inline_header(
+        &val_of(bits8.clone()),
+        &[],
+        &named("Wrap", vec![Nexp::Const(8)]),
+        val_span,
+        inline_span,
+        &aliases,
+    )
+    .unwrap();
+    // Wrong argument still mismatches after substitution.
+    assert!(
+        check_inline_header(
+            &val_of(bits8),
+            &[],
+            &named("Wrap", vec![Nexp::Const(7)]),
+            val_span,
+            inline_span,
+            &aliases,
+        )
+        .is_err()
+    );
+
+    // Unknown aliases stay unexpanded: same unknown head matches, distinct
+    // heads mismatch (never silent success).
+    let plain = AliasEnv::new();
+    check_inline_header(
+        &val_of(named("Missing", vec![])),
+        &[],
+        &named("Missing", vec![]),
+        val_span,
+        inline_span,
+        &plain,
+    )
+    .unwrap();
+    assert!(
+        check_inline_header(
+            &val_of(named("Missing", vec![])),
+            &[],
+            &MiniTyp::Int,
+            val_span,
+            inline_span,
+            &plain,
+        )
+        .is_err()
+    );
+
+    // Arity mismatch stays unexpanded: `Wrap` (1 param) vs `Wrap(8, 9)`.
+    assert!(
+        check_inline_header(
+            &val_of(named("Wrap", vec![Nexp::Const(8)])),
+            &[],
+            &named("Wrap", vec![Nexp::Const(8), Nexp::Const(9)]),
+            val_span,
+            inline_span,
+            &aliases,
+        )
+        .is_err()
+    );
+
+    // Cycles terminate: `A <-> B`; equal heads still match, distinct heads
+    // mismatch without hanging.
+    let mut cyclic = AliasEnv::new();
+    cyclic.insert("A".to_string(), vec![], named("B", vec![]));
+    cyclic.insert("B".to_string(), vec![], named("A", vec![]));
+    check_inline_header(
+        &val_of(named("A", vec![])),
+        &[],
+        &named("A", vec![]),
+        val_span,
+        inline_span,
+        &cyclic,
+    )
+    .unwrap();
+    assert!(
+        check_inline_header(
+            &val_of(named("A", vec![])),
+            &[],
+            &named("B", vec![]),
+            val_span,
+            inline_span,
+            &cyclic,
+        )
+        .is_err()
+    );
+
+    // Exhausted budget leaves types unexpanded (still terminates).
+    let t = named("Integer", vec![]);
+    let mut aliases = AliasEnv::new();
+    aliases.insert("Integer".to_string(), vec![], MiniTyp::Int);
+    assert_eq!(aliases.expand_typ_limited(&t, 0), t);
+    assert_eq!(aliases.expand_typ(&t), MiniTyp::Int);
+
+    // Non-arrow `val` body and duplicate quantifiers are hard errors.
+    let non_arrow = TypQuant::monomorphic(MiniTyp::Int);
+    assert!(
+        check_inline_header(
+            &non_arrow,
+            &[],
+            &MiniTyp::Int,
+            val_span,
+            inline_span,
+            &aliases,
+        )
+        .is_err()
+    );
+    assert!(
+        check_inline_header(
+            &val_of(MiniTyp::Int),
+            &[("a".to_string(), Kind::KType)],
+            &MiniTyp::Int,
+            val_span,
+            inline_span,
+            &aliases,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn inline_header_preserves_source_spans() {
+    // Quellpositions-Sichtbarkeit: every inline diagnostic carries the
+    // inline site; the `val` site is quoted `(declared here: ...)` in the
+    // message (OCaml `Hint ("declared here", vs_l, l)`); the lowered
+    // signature root carries the header span.
+    use sail_ty::MiniPat;
+    use sail_ty::check::{check_inline_header, synthesize_inline_scheme};
+    use sail_ty::conv::{AliasEnv, inline_signature_to_ast};
+
+    let val_span = Span::new(sail_ast::FileId(0), 10, 20);
+    let inline_span = Span::new(sail_ast::FileId(0), 100, 114);
+    assert!(!val_span.is_dummy() && !inline_span.is_dummy());
+    let val = TypQuant::monomorphic(MiniTyp::Fun(
+        Box::new(MiniTyp::Int),
+        Box::new(MiniTyp::Int),
+    ));
+
+    let err = check_inline_header(
+        &val,
+        &[("a".to_string(), Kind::KType)],
+        &MiniTyp::Int,
+        val_span,
+        inline_span,
+        &AliasEnv::new(),
+    )
+    .unwrap_err();
+    assert_eq!(err.span, inline_span);
+    let msg = err.to_string();
+    assert!(msg.contains("duplicate quantifier"), "{msg}");
+    assert!(msg.contains("declared here"), "{msg}");
+    assert!(msg.contains("file0:10-20"), "{msg}");
+
+    let err = check_inline_header(
+        &val,
+        &[],
+        &MiniTyp::Bool,
+        val_span,
+        inline_span,
+        &AliasEnv::new(),
+    )
+    .unwrap_err();
+    assert_eq!(err.span, inline_span);
+    assert!(!err.span.is_dummy());
+    let msg = err.to_string();
+    assert!(msg.contains("do not match"), "{msg}");
+    assert!(msg.contains("file0:10-20"), "{msg}");
+
+    let err = synthesize_inline_scheme(
+        vec![],
+        NConstraint::True,
+        &MiniPat::Var("x".into()),
+        &MiniTyp::Int,
+        inline_span,
+    )
+    .unwrap_err();
+    assert_eq!(err.span, inline_span);
+
+    let mut it = sail_ast::SimpleInterner::new();
+    let sig = inline_signature_to_ast(&MiniTyp::Int, &MiniTyp::Int, &mut it, inline_span);
+    assert_eq!(sig.span, inline_span);
+    assert!(matches!(sig.kind, sail_ast::TypKind::Fn { .. }));
+}
+
+
+#[test]
+fn lane10_stub_normalizes_identities_before_proving() {
+    // Lane-10 canonical path: the stub normalizes pure arithmetic
+    // identities before proving (OCaml `nexp_simp` parity), so
+    // `n+0 == n` and `2^3 == 8` prove without a backend …
+    use sail_ty::nexp::{normalize_constraint, normalize_nexp, solve_for_var};
+    let s = StubSolver::new();
+    let ident = NConstraint::Eq(
+        Box::new(Nexp::Add(
+            Box::new(Nexp::Var("n".into())),
+            Box::new(Nexp::Const(0)),
+        )),
+        Box::new(Nexp::Var("n".into())),
+    );
+    assert_eq!(s.prove(&ident), ProveResult::Proved);
+    assert_eq!(
+        normalize_nexp(&Nexp::Exp(Box::new(Nexp::Const(3)))),
+        Nexp::Const(8)
+    );
+    // … backward inference solves omitted implicits from equations …
+    assert_eq!(
+        solve_for_var(
+            "x",
+            &Nexp::Add(Box::new(Nexp::Var("x".into())), Box::new(Nexp::Const(1))),
+            &Nexp::Const(5),
+        ),
+        Some(Nexp::Const(4))
+    );
+    // … and normalizing `true /\ (n == n)` folds fully to `True`,
+    // keeping the goal provable …
+    let conj = NConstraint::And(
+        Box::new(NConstraint::True),
+        Box::new(NConstraint::Eq(
+            Box::new(Nexp::Var("n".into())),
+            Box::new(Nexp::Var("n".into())),
+        )),
+    );
+    assert_eq!(normalize_constraint(&conj), NConstraint::True);
+    assert_eq!(s.prove(&conj), ProveResult::Proved);
+    // … while open goals stay soundly `Unknown`.
+    let open = NConstraint::Eq(
+        Box::new(Nexp::Var("n".into())),
+        Box::new(Nexp::Var("m".into())),
+    );
+    assert_eq!(s.prove(&open), ProveResult::Unknown);
+}

@@ -179,18 +179,20 @@ fn lane70_tiny_parse_declare_check() {
     ));
     std::fs::write(out.join("stage-typecheck.log"), &log).expect("log schreiben");
 
-    // Erwartung am Base-Stand: alle 6 Gruen-Funktionen checken; Rot sind
-    // genau mk_point (E_struct), get_x (E_field), describe (E_match).
+    // Erwartung mit gemergten Armen: alle 6 Gruen-Funktionen checken;
+    // Rot sind noch get_x (E_field, Arm fehlt) und describe
+    // (Konstruktor-Pattern-Bindung bleibt ehrlich Unsupported).
     let mut names = green_names.clone();
     names.sort_unstable();
     names.dedup();
     let mut expected: Vec<&str> = GREEN_FUNS.to_vec();
     expected.sort_unstable();
     assert_eq!(names, expected, "Gruen-Teilmenge unvollstaendig:\n{log}");
-    assert_eq!(red.len(), 3, "Rot-Tabelle unerwartet:\n{log}");
+    assert_eq!(red.len(), 2, "Rot-Tabelle unerwartet:\n{log}");
     for (position, message) in &red {
         assert!(
-            message.contains("not yet implemented in the canonical checker"),
+            message.contains("not yet implemented in the canonical checker")
+                || message.contains("constructor, vector, list, disjunctive or dependent pattern"),
             "Rot-Def #{position} mit unerwarteter Meldung: {message}"
         );
     }

@@ -37,6 +37,155 @@ const FLOW_DECLARATIONS: &[&str] = &[
     "val zero : int(0) -> int",
 ];
 
+const MUTABLE_DECLARATIONS: &[&str] = &[
+    "register R : int",
+    "val opaque_int : unit -> int",
+    "val opaque_bool : unit -> bool",
+    "val bounded_index : forall 'n, 0 <= 'n <= 2. int('n) -> unit",
+    "val at_least_zero : forall 'n, 'n >= 0. int('n) -> unit",
+    "val ge_zero : forall 'n. int('n) -> bool('n >= 0)",
+    "val only_true : forall ('p : Bool), 'p. bool('p) -> unit",
+];
+const MUTABLE_POSITIVE: &[&str] = &[
+    "function mutate() -> int = { var x : int = 0; x = 1; x }",
+    "function inferred_mutate() -> int = { var x = opaque_int(); x = 7; x }",
+    "function inferred_boolean() -> bool = { var x = opaque_bool(); x = false; x }",
+    "function inferred_constant() -> int = { var x = 0; x = 0; x }",
+    "function tuple_mutate() -> int = { var (x, y) = (opaque_int(), true); (x, y) = (1, true); x }",
+    "function write_register() -> int = { R = 3; R }",
+    "function vector_inference() -> unit = let values = [opaque_int(), 1] in ()",
+    "function let_scope() -> int = { let x = 1; let y = x; y }",
+    "function ascending() -> unit = foreach (i from 0 to 2) bounded_index(i)",
+    "function descending() -> unit = foreach (i from 2 downto 0) bounded_index(i)",
+    "function bounded_mutate() -> int = { var x : int = 0; foreach (i from 0 to 2) { x = i }; x }",
+    "function while_loop() -> unit = while true do ()",
+    "function repeat_loop() -> unit = repeat () until true",
+    "function while_fact(x : int) -> unit = while ge_zero(x) do at_least_zero(x)",
+    "function mutable_condition() -> unit = { var x : bool = true; while x do { x = false } }",
+];
+#[test]
+fn mutable_declarations_assignments_and_loop_bounds_are_checked() {
+    let mut sources = MUTABLE_DECLARATIONS.to_vec();
+    sources.extend(MUTABLE_POSITIVE);
+    let positive = sources.len();
+    sources.extend([
+        "function wrong_init() -> int = { var x : int = false; x }",
+        "function let_escape() -> int = { { let x = 1; () }; x }",
+        "function var_escape() -> int = { { var x : int = 1; () }; x }",
+        "function wrong_write() -> int = { var x : int = 0; x = false; x }",
+        "function constant_write() -> int = { var x = 0; x = 1; x }",
+        "function immutable_write() -> int = { let x = 0; x = 0; x }",
+        "function shadow_local(x : int) -> int = { var x : int = 0; x }",
+        "function shadow_mutable() -> int = { var x : int = 0; var x : int = 1; x }",
+        "function shadow_register() -> int = { var R : int = 0; R }",
+        "function missing_target() -> unit = missing = 0",
+        "function wrong_register() -> unit = R = false",
+        "function tuple_write() -> unit = { var (x, y) = (opaque_int(), true); (x, y) = (1, false) }",
+        "function bad_bounds() -> unit = foreach (i from 0 to 3) bounded_index(i)",
+        "function bad_descending() -> unit = foreach (i from 3 downto 0) bounded_index(i)",
+        "function write_iterator() -> unit = foreach (i from 0 to 2) { i = 1 }",
+        "function bound_escape() -> unit = { foreach (i from 0 to 2) (); bounded_index(i) }",
+        "function wrong_bound_type() -> unit = foreach (i from false to 2) ()",
+        "function wrong_body_type() -> unit = foreach (i from 0 to 2) 1",
+        "function wrong_condition() -> unit = while 0 do ()",
+        "function until_fact(x : int) -> unit = repeat at_least_zero(x) until ge_zero(x)",
+        "function stale_fact() -> unit = { var x : bool = true; if x then { x = false; only_true(x) } else () }",
+    ]);
+    let defs = parse(&sources);
+    let program = declare(&defs);
+    for (position, (def, it)) in defs.iter().enumerate() {
+        let result = program.check_definition(def, it.clone(), position);
+        assert_eq!(
+            result.is_err(),
+            position >= positive,
+            "position {position}: {result:?}"
+        );
+    }
+}
+
+#[test]
+fn ten_thousand_mutable_and_loop_scopes_check_and_release_iteratively() {
+    std::thread::Builder::new()
+        .stack_size(128 * 1024)
+        .spawn(|| {
+            let mut interner = SimpleInterner::new();
+            let names: Vec<_> = (0..10_000)
+                .map(|i| Name::dummy(interner.intern(&format!("local_{i}"))))
+                .collect();
+            let loop_var = Name::dummy(interner.intern("index"));
+            let definitions = parse(&["function deep() -> unit = ()"]);
+            let (mut def, existing) = definitions.into_iter().next().unwrap();
+            // Use the parser's symbols for the function and type, and allocate all
+            // local symbols in that same interner without copying recursive ASTs.
+            let mut merged = (*existing).clone();
+            let names: Vec<_> = names
+                .iter()
+                .map(|name| Name::dummy(merged.intern(interner.resolve(name.symbol).unwrap())))
+                .collect();
+            let loop_var = Name::dummy(merged.intern(interner.resolve(loop_var.symbol).unwrap()));
+            let zero = merged.intern("0");
+            let one = merged.intern("1");
+            let interner = Arc::new(merged);
+            for loops in [false, true] {
+                let DefKind::Fundef { funcls, .. } = &mut def.kind else {
+                    panic!()
+                };
+                let PExpKind::PatExp { body, .. } = &mut funcls[0].arm.kind else {
+                    panic!()
+                };
+                let mut nested = Node::dummy(ExpKind::Lit(Node::dummy(LitKind::Unit)));
+                for name in &names {
+                    nested = Node::dummy(if loops {
+                        ExpKind::For {
+                            var: loop_var.clone(),
+                            from: Box::new(Node::dummy(ExpKind::Lit(Node::dummy(LitKind::Num(
+                                zero,
+                            ))))),
+                            to: Box::new(Node::dummy(ExpKind::Lit(Node::dummy(LitKind::Num(
+                                one,
+                            ))))),
+                            step: Box::new(Node::dummy(ExpKind::Lit(Node::dummy(LitKind::Num(
+                                one,
+                            ))))),
+                            order: Order::Inc,
+                            body: Box::new(nested),
+                        }
+                    } else {
+                        ExpKind::Var {
+                            lexp: Box::new(Node::dummy(LExpKind::Id(name.clone()))),
+                            init: Box::new(Node::dummy(ExpKind::Lit(Node::dummy(LitKind::Unit)))),
+                            body: Box::new(nested),
+                        }
+                    });
+                }
+                *body = nested;
+                let mut program = Program::new();
+                program.declare(&def, interner.clone(), 0).unwrap();
+                assert_eq!(
+                    program.check_definition(&def, interner.clone(), 0).unwrap(),
+                    if loops { 40_001 } else { 20_001 }
+                );
+                let DefKind::Fundef { funcls, .. } = &mut def.kind else {
+                    panic!()
+                };
+                let PExpKind::PatExp { body, .. } = &mut funcls[0].arm.kind else {
+                    panic!()
+                };
+                let old =
+                    std::mem::replace(body, Node::dummy(ExpKind::Lit(Node::dummy(LitKind::Unit))));
+                sail_ast::storage::drop_definition(Node::dummy(DefKind::Let {
+                    pat: Node::dummy(PatKind::Wild),
+                    exp: old,
+                }));
+                drop(program);
+            }
+            sail_ast::storage::drop_definition(def);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 #[test]
 fn bit_literals_and_vectors_check_exact_lengths_elements_and_inferred_calls() {
     let mut sources = vec![
@@ -1153,4 +1302,315 @@ fn ten_thousand_composed_dependent_results_check_and_release_iteratively() {
         .unwrap()
         .join()
         .unwrap();
+}
+
+// Vektor-Sektion (Lane-06): Normalisierung der internen `vector_*#`-Primitive
+// fuer den ARM-Gate-Blocker `to_bytes_le` (vector.sail). Bestehende Tests
+// oberhalb bleiben unveraendert.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn vector_prims_normalize_only_the_four_hash_primitives() {
+    use sail_ty::vector_prims::{
+        VectorPrim, allows_bitfield_fallback, classify, expected_arity, is_vector_prim,
+        normalize, normalized_name, raw_name,
+    };
+
+    // Exakte Klassifikation der vier internen Namen.
+    assert_eq!(classify("vector_access#"), Some(VectorPrim::Access));
+    assert_eq!(classify("vector_subrange#"), Some(VectorPrim::Subrange));
+    assert_eq!(classify("vector_update#"), Some(VectorPrim::Update));
+    assert_eq!(
+        classify("vector_update_subrange#"),
+        Some(VectorPrim::UpdateSubrange)
+    );
+
+    // Kein generelles `#`-Strippen: fremde Namen werden abgelehnt.
+    for other in [
+        "",
+        "#",
+        "vector_access",
+        "vector_subrange",
+        "vector_update",
+        "vector_update_subrange",
+        "slice",
+        "foo#",
+        "vector_access##",
+        "Vector_access#",
+        "vector_update_subrange #",
+    ] {
+        assert_eq!(classify(other), None, "{other:?}");
+        assert!(!is_vector_prim(other), "{other:?}");
+        assert_eq!(normalize(other, 2), None, "{other:?}");
+        assert_eq!(normalize(other, 3), None, "{other:?}");
+        assert_eq!(normalize(other, 4), None, "{other:?}");
+    }
+
+    // Roundtrip raw -> normalisiert je Primitiv.
+    for prim in [
+        VectorPrim::Access,
+        VectorPrim::Subrange,
+        VectorPrim::Update,
+        VectorPrim::UpdateSubrange,
+    ] {
+        assert!(is_vector_prim(raw_name(prim)));
+        assert_eq!(classify(raw_name(prim)), Some(prim));
+        assert_eq!(
+            normalize(raw_name(prim), expected_arity(prim)),
+            Some(normalized_name(prim))
+        );
+        assert!(!normalized_name(prim).ends_with('#'));
+    }
+
+    // Erwartete Abbildung und Stelligkeit (Parser-Lowering).
+    assert_eq!(normalized_name(VectorPrim::Access), "vector_access");
+    assert_eq!(normalized_name(VectorPrim::Subrange), "vector_subrange");
+    assert_eq!(normalized_name(VectorPrim::Update), "vector_update");
+    assert_eq!(
+        normalized_name(VectorPrim::UpdateSubrange),
+        "vector_update_subrange"
+    );
+    assert_eq!(expected_arity(VectorPrim::Access), 2);
+    assert_eq!(expected_arity(VectorPrim::Subrange), 3);
+    assert_eq!(expected_arity(VectorPrim::Update), 3);
+    assert_eq!(expected_arity(VectorPrim::UpdateSubrange), 4);
+
+    // Falsche Stelligkeit wird nicht normalisiert.
+    assert_eq!(normalize("vector_access#", 3), None);
+    assert_eq!(normalize("vector_subrange#", 2), None);
+    assert_eq!(normalize("vector_update#", 4), None);
+    assert_eq!(normalize("vector_update_subrange#", 3), None);
+
+    // Bitfield-Fallback nur dort, wo OCaml ihn vorsieht (type_check.ml:
+    // `vector_access#`-Fallback und `infer_vector_update`-Verzweigung).
+    assert!(allows_bitfield_fallback(VectorPrim::Access));
+    assert!(allows_bitfield_fallback(VectorPrim::Update));
+    assert!(!allows_bitfield_fallback(VectorPrim::Subrange));
+    assert!(!allows_bitfield_fallback(VectorPrim::UpdateSubrange));
+}
+
+#[test]
+fn vector_prims_cover_the_internal_calls_of_to_bytes_le() {
+    use sail_ty::vector_prims::normalize;
+
+    // `to_bytes_le` (vector.sail, `_DEFAULT_DEC`):
+    //   res[i] = b[(8 * i + 7) .. (8 * i)]
+    // Die rechte Seite ist ein interner Subrange-Lesezugriff mit genau drei
+    // Argumenten (Vektor, obere und untere Grenze) und normalisiert zum
+    // `vector_subrange`-Overload.
+    assert_eq!(normalize("vector_subrange#", 3), Some("vector_subrange"));
+    // Die linke Seite `res[i]` ist ein L-Wert (`LExpKind::Vector`), kein
+    // App-Aufruf: Sie laeuft nicht durch `normalize`, sondern faellt unter die
+    // `infer_lexp`-Boundsregeln (Wurzel mutable/Register, Index voll geprueft,
+    // `0 <= index < length` per Solver bewiesen). Hier wird festgehalten, dass
+    // der korrespondierende funktionale Update-Aufruf die Form
+    // `vector_update#` mit drei Argumenten hat.
+    assert_eq!(normalize("vector_update#", 3), Some("vector_update"));
+    // Vollstaendigkeit der internen Familie fuer Vektor-/Slice-Schreibfaelle
+    // (`from_bytes_le` nutzt die Subrange-Schreibform).
+    assert_eq!(normalize("vector_access#", 2), Some("vector_access"));
+    assert_eq!(
+        normalize("vector_update_subrange#", 4),
+        Some("vector_update_subrange")
+    );
+}
+
+fn vector_prims_resolve_app_serves_the_app_arm_call_site() {
+    use sail_ty::vector_prims::{resolve_app, AppResolution, VectorPrim};
+
+    // Erfolgsfaelle: exakter interner Name + passende Stelligkeit liefern den
+    // Overload-Namen und das Bitfield-Fallback-Bit aus type_check.ml.
+    assert_eq!(
+        resolve_app("vector_access#", 2),
+        Some(AppResolution {
+            prim: VectorPrim::Access,
+            overload: "vector_access",
+            bitfield_fallback: true,
+        })
+    );
+    assert_eq!(
+        resolve_app("vector_subrange#", 3),
+        Some(AppResolution {
+            prim: VectorPrim::Subrange,
+            overload: "vector_subrange",
+            bitfield_fallback: false,
+        })
+    );
+    assert_eq!(
+        resolve_app("vector_update#", 3),
+        Some(AppResolution {
+            prim: VectorPrim::Update,
+            overload: "vector_update",
+            bitfield_fallback: true,
+        })
+    );
+    assert_eq!(
+        resolve_app("vector_update_subrange#", 4),
+        Some(AppResolution {
+            prim: VectorPrim::UpdateSubrange,
+            overload: "vector_update_subrange",
+            bitfield_fallback: false,
+        })
+    );
+
+    // Miss-Faelle: der App-Arm faehrt mit der bisherigen Kandidatensuche
+    // fort (kein stilles Umschreiben).
+    for (name, argc) in [
+        ("vector_access", 2),
+        ("slice", 3),
+        ("foo#", 2),
+        ("vector_access#", 3),
+        ("vector_subrange#", 2),
+        ("vector_update#", 4),
+        ("vector_update_subrange#", 3),
+        ("", 0),
+    ] {
+        assert_eq!(resolve_app(name, argc), None, "{name:?}/{argc}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lane 20 (Audit O-6): Existential-/Range-/arithmetische Inferenz-Reste.
+// ---------------------------------------------------------------------------
+//
+// Diese Pins dokumentieren, was die kanonische Schicht bewusst sound-offen
+// laesst (Regel `Z-UnknownSound`): abhaengige Aufrufparameter ohne exakte
+// Bindung scheitern mit `cannot infer dependent call parameter`, statt zu
+// raten. Die lokale Schicht (`sail_ty::subsume::match_scalar_arg`)
+// loest dafuer bereits exakte lineare Faelle (`'n + 1 = 5` -> `'n := 4`);
+// die kanonische Verdrahtung bleibt Folgearbeit (Bericht Lane-20).
+
+/// Quantifizierte Skalare ohne Bindung aus Argument oder Resultat bleiben
+/// ein sound-offener Fehler — fuer `K_int`- wie `K_bool`-Binder.
+#[test]
+fn audit_o6_unbound_dependent_parameters_stay_sound_errors() {
+    let defs = parse(&[
+        "val pos : forall 'n, 'n > 0. int -> int",
+        "function g() -> int = pos(5)",
+        "val gated : forall ('p : Bool), 'p. int -> int",
+        "function h() -> int = gated(3)",
+    ]);
+    let program = declare(&defs);
+    for position in [1, 3] {
+        let error = program
+            .check_definition(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            matches!(error.kind, TypeErrorKind::Unsupported(_))
+                && message.contains("cannot infer dependent call parameter"),
+            "position {position}: {error:?}"
+        );
+    }
+}
+
+/// Arithmetische und Potenz-Formale raten keine Bindung: `int('n + 1)`
+/// gegen `5` und `bitvector(2 ^ 'n)` gegen `0xFF` bleiben sound-offen,
+/// obwohl die lineare Gleichung lokal exakt loesbar waere.
+#[test]
+fn audit_o6_arithmetic_and_power_formals_do_not_guess() {
+    let defs = parse(&[
+        "val succ_arg : forall 'n. int('n + 1) -> int",
+        "function g() -> int = succ_arg(5)",
+        "val pow_arg : forall 'n. bitvector(2 ^ 'n) -> int",
+        "function h() -> int = pow_arg(0xFF)",
+    ]);
+    let program = declare(&defs);
+    for position in [1, 3] {
+        let error = program
+            .check_definition(&defs[position].0, defs[position].1.clone(), position)
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(
+            matches!(error.kind, TypeErrorKind::Unsupported(_))
+                && message.contains("cannot infer dependent call parameter"),
+            "position {position}: {error:?}"
+        );
+    }
+}
+
+/// Aufgeloeste Synonyme vergleichen per Kopf: ein schlichter `int` gegen
+/// `Bigger('n)` scheitert als praeziser Mismatch, nicht als erfundene
+/// Instantiierung.
+#[test]
+fn audit_o6_synonym_head_mismatch_is_a_mismatch_not_a_guess() {
+    let defs = parse(&[
+        "type Bigger('size : Int) = bitvector('size + 1)",
+        "val f : forall 'n. Bigger('n) -> int",
+        "function g(x : int) -> int = f(x)",
+    ]);
+    let program = declare(&defs);
+    let error = program
+        .check_definition(&defs[2].0, defs[2].1.clone(), 2)
+        .unwrap_err();
+    assert!(
+        matches!(
+            error.kind,
+            TypeErrorKind::Mismatch { .. }
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn outcome_outer_binders_scope_over_inner_val_schemes() {
+    // B1 (evidence/2026-10-13/lane-31/REPORT.md + fixture-b1-outcome.sail):
+    // an inner `val` sees the outer `with`-binders and the header
+    // quantifiers, mirroring OCaml `check_outcome` (`type_check.ml:5379ff`).
+    // Prelude-free mirrors of the fixture's outcome blocks (`bits` is a
+    // prelude abbreviation for `bitvector`, which is checked here directly).
+    let defs = parse(&[
+        "outcome o : ('a, int) -> unit with 'a : Type = { val to_bits : 'a -> int }",
+        "outcome o2 : forall 'n, 'n > 0. ('a, bitvector('n)) -> unit with 'a : Type = { val to_bits : 'a -> bitvector(8) }",
+        "outcome o3 : int -> int = { impl emulator(x) = x }",
+        "outcome o4 : int -> int with 'a : Type = { val shadow : forall 'a. 'a -> 'a }",
+    ]);
+    let mut program = Program::new();
+    for (position, (def, it)) in defs.iter().enumerate() {
+        program.declare(def, it.clone(), position).unwrap();
+    }
+    // Unbound inner variable: OCaml rejects, Rust must reject too.
+    let defs = parse(&[
+        "outcome bad : ('a, int) -> unit with 'a : Type = { val to_bits : 'b -> int }",
+    ]);
+    let mut program = Program::new();
+    assert!(matches!(
+        program
+            .declare(&defs[0].0, defs[0].1.clone(), 0)
+            .unwrap_err()
+            .kind,
+        TypeErrorKind::UnboundVar(_)
+    ));
+    // Undeclared type constructor inside an outcome member.
+    let defs = parse(&[
+        "outcome bad : ('a, int) -> unit with 'a : Type = { val to_bits : 'a -> Missing }",
+    ]);
+    let mut program = Program::new();
+    assert!(matches!(
+        program
+            .declare(&defs[0].0, defs[0].1.clone(), 0)
+            .unwrap_err()
+            .kind,
+        TypeErrorKind::UnboundVar(_)
+    ));
+    // Kind mismatch: outer `'a : Type` used where `Int` is required.
+    let defs = parse(&[
+        "outcome bad3 : int -> int with 'a : Type = { val to_bits : bitvector('a) -> int }",
+    ]);
+    let mut program = Program::new();
+    assert!(program
+        .declare(&defs[0].0, defs[0].1.clone(), 0)
+        .is_err());
+    // Forbidden members mirror OCaml `valid_outcome_def`: only val/impl.
+    for source in [
+        "outcome bad2 : int -> int = { function f(x) = x }",
+        "outcome bad2b : int -> int = { type Local = int }",
+    ] {
+        let defs = parse(&[source]);
+        let mut program = Program::new();
+        assert!(
+            program.declare(&defs[0].0, defs[0].1.clone(), 0).is_err(),
+            "{source}"
+        );
+    }
 }

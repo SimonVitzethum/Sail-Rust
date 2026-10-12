@@ -5,13 +5,19 @@
 //! und `scattered`-Klauselpruefung — alles nur via [`Solver`]-Trait
 //! (kein Z3-Import; Lane 06/80 haengt dahinter).
 
-use sail_ast::{ConstraintKind, Interner as _, NExpKind, Name, Node, SimpleInterner, TypArgKind, TypKind};
+use sail_ast::{
+    ConstraintKind, Interner as _, NExpKind, Name, Node, SimpleInterner, TypArgKind, TypKind,
+};
+use sail_ast::{
+    DecSpec, Def, DefKind, ExpKind, Funcl, LitKind, NodeId, PExp, PExpKind, PatKind, RecOpt,
+    ScatteredDef, TAnnotOpt, TypSchm, TypeDefKind,
+};
 use sail_ty::conv::{constraint_from_ast, constraint_to_ast};
-use sail_ty::kind::{KindEnv, check_constraint_kind};
+use sail_ty::kind::{check_constraint_kind, KindEnv};
 use sail_ty::{
-    BidirectionalChecker, CheckLimits, Kind, MiniExp, MiniTyp, NConstraint, Nexp, ProveResult,
-    ScatteredClauses, ScatteredKind, Solver, SolverContext, Span, StubSolver, TypeEnv, TypQuant,
     assumption_from_register, assumption_from_val, implication, kenv_of_quants, prove_in_context,
+    BidirectionalChecker, CheckLimits, Kind, MiniExp, MiniTyp, NConstraint, Nexp, ProveResult,
+    ScatteredClauses, ScatteredKind, Solver, SolverContext, Span, StubSolver, TypQuant, TypeEnv,
 };
 
 fn dummy() -> Span {
@@ -96,8 +102,14 @@ fn prove_set_app() {
         NConstraint::Set(Box::new(const_(7)), vec![1, 5]).as_bool(),
         Some(false)
     );
-    assert_eq!(NConstraint::Set(Box::new(var("n")), vec![]).as_bool(), Some(false));
-    assert_eq!(NConstraint::Set(Box::new(var("n")), vec![1]).as_bool(), None);
+    assert_eq!(
+        NConstraint::Set(Box::new(var("n")), vec![]).as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        NConstraint::Set(Box::new(var("n")), vec![1]).as_bool(),
+        None
+    );
     assert_eq!(app.as_bool(), None);
     assert_eq!(NConstraint::Var("b".to_string()).as_bool(), None);
     assert_eq!(NConstraint::Id("p".to_string()).as_bool(), None);
@@ -125,7 +137,10 @@ fn prove_set_app() {
         stub.prove(&NConstraint::Var("b".to_string())),
         ProveResult::Unknown
     );
-    assert_eq!(stub.prove(&NConstraint::Id("p".to_string())), ProveResult::Unknown);
+    assert_eq!(
+        stub.prove(&NConstraint::Id("p".to_string())),
+        ProveResult::Unknown
+    );
     // Tiefen-/Variablen-/Display-Pfade terminieren total.
     assert_eq!(set.depth(), 2);
     assert_eq!(NConstraint::Id("p".to_string()).depth(), 1);
@@ -151,9 +166,9 @@ fn prove_set_app() {
     // … Fremdformen bleiben `None` (residual X-NcSetApp).
     let foreign_app = Node::dummy(ConstraintKind::App {
         func: Name::dummy(it.intern("f")),
-        args: vec![Node::dummy(TypArgKind::Typ(Node::dummy(TypKind::Id(Name::dummy(
-            it.intern("int"),
-        )))))],
+        args: vec![Node::dummy(TypArgKind::Typ(Node::dummy(TypKind::Id(
+            Name::dummy(it.intern("int")),
+        ))))],
     });
     assert_eq!(constraint_from_ast(&foreign_app, &it), None);
     let bad_members = Node::dummy(ConstraintKind::Set {
@@ -274,7 +289,11 @@ fn prove_solver_context() {
     assert!(c
         .check_val_def_in_context("x", &mono, &MiniExp::IntLit(7), &env, &ctx2, dummy())
         .is_ok());
-    let impossible = TypQuant { quants: Vec::new(), constraint: NConstraint::False, typ: MiniTyp::Int };
+    let impossible = TypQuant {
+        quants: Vec::new(),
+        constraint: NConstraint::False,
+        typ: MiniTyp::Int,
+    };
     assert!(c
         .check_val_def_in_context("z", &impossible, &MiniExp::IntLit(7), &env, &ctx2, dummy())
         .is_err());
@@ -283,7 +302,11 @@ fn prove_solver_context() {
     assert!(c
         .check_register_in_context(
             "r",
-            &TypQuant { quants: Vec::new(), constraint: NConstraint::False, typ: MiniTyp::Int },
+            &TypQuant {
+                quants: Vec::new(),
+                constraint: NConstraint::False,
+                typ: MiniTyp::Int
+            },
             &SolverContext::new(),
             dummy()
         )
@@ -309,24 +332,44 @@ fn scattered_clauses() {
     // Zwei offene Klauseln: beide ok, Namen `<kind> <name>#<i>` (namespaced,
     // damit `end` gleichnamige Klauseln verschiedener Namespaces nicht
     // verwechselt).
-    let sums = c.check_scattered(ScatteredKind::Function, "step", &[open(), open()], dummy()).unwrap();
+    let sums = c
+        .check_scattered(ScatteredKind::Function, "step", &[open(), open()], dummy())
+        .unwrap();
     assert_eq!(sums.len(), 2);
     assert_eq!(sums[0].name, "function step#0");
     assert_eq!(sums[1].name, "function step#1");
     // Gleicher Name, anderer Namespace: disjunkte Summary-Namen.
-    let msums = c.check_scattered(ScatteredKind::Mapping, "step", &[open()], dummy()).unwrap();
+    let msums = c
+        .check_scattered(ScatteredKind::Mapping, "step", &[open()], dummy())
+        .unwrap();
     assert_eq!(msums[0].name, "mapping step#0");
     assert_ne!(sums[0].name, msums[0].name);
     // Leere Klauselliste ist ok (keine Summaries).
-    assert!(c.check_scattered(ScatteredKind::Function, "empty", &[], dummy()).unwrap().is_empty());
+    assert!(c
+        .check_scattered(ScatteredKind::Function, "empty", &[], dummy())
+        .unwrap()
+        .is_empty());
     // `False`-Klausel ist ein harter Fehler (widerlegt, auch im Kontext).
-    assert!(c.check_scattered(ScatteredKind::Function, "bad", &[open(), TypQuant::monomorphic(MiniTyp::Int)], dummy()).is_ok());
+    assert!(c
+        .check_scattered(
+            ScatteredKind::Function,
+            "bad",
+            &[open(), TypQuant::monomorphic(MiniTyp::Int)],
+            dummy()
+        )
+        .is_ok());
     let mut bad_second = open();
     bad_second.constraint = NConstraint::False;
     // A closed, satisfiable context lets the stub refute False. An open
     // implication needs a solver; the check_scattered contract accepts Unknown.
-    assert!(c.check_scattered(ScatteredKind::Function, "bad",
-        &[TypQuant::monomorphic(MiniTyp::Int), bad_second], dummy()).is_err());
+    assert!(c
+        .check_scattered(
+            ScatteredKind::Function,
+            "bad",
+            &[TypQuant::monomorphic(MiniTyp::Int), bad_second],
+            dummy()
+        )
+        .is_err());
     // `ScatteredClauses`: Konjunktion in Elaborationsreihenfolge.
     let mut sc = ScatteredClauses::new("step");
     assert_eq!(sc.conjoin(), None);
@@ -342,4 +385,206 @@ fn scattered_clauses() {
     let mut ctx = SolverContext::new();
     ctx.assume_scattered(&sc);
     assert_eq!(ctx.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Lane 09 definition gates (`sail_ty::pat::def_gate`): every top-level
+// definition has an explicit canonical status — global `let`s via their
+// pattern plan, mappings / scattered / outcome / termination measures as
+// loud deferrals, never silent acceptance.
+// ---------------------------------------------------------------------------
+
+use sail_ty::pat::{def_gate, DefGate};
+
+fn gate_name(it: &mut SimpleInterner, text: &str) -> Name {
+    Name::dummy(it.intern(text))
+}
+
+fn gate_def(kind: DefKind) -> Def {
+    Node::dummy(kind)
+}
+
+fn unit_gate_exp() -> sail_ast::Exp {
+    Node::dummy(ExpKind::Lit(Node::dummy(LitKind::Unit)))
+}
+
+fn wild_gate_pat() -> sail_ast::Pat {
+    Node::dummy(PatKind::Wild)
+}
+
+fn int_gate_typ(it: &mut SimpleInterner) -> sail_ast::Typ {
+    Node::dummy(TypKind::Id(gate_name(it, "int")))
+}
+
+#[test]
+fn def_gates_cover_signature_register_and_function_defs() {
+    let mut it = SimpleInterner::new();
+    // Signature-only declarations: no body to check.
+    let pragma = gate_def(DefKind::Pragma {
+        key: "key".to_owned(),
+        payload: "payload".to_owned(),
+    });
+    assert_eq!(def_gate(&pragma, &it), DefGate::Covered { rule: "D-Sig" });
+    let typ = gate_def(DefKind::Type(Node::dummy(TypeDefKind::Abstract {
+        name: gate_name(&mut it, "N"),
+        kind: sail_ast::Kind::Int,
+    })));
+    assert!(def_gate(&typ, &it).is_covered());
+    let constraint = gate_def(DefKind::Constraint(Node::dummy(ConstraintKind::True)));
+    assert_eq!(def_gate(&constraint, &it).rule(), "D-Sig");
+    // Registers check their init body against the declared type.
+    let register = gate_def(DefKind::Register(DecSpec {
+        id: NodeId::DUMMY,
+        span: dummy(),
+        typ: int_gate_typ(&mut it),
+        name: gate_name(&mut it, "state"),
+        init: None,
+    }));
+    assert_eq!(def_gate(&register, &it), DefGate::Covered { rule: "D-Reg" });
+    // Plain (mutually) recursive functions: clause checking.
+    let fundef = gate_def(DefKind::Fundef {
+        rec: RecOpt::NonRec,
+        annot: TAnnotOpt::None,
+        funcls: Vec::new(),
+    });
+    assert_eq!(def_gate(&fundef, &it).rule(), "D-Fun");
+    let rec = gate_def(DefKind::Fundef {
+        rec: RecOpt::Rec,
+        annot: TAnnotOpt::None,
+        funcls: Vec::new(),
+    });
+    assert!(def_gate(&rec, &it).is_covered());
+    // Covered gates diagnose as covered.
+    assert_eq!(def_gate(&pragma, &it).diagnosis(), "D-Sig: covered");
+}
+
+#[test]
+fn def_gate_global_let_follows_its_pattern_plan() {
+    let mut it = SimpleInterner::new();
+    // Bindable pattern: covered under that pattern's rule.
+    let bound = gate_def(DefKind::Let {
+        pat: Node::dummy(PatKind::Id(gate_name(&mut it, "x"))),
+        exp: unit_gate_exp(),
+    });
+    assert_eq!(def_gate(&bound, &it), DefGate::Covered { rule: "P-Id" });
+    // Unplannable pattern: deferred with the pattern's rule and reason.
+    let empty_vector = gate_def(DefKind::Let {
+        pat: Node::dummy(PatKind::Vector(Vec::new())),
+        exp: unit_gate_exp(),
+    });
+    let gate = def_gate(&empty_vector, &it);
+    assert!(!gate.is_covered());
+    assert_eq!(gate.rule(), "P-Vector");
+    assert!(
+        gate.diagnosis().contains("global let pattern"),
+        "{}",
+        gate.diagnosis()
+    );
+}
+
+#[test]
+fn def_gates_defer_mapping_scattered_outcome_and_measures() {
+    let mut it = SimpleInterner::new();
+    let f = gate_name(&mut it, "f");
+    let int_typ = int_gate_typ(&mut it);
+    let wild = wild_gate_pat();
+    let unit = unit_gate_exp();
+    let cases: Vec<(Def, &'static str)> = vec![
+        (
+            gate_def(DefKind::Mapdef {
+                name: f.clone(),
+                annot: TAnnotOpt::None,
+                clauses: Vec::new(),
+            }),
+            "D-Mapping",
+        ),
+        (
+            gate_def(DefKind::Impl(Funcl {
+                id: NodeId::DUMMY,
+                span: dummy(),
+                name: f.clone(),
+                arm: PExp {
+                    id: NodeId::DUMMY,
+                    span: dummy(),
+                    kind: PExpKind::PatExp {
+                        pat: wild.clone(),
+                        body: unit.clone(),
+                    },
+                },
+            })),
+            "D-Impl",
+        ),
+        (
+            gate_def(DefKind::Scattered(ScatteredDef::End(f.clone()))),
+            "D-Scattered",
+        ),
+        (
+            gate_def(DefKind::Scattered(ScatteredDef::Mapping {
+                name: f.clone(),
+                annot: TAnnotOpt::None,
+            })),
+            "D-Scattered",
+        ),
+        (
+            gate_def(DefKind::Outcome {
+                name: f.clone(),
+                typschm: TypSchm {
+                    quant: Vec::new(),
+                    typ: int_typ.clone(),
+                },
+                quant: Vec::new(),
+                defs: Vec::new(),
+            }),
+            "D-Outcome",
+        ),
+        (
+            gate_def(DefKind::Instantiation {
+                name: f.clone(),
+                substs: Vec::new(),
+            }),
+            "D-Instantiation",
+        ),
+        (
+            gate_def(DefKind::Measure {
+                name: f.clone(),
+                pat: wild.clone(),
+                exp: unit.clone(),
+            }),
+            "D-Measure",
+        ),
+        (
+            gate_def(DefKind::LoopMeasures {
+                name: f.clone(),
+                measures: Vec::new(),
+            }),
+            "D-LoopMeasure",
+        ),
+        (gate_def(DefKind::InternalMutrec(Vec::new())), "D-Mutrec"),
+        (
+            gate_def(DefKind::Fundef {
+                rec: RecOpt::Measure {
+                    pat: wild.clone(),
+                    exp: unit.clone(),
+                },
+                annot: TAnnotOpt::None,
+                funcls: Vec::new(),
+            }),
+            "D-Measure",
+        ),
+    ];
+    for (def, rule) in &cases {
+        let gate = def_gate(def, &it);
+        assert!(!gate.is_covered(), "{rule} must not be covered");
+        assert_eq!(gate.rule(), *rule);
+        assert!(gate.diagnosis().starts_with(rule), "{}", gate.diagnosis());
+    }
+    // Scattered reasons name the block kind (end-linkage diagnosis).
+    let end = def_gate(&cases[2].0, &it);
+    assert!(end.diagnosis().contains("end"), "{}", end.diagnosis());
+    let mapping = def_gate(&cases[3].0, &it);
+    assert!(
+        mapping.diagnosis().contains("mapping"),
+        "{}",
+        mapping.diagnosis()
+    );
 }
