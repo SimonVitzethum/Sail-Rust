@@ -139,6 +139,111 @@ impl Drop for UnionDef {
     }
 }
 
+/// Preserved mapping header (OCaml `Env` mapping entry): the quantified
+/// telescope plus the bidirectional type. Clause bodies stay in the
+/// driver's out-of-core store; only the header lives here so workers can
+/// expand mapping applications (`<m>_forwards` / `<m>_backwards`,
+/// `type_check.ml` mapping arms) without seeing a body.
+#[derive(Clone, Debug)]
+pub struct MappingDef {
+    pub quant: Vec<QuantItem>,
+    pub typ: Typ,
+    pub interner: Arc<SimpleInterner>,
+    pub span: Span,
+}
+impl Drop for MappingDef {
+    fn drop(&mut self) {
+        let quant = std::mem::take(&mut self.quant);
+        let typ = std::mem::replace(&mut self.typ, Node::dummy(TypKind::Unknown));
+        dispose_signature(quant, typ);
+    }
+}
+
+/// Namespace of a `scattered` block. Functions, mappings, unions and enums
+/// live in separate namespaces (OCaml `parse_ast` `scattered_def_aux`);
+/// a `function f` and a `mapping f` may coexist, so the table key always
+/// carries the namespace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ScatteredNamespace {
+    Function,
+    Mapping,
+    Variant,
+    Enum,
+}
+
+impl ScatteredNamespace {
+    /// Deterministic key prefix for reports and clause summaries.
+    #[must_use]
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Mapping => "mapping",
+            Self::Variant => "union",
+            Self::Enum => "enum",
+        }
+    }
+}
+
+impl From<crate::scattered_elab::Namespace> for ScatteredNamespace {
+    fn from(ns: crate::scattered_elab::Namespace) -> Self {
+        match ns {
+            crate::scattered_elab::Namespace::Function => Self::Function,
+            crate::scattered_elab::Namespace::Mapping => Self::Mapping,
+            crate::scattered_elab::Namespace::Variant => Self::Variant,
+            crate::scattered_elab::Namespace::Enum => Self::Enum,
+        }
+    }
+}
+
+/// One preserved `scattered` opening (OCaml `SD_function` / `SD_mapping` /
+/// `SD_variant` / `SD_enum`): the optional header annotation plus whether
+/// the matching `end` was declared. Clause bodies (`SD_funcl` /
+/// `SD_mapcl` / `SD_unioncl` / `SD_enumcl`) are counted in
+/// [`Program::scattered_clauses`]; bodies stay in the driver store.
+#[derive(Clone, Debug)]
+pub struct ScatteredDecl {
+    pub namespace: ScatteredNamespace,
+    pub name: String,
+    pub span: Span,
+    pub quant: Vec<QuantItem>,
+    pub ret: Option<Typ>,
+    pub interner: Option<Arc<SimpleInterner>>,
+    pub closed: bool,
+}
+impl Drop for ScatteredDecl {
+    fn drop(&mut self) {
+        let quant = std::mem::take(&mut self.quant);
+        let typ = self.ret.take().unwrap_or_else(|| Node::dummy(TypKind::Unknown));
+        dispose_signature(quant, typ);
+    }
+}
+
+/// Preserved outcome header (OCaml `Env.add_outcome`): the outcome
+/// parameters plus the outcome type scheme. The per-outcome local
+/// environment (inner `val` schemes) lives in
+/// [`Program::outcome_vals`]; inner bodies stay in the driver store.
+#[derive(Clone, Debug)]
+pub struct OutcomeDef {
+    pub params: Vec<QuantItem>,
+    pub typschm: TypSchm,
+    pub interner: Arc<SimpleInterner>,
+    pub span: Span,
+}
+impl Drop for OutcomeDef {
+    fn drop(&mut self) {
+        let params = std::mem::take(&mut self.params);
+        let typschm = std::mem::replace(
+            &mut self.typschm,
+            TypSchm {
+                quant: Vec::new(),
+                typ: Node::dummy(TypKind::Unknown),
+            },
+        );
+        dispose_signature(params, Node::dummy(TypKind::Unknown));
+        dispose_signature(typschm.quant, typschm.typ);
+    }
+}
+
 /// Canonical declaration tables, frozen before parallel body checking. Only
 /// signatures/type definitions belong here, never function bodies.
 ///
@@ -158,6 +263,15 @@ pub struct Program {
     records: BTreeMap<String, Vec<Binding<RecordDef>>>,
     unions: BTreeMap<String, Vec<Binding<UnionDef>>>,
     accessors: BTreeMap<(String, String), Vec<Binding<Arc<Scheme>>>>,
+    mappings: BTreeMap<String, Vec<Binding<MappingDef>>>,
+    scattered: BTreeMap<(ScatteredNamespace, String), Vec<Binding<ScatteredDecl>>>,
+    scattered_clauses: BTreeMap<(ScatteredNamespace, String), Vec<Binding<usize>>>,
+    outcomes: BTreeMap<String, Vec<Binding<OutcomeDef>>>,
+    outcome_vals: BTreeMap<(String, String), Vec<Binding<Arc<Scheme>>>>,
+    impls: Vec<Binding<String>>,
+    measures: BTreeMap<String, Vec<Binding<Span>>>,
+    loop_measures: BTreeMap<String, Vec<Binding<Span>>>,
+    instantiations: Vec<Binding<(String, Span)>>,
     constraints: Vec<Binding<(Arc<Constraint>, Arc<SimpleInterner>)>>,
     solvers: SolverPool<SmtLibSolver>,
 }
@@ -171,6 +285,15 @@ impl Default for Program {
             records: BTreeMap::new(),
             unions: BTreeMap::new(),
             accessors: BTreeMap::new(),
+            mappings: BTreeMap::new(),
+            scattered: BTreeMap::new(),
+            scattered_clauses: BTreeMap::new(),
+            outcomes: BTreeMap::new(),
+            outcome_vals: BTreeMap::new(),
+            impls: Vec::new(),
+            measures: BTreeMap::new(),
+            loop_measures: BTreeMap::new(),
+            instantiations: Vec::new(),
             constraints: Vec::new(),
             solvers: SolverPool::with_default_cache(SmtLibSolver::new),
         }
@@ -689,7 +812,347 @@ impl Program {
             }
             // Bodies and definitions requiring inference are checked by the
             // body pass; accepting their header does not accept the body.
+            // Mapping, scattered and outcome *headers* are retained below
+            // so later declarations and body workers see them at their
+            // source position; clause bodies stay in the driver store.
+            DefKind::Mapdef { name, annot, .. } => {
+                let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+                let TAnnotOpt::Some { quant, typ } = annot else {
+                    return Err(TypeError {
+                        span: def.span,
+                        kind: TypeErrorKind::Unsupported(
+                            "mapping signature synthesis from clauses requires pattern elaboration"
+                                .into(),
+                        ),
+                    });
+                };
+                let mut checker = WellFormed::new(self, &it, position);
+                checker.quant(quant)?;
+                checker.run(vec![Task::Typ(typ)])?;
+                if !matches!(typ.kind, TypKind::Bidir { .. }) {
+                    return Err(failure(
+                        typ.span,
+                        format!("mapping '{name_text}' must have a bi-directional mapping type"),
+                    ));
+                }
+                self.mappings.entry(name_text).or_default().push(Binding {
+                    position,
+                    value: MappingDef {
+                        quant: quant.clone(),
+                        typ: typ.clone(),
+                        interner: it,
+                        span: name.span,
+                    },
+                });
+                Ok(())
+            }
+            DefKind::Scattered(scat) => self.declare_scattered(scat, &it, position, def.span),
+            DefKind::Outcome {
+                name,
+                typschm,
+                quant: params,
+                defs,
+            } => {
+                let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+                if self.outcome(&name_text, position).is_some() {
+                    return Err(failure(
+                        name.span,
+                        format!("outcome '{name_text}' is already defined"),
+                    ));
+                }
+                // Header + innere Specs sehen die äußeren `with`-Binder
+                // (B1: `val pa_bits` sieht `with 'pa`; OCaml `check_outcome`).
+                self.check_outcome(typschm, params, defs, &it, position)?;
+                self.outcomes.entry(name_text.clone()).or_default().push(Binding {
+                    position,
+                    value: OutcomeDef {
+                        params: params.clone(),
+                        typschm: typschm.clone(),
+                        interner: it.clone(),
+                        span: name.span,
+                    },
+                });
+                // Outcome-local `val` schemes never leak into the global
+                // table (OCaml checks inner defs in the outcome-local
+                // environment built by `check_outcome`).
+                for inner in defs {
+                    if let DefKind::Val(val) = &inner.kind {
+                        let val_name =
+                            text(it.as_ref(), val.name.symbol, val.span)?.to_owned();
+                        self.outcome_vals
+                            .entry((name_text.clone(), val_name))
+                            .or_default()
+                            .push(Binding {
+                                position,
+                                value: Arc::new(Scheme {
+                                    typschm: val.typschm.clone(),
+                                    interner: it.clone(),
+                                }),
+                            });
+                    }
+                }
+                Ok(())
+            }
+            DefKind::Impl(funcl) => {
+                let name_text =
+                    text(it.as_ref(), funcl.name.symbol, funcl.name.span)?.to_owned();
+                self.impls.push(Binding {
+                    position,
+                    value: name_text,
+                });
+                Ok(())
+            }
+            DefKind::Measure { name, .. } => {
+                let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+                if self.value(&name_text, position).is_none() {
+                    return Err(TypeError::unbound_var(name.span, name_text));
+                }
+                self.measures.entry(name_text).or_default().push(Binding {
+                    position,
+                    value: def.span,
+                });
+                Ok(())
+            }
+            DefKind::LoopMeasures { name, .. } => {
+                let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+                if self.value(&name_text, position).is_none() {
+                    return Err(TypeError::unbound_var(name.span, name_text));
+                }
+                self.loop_measures.entry(name_text).or_default().push(Binding {
+                    position,
+                    value: def.span,
+                });
+                Ok(())
+            }
+            DefKind::Instantiation { name, .. } => {
+                let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+                if self.outcome(&name_text, position).is_none() {
+                    return Err(failure(
+                        name.span,
+                        format!("instantiation of unknown outcome '{name_text}'"),
+                    ));
+                }
+                self.instantiations.push(Binding {
+                    position,
+                    value: (name_text, def.span),
+                });
+                Ok(())
+            }
             _ => Ok(()),
+        }
+    }
+
+    /// Record one `scattered` definition header or clause. Openings push a
+    /// [`ScatteredDecl`] history entry (with their header annotation when
+    /// present); clauses bump the per-block clause counter; `end` closes
+    /// the single open block of that name across namespaces, or fails
+    /// when the target is missing or ambiguous.
+    fn declare_scattered(
+        &mut self,
+        scat: &ScatteredDef,
+        it: &Arc<SimpleInterner>,
+        position: usize,
+        _span: Span,
+    ) -> TypeResult<()> {
+        fn opening(
+            program: &mut Program,
+            namespace: ScatteredNamespace,
+            name: &Name,
+            annot: &TAnnotOpt,
+            it: &Arc<SimpleInterner>,
+            position: usize,
+        ) -> TypeResult<()> {
+            let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+            // Re-opening an unclosed block of the same namespace is a
+            // duplicate, not a history entry (OCaml rejects it during
+            // scattered elaboration).
+            if program
+                .scattered
+                .get(&(namespace, name_text.clone()))
+                .and_then(|history| at(history, position))
+                .is_some_and(|decl| !decl.closed)
+            {
+                return Err(failure(
+                    name.span,
+                    format!(
+                        "{} '{}' is already openly scattered",
+                        namespace.prefix(),
+                        name_text
+                    ),
+                ));
+            }
+            let (quant, ret, interner) = match annot {
+                TAnnotOpt::None => (Vec::new(), None, None),
+                TAnnotOpt::Some { quant, typ } => {
+                    let mut checker = WellFormed::new(program, it, position);
+                    checker.quant(quant)?;
+                    checker.run(vec![Task::Typ(typ)])?;
+                    (quant.clone(), Some(typ.clone()), Some(it.clone()))
+                }
+            };
+            program
+                .scattered
+                .entry((namespace, name_text.clone()))
+                .or_default()
+                .push(Binding {
+                    position,
+                    value: ScatteredDecl {
+                        namespace,
+                        name: name_text,
+                        span: name.span,
+                        quant,
+                        ret,
+                        interner,
+                        closed: false,
+                    },
+                });
+            Ok(())
+        }
+        fn clause(
+            program: &mut Program,
+            namespace: ScatteredNamespace,
+            name: &str,
+            span: Span,
+            position: usize,
+        ) -> TypeResult<()> {
+            let key = (namespace, name.to_owned());
+            let open = program
+                .scattered
+                .get(&key)
+                .and_then(|history| at(history, position))
+                .is_some_and(|decl| !decl.closed);
+            if !open {
+                return Err(failure(
+                    span,
+                    format!(
+                        "{} clause for '{}' has no open scattered block",
+                        namespace.prefix(),
+                        name
+                    ),
+                ));
+            }
+            let next = program
+                .scattered_clauses
+                .get(&key)
+                .and_then(|history| at(history, position))
+                .copied()
+                .unwrap_or(0)
+                + 1;
+            program
+                .scattered_clauses
+                .entry(key)
+                .or_default()
+                .push(Binding {
+                    position,
+                    value: next,
+                });
+            Ok(())
+        }
+        match scat {
+            ScatteredDef::Function { name, annot } => {
+                opening(self, ScatteredNamespace::Function, name, annot, it, position)
+            }
+            ScatteredDef::Mapping { name, annot } => {
+                opening(self, ScatteredNamespace::Mapping, name, annot, it, position)
+            }
+            ScatteredDef::Variant { name, quant } => {
+                let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+                let mut checker = WellFormed::new(self, it, position);
+                checker.quant(quant)?;
+                self.scattered
+                    .entry((ScatteredNamespace::Variant, name_text.clone()))
+                    .or_default()
+                    .push(Binding {
+                        position,
+                        value: ScatteredDecl {
+                            namespace: ScatteredNamespace::Variant,
+                            name: name_text,
+                            span: name.span,
+                            quant: quant.clone(),
+                            ret: None,
+                            interner: None,
+                            closed: false,
+                        },
+                    });
+                Ok(())
+            }
+            ScatteredDef::Unioncl { name, .. } => {
+                let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+                clause(self, ScatteredNamespace::Variant, &name_text, name.span, position)
+            }
+            ScatteredDef::Enum(name) => opening(
+                self,
+                ScatteredNamespace::Enum,
+                name,
+                &TAnnotOpt::None,
+                it,
+                position,
+            ),
+            ScatteredDef::Enumcl { enum_name, .. } => {
+                let name_text =
+                    text(it.as_ref(), enum_name.symbol, enum_name.span)?.to_owned();
+                clause(self, ScatteredNamespace::Enum, &name_text, enum_name.span, position)
+            }
+            ScatteredDef::Funcl(funcl) => {
+                let name_text =
+                    text(it.as_ref(), funcl.name.symbol, funcl.name.span)?.to_owned();
+                clause(
+                    self,
+                    ScatteredNamespace::Function,
+                    &name_text,
+                    funcl.name.span,
+                    position,
+                )
+            }
+            ScatteredDef::Mapcl { name, .. } => {
+                let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+                clause(self, ScatteredNamespace::Mapping, &name_text, name.span, position)
+            }
+            ScatteredDef::End(name) => {
+                let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+                let mut open: Vec<(ScatteredNamespace, ScatteredDecl)> = Vec::new();
+                for namespace in [
+                    ScatteredNamespace::Function,
+                    ScatteredNamespace::Mapping,
+                    ScatteredNamespace::Variant,
+                    ScatteredNamespace::Enum,
+                ] {
+                    if let Some(decl) = self
+                        .scattered
+                        .get(&(namespace, name_text.clone()))
+                        .and_then(|history| at(history, position))
+                        .filter(|decl| !decl.closed)
+                    {
+                        open.push((namespace, decl.clone()));
+                    }
+                }
+                match open.len() {
+                    1 => {
+                        let (namespace, mut closed_decl) = open.pop().unwrap();
+                        closed_decl.closed = true;
+                        closed_decl.span = name.span;
+                        self.scattered
+                            .entry((namespace, name_text))
+                            .or_default()
+                            .push(Binding {
+                                position,
+                                value: closed_decl,
+                            });
+                        Ok(())
+                    }
+                    0 => Err(failure(
+                        name.span,
+                        format!("scattered end '{name_text}' has no open block"),
+                    )),
+                    _ => Err(TypeError {
+                        span: name.span,
+                        kind: TypeErrorKind::Unsupported(
+                            "ambiguous scattered end across namespaces requires elaboration-order stack"
+                                .into(),
+                        ),
+                    }),
+                }
+            }
         }
     }
 
@@ -699,9 +1162,85 @@ impl Program {
         it: &SimpleInterner,
         position: usize,
     ) -> TypeResult<()> {
+        self.check_scoped_scheme(scheme, it, position, &[])
+    }
+
+    /// Validate a type scheme with additional outer quantifiers in scope.
+    /// Interners are definition-local, so outer binders match by name. Inner
+    /// binders shadow outer ones: own quantifiers live in `vars`, outer
+    /// binders in the `outer` fallback map (cf. `check_annotation`).
+    pub(crate) fn check_scoped_scheme(
+        &self,
+        scheme: &TypSchm,
+        it: &SimpleInterner,
+        position: usize,
+        outer: &[(&[QuantItem], &SimpleInterner)],
+    ) -> TypeResult<()> {
         let mut checker = WellFormed::new(self, it, position);
+        for (quant, scope_it) in outer {
+            for item in *quant {
+                if let QuantItem::Id(binder) = item {
+                    let name = text(*scope_it, binder.kid, scheme.typ.span)?.to_owned();
+                    checker.outer.insert(name.clone(), binder.kind);
+                    checker.bind_proof_name(name);
+                }
+            }
+        }
+        for (quant, scope_it) in outer {
+            for item in *quant {
+                if let QuantItem::Constraint(constraint) = item {
+                    checker.assumptions.push(Assumption {
+                        constraint,
+                        interner: *scope_it,
+                        variables: checker.proof_vars.clone(),
+                    });
+                }
+            }
+        }
         checker.quant(&scheme.quant)?;
         checker.run(vec![Task::Typ(&scheme.typ)])
+    }
+
+    /// Validate an outcome header and its nested specs. The outer `with`
+    /// binders (`params`) plus the outcome type-scheme quantifiers scope over
+    /// every nested scheme (OCaml `check_outcome`: `add_typquant params`,
+    /// then `check_defs` in the local environment, `type_check.ml:5379ff`).
+    /// Only `val`/`impl` members are admitted, as in OCaml
+    /// (`valid_outcome_def`). Implementation bodies additionally need the
+    /// outcome environment in the body checker (OCaml `check_impldef`); the
+    /// declaration pass only admits them, it does not check their bodies.
+    pub(crate) fn check_outcome(
+        &self,
+        typschm: &TypSchm,
+        params: &[QuantItem],
+        defs: &[Def],
+        it: &SimpleInterner,
+        position: usize,
+    ) -> TypeResult<()> {
+        // The header sees the outer binders, mirroring `wf_typschm local_env`.
+        self.check_scoped_scheme(typschm, it, position, &[(params, it)])?;
+        for def in defs {
+            match &def.kind {
+                // Inner val specs see outer plus header quantifiers, mirroring
+                // `check_defs local_env` (B1: `val pa_bits` sees `with 'pa`).
+                // Like OCaml `check_val_spec`, only well-formedness is
+                // required here, never an arrow shape.
+                DefKind::Val(val) => self.check_scoped_scheme(
+                    &val.typschm,
+                    it,
+                    position,
+                    &[(params, it), (&typschm.quant, it)],
+                )?,
+                DefKind::Impl(_) => {}
+                _ => {
+                    return Err(failure(
+                        def.span,
+                        "forbidden definition in outcome block",
+                    ))
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Validate loaded clauses against their source-position signature. Inline
@@ -944,6 +1483,193 @@ impl Program {
             .map(|(name, _)| name.clone())
             .collect()
     }
+
+    /// Source-position mapping lookup (OCaml `Env.is_mapping` /
+    /// `get_val_spec` on the `Typ_bidir` scheme). Returns the preserved
+    /// quantifier telescope plus the bidirectional type, or `None` when
+    /// the mapping is not declared at `position`.
+    #[must_use]
+    pub fn mapping(&self, name: &str, position: usize) -> Option<&MappingDef> {
+        self.mappings
+            .get(name)
+            .and_then(|history| at(history, position))
+    }
+
+    /// Whether `name` is a declared mapping at `position` (gates the
+    /// `<m>_forwards` / `<m>_backwards` application expansion).
+    #[must_use]
+    pub fn is_mapping(&self, name: &str, position: usize) -> bool {
+        self.mapping(name, position).is_some()
+    }
+
+    /// Generated clause-function names for a mapping application
+    /// (mirrors the OCaml `mk_id (name ^ "_forwards")` convention used by
+    /// the `E_app` mapping arms). Returns `None` when `name` is not a
+    /// mapping at `position`, so the insertion only rewrites declared
+    /// mappings and never plain or overloaded functions.
+    #[must_use]
+    pub fn mapping_expansion(&self, name: &str, position: usize) -> Option<(String, String)> {
+        self.is_mapping(name, position).then(|| {
+            (
+                format!("{name}_forwards"),
+                format!("{name}_backwards"),
+            )
+        })
+    }
+
+    /// Sorted mapping names visible at `position` (deterministic order).
+    #[must_use]
+    pub fn mapping_names(&self, position: usize) -> Vec<String> {
+        self.mappings
+            .iter()
+            .filter(|(_, history)| {
+                history
+                    .iter()
+                    .rfind(|binding| binding.position <= position)
+                    .is_some()
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// Source-position `scattered` block lookup: the latest opening (or
+    /// closing) declaration of `(namespace, name)` at `position`.
+    #[must_use]
+    pub fn scattered(
+        &self,
+        namespace: ScatteredNamespace,
+        name: &str,
+        position: usize,
+    ) -> Option<&ScatteredDecl> {
+        self.scattered
+            .get(&(namespace, name.to_owned()))
+            .and_then(|history| at(history, position))
+    }
+
+    /// Clauses recorded for a scattered block at `position`
+    /// (`SD_funcl` / `SD_mapcl` / `SD_unioncl` / `SD_enumcl` counts).
+    #[must_use]
+    pub fn scattered_clause_count(
+        &self,
+        namespace: ScatteredNamespace,
+        name: &str,
+        position: usize,
+    ) -> usize {
+        self.scattered_clauses
+            .get(&(namespace, name.to_owned()))
+            .and_then(|history| at(history, position))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Namespace closed by the `scattered end` declared at exactly
+    /// `position`, if any (Lane-37 linkage for the body pass: the end's own
+    /// declare entry is visible at body time and masks the open block).
+    #[must_use]
+    pub fn scattered_closed_at(&self, name: &str, position: usize) -> Option<ScatteredNamespace> {
+        [
+            ScatteredNamespace::Function,
+            ScatteredNamespace::Mapping,
+            ScatteredNamespace::Variant,
+            ScatteredNamespace::Enum,
+        ]
+        .into_iter()
+        .find(|ns| {
+            self.scattered.get(&(*ns, name.to_owned())).is_some_and(|history| {
+                history
+                    .iter()
+                    .rfind(|b| b.position <= position)
+                    .is_some_and(|b| b.position == position && b.value.closed)
+            })
+        })
+    }
+
+    /// Source-position outcome lookup (OCaml `Env` outcome entry):
+    /// parameters plus result scheme, or `None` when the outcome is not
+    /// declared at `position`.
+    #[must_use]
+    pub fn outcome(&self, name: &str, position: usize) -> Option<&OutcomeDef> {
+        self.outcomes
+            .get(name)
+            .and_then(|history| at(history, position))
+    }
+
+    /// Sorted outcome names visible at `position` (deterministic order).
+    #[must_use]
+    pub fn outcome_names(&self, position: usize) -> Vec<String> {
+        self.outcomes
+            .iter()
+            .filter(|(_, history)| {
+                history
+                    .iter()
+                    .rfind(|binding| binding.position <= position)
+                    .is_some()
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// Outcome-local `val` scheme (OCaml outcome-local environment):
+    /// `(outcome, val)` at `position`, never the global table.
+    #[must_use]
+    pub fn outcome_val(
+        &self,
+        outcome: &str,
+        name: &str,
+        position: usize,
+    ) -> Option<&Arc<Scheme>> {
+        self.outcome_vals
+            .get(&(outcome.to_owned(), name.to_owned()))
+            .and_then(|history| at(history, position))
+    }
+
+    /// Latest `impl` target before or at `position`, if any.
+    #[must_use]
+    pub fn last_impl(&self, position: usize) -> Option<&str> {
+        let index = self.impls.partition_point(|b| b.position <= position);
+        index
+            .checked_sub(1)
+            .map(|index| self.impls[index].value.as_str())
+    }
+
+    /// Solver-Beweiszähler des internen Pools (für den CLI-Profiler;
+    /// Lane-35-Hook, Lane-15-Zähler).
+    #[must_use]
+    pub fn smt_totals(&self) -> (u64, f64) {
+        self.solvers.smt_totals()
+    }
+
+    /// Termination-measure presence for a function at `position`
+    /// (`DEF_measure` span); the pattern/body type via
+    /// `exp_arms::check_measure` in the body pass.
+    #[must_use]
+    pub fn measure(&self, name: &str, position: usize) -> Option<Span> {
+        self.measures
+            .get(name)
+            .and_then(|history| at(history, position))
+            .copied()
+    }
+
+    /// Loop-measure presence for a function at `position`.
+    #[must_use]
+    pub fn loop_measure(&self, name: &str, position: usize) -> Option<Span> {
+        self.loop_measures
+            .get(name)
+            .and_then(|history| at(history, position))
+            .copied()
+    }
+
+    /// Whether `outcome` was instantiated at or before `position`.
+    #[must_use]
+    pub fn is_instantiated(&self, outcome: &str, position: usize) -> bool {
+        let index = self
+            .instantiations
+            .partition_point(|b| b.position <= position);
+        self.instantiations[..index]
+            .iter()
+            .any(|b| b.value.0 == outcome)
+    }
+
 
     fn signature(&self, name: &str, position: usize) -> Option<Constructor> {
         self.constructors
