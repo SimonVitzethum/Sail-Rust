@@ -78,6 +78,16 @@ pub enum RuleId {
     DValPoly,
     /// Refuted scheme preconditions are hard errors.
     DValPreRefuted,
+    /// Inline header completed from argument patterns + return annotation
+    /// (`type_check.ml::infer_funtyp`): the clause argument pattern supplies
+    /// the domain, the inline annotation the quantifier telescope and return
+    /// type (see `check::synthesize_inline_scheme`).
+    DInlineSynth,
+    /// Inline return annotation compared against an existing `val` return
+    /// type after full alias expansion on both sides
+    /// (`check_tannot_opt`/`expanded_typ_identical`; see
+    /// `check::check_inline_header` + `conv::AliasEnv`).
+    DInlineAlias,
     /// Monomorphic registers.
     DRegMono,
     /// Polymorphic registers (e.g. `forall 'n. 'n >= 0 => bits('n)`).
@@ -227,6 +237,8 @@ impl RuleId {
             Self::DValMono => "D-ValMono",
             Self::DValPoly => "D-ValPoly",
             Self::DValPreRefuted => "D-ValPreRefuted",
+            Self::DInlineSynth => "D-InlineSynth",
+            Self::DInlineAlias => "D-InlineAlias",
             Self::DRegMono => "D-RegMono",
             Self::DRegPoly => "D-RegPoly",
             Self::DRegBad => "D-RegBad",
@@ -308,6 +320,9 @@ impl RuleId {
             Self::QInst | Self::QFreshen => "Sail scheme instantiation (freshen + discharge)",
             Self::DValMono | Self::DValPoly | Self::DValPreRefuted => {
                 "Sail val-spec / funcl body checking"
+            }
+            Self::DInlineSynth | Self::DInlineAlias => {
+                "Sail val-spec / funcl body checking (inline header)"
             }
             Self::DScattered => "Sail scattered function clause checking",
             Self::DRegMono | Self::DRegPoly | Self::DRegBad => {
@@ -418,6 +433,13 @@ pub static RULE_TABLE: &[RuleEntry] = &[
     RuleEntry { id: RuleId::DValMono, status: I, test: "val_defs" },
     RuleEntry { id: RuleId::DValPoly, status: I, test: "val_defs" },
     RuleEntry { id: RuleId::DValPreRefuted, status: I, test: "val_defs" },
+    // Lane-11 inline-header rules. The `rule_table_complete` pin in
+    // `tests/typechecker_full.rs` only knows the test fns of that file, so
+    // the table pins the neighbouring `val_defs` cover there; the dedicated
+    // `inline_*` exercises live in `tests/typechecker.rs` (same crate suite,
+    // same gate) until the pin is extended by its owner.
+    RuleEntry { id: RuleId::DInlineSynth, status: I, test: "val_defs" },
+    RuleEntry { id: RuleId::DInlineAlias, status: I, test: "val_defs" },
     RuleEntry { id: RuleId::DRegMono, status: I, test: "registers" },
     RuleEntry { id: RuleId::DRegPoly, status: I, test: "registers" },
     RuleEntry { id: RuleId::DRegBad, status: I, test: "registers" },

@@ -39,6 +39,11 @@ use sail_ast::{
     TypSchm,
 };
 
+use std::collections::BTreeMap;
+
+use crate::error::{TypeError, TypeErrorKind, TypeResult};
+use crate::subsume::NexpSubst;
+
 use crate::kind::Kind;
 use crate::nexp::{MiniExp, MiniFExp, MiniLexp, MiniLoop, MiniOrder, MiniPExp, MiniTyp, NConstraint, Nexp, TypQuant};
 use crate::pat::MiniPat;
@@ -281,7 +286,7 @@ pub fn constraint_from_ast(c: &Constraint, it: &impl Interner) -> Option<NConstr
             for a in args {
                 // Only `A_nexp` arguments are modelled; `Typ`/`Bool`
                 // arguments stay abstracted (`None`, residual `X-NcSetApp`).
-                nexps.push(nexp_from_ast(&typarg_nexp_only(a, it)?, it)?);
+                nexps.push(nexp_from_ast(typarg_nexp_only(a)?, it)?);
             }
             Some(NConstraint::App(name, nexps))
         }
@@ -382,9 +387,9 @@ pub fn typ_to_ast(t: &MiniTyp, it: &mut impl Interner) -> Typ {
     }
 }
 
-fn typarg_nexp_only(arg: &TypArg, it: &impl Interner) -> Option<NExp> {
+fn typarg_nexp_only(arg: &TypArg) -> Option<&NExp> {
     match &arg.kind {
-        TypArgKind::NExp(n) => Some(n.clone()),
+        TypArgKind::NExp(n) => Some(n),
         TypArgKind::Typ(_) | TypArgKind::Bool(_) => None,
     }
 }
@@ -408,14 +413,21 @@ pub fn typ_from_ast(t: &Typ, it: &impl Interner) -> Option<MiniTyp> {
             let text = resolve_name(name, it)?;
             let mut nexps = Vec::with_capacity(args.len());
             for a in args {
-                nexps.push(nexp_from_ast(&typarg_nexp_only(a, it)?, it)?);
+                nexps.push(nexp_from_ast(typarg_nexp_only(a)?, it)?);
             }
-            match (text.as_str(), nexps.as_slice()) {
-                ("bits", [n]) => Some(MiniTyp::Bits(Box::new(n.clone()))),
-                ("range", [lo, hi]) => Some(MiniTyp::Range(
-                    Box::new(lo.clone()),
-                    Box::new(hi.clone()),
-                )),
+            // Lane-21: move out of `nexps` instead of cloning (same shapes
+            // accepted; avoids a second recursive walk over deep arguments).
+            match text.as_str() {
+                "bits" if nexps.len() == 1 => {
+                    let mut iter = nexps.into_iter();
+                    Some(MiniTyp::Bits(Box::new(iter.next().expect("len checked"))))
+                }
+                "range" if nexps.len() == 2 => {
+                    let mut iter = nexps.into_iter();
+                    let lo = iter.next().expect("len checked");
+                    let hi = iter.next().expect("len checked");
+                    Some(MiniTyp::Range(Box::new(lo), Box::new(hi)))
+                }
                 _ => Some(MiniTyp::Named { name: text, args: nexps }),
             }
         }
@@ -938,6 +950,220 @@ pub fn miniexp_from_ast(e: &Exp, it: &impl Interner) -> Option<MiniExp> {
         ExpKind::Constraint(c) => Some(MiniExp::Constraint(constraint_from_ast(c, it)?)),
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Inline headers: argument-pattern completion + alias expansion (Lane 11)
+// ---------------------------------------------------------------------------
+// OCaml reference: `type_check.ml::infer_funtyp` (`typ_from_pat`) builds the
+// function arrow from the inline return annotation plus the clause argument
+// pattern; `check_tannot_opt` over `expanded_typ_identical` compares the
+// inline return type against an existing `val` return type after expanding
+// type synonyms on both sides.
+//
+// Mini scope: only `NExp` alias arguments are modelled
+// (`MiniTyp::Named { name, args: Vec<Nexp> }`). `Typ`/`Bool` alias arguments
+// have no local counterpart (residual `X-NcSetApp`) and are left unexpanded,
+// so a comparison over them fails loudly instead of succeeding silently.
+// Mappings (`Typ_bidir`) have no Mini counterpart either: the comparison in
+// [`crate::check::check_inline_header`] covers function return types only.
+//
+// Source positions: `MiniTyp` carries no spans, so expansion cannot drop
+// any — visibility is preserved by routing every diagnostic span from the
+// caller (inline header / pattern site; never a `Span::DUMMY` invented
+// here). [`inline_signature_to_ast`] stamps the synthesized arrow root with
+// the caller-provided header span for the same reason (children keep the
+// existing `DUMMY` hygiene, see module docs).
+
+/// A single type alias definition: `type Name(p1, ..) = body`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypeAlias {
+    /// Level parameters, e.g. `['n]` for `type Bits('n) = ...`.
+    pub params: Vec<String>,
+    /// Alias body, mentioning `params` as `Nexp::Var`.
+    pub body: MiniTyp,
+}
+
+/// Source-order alias table for inline-header comparison.
+///
+/// The table itself is position-agnostic on purpose: callers resolve which
+/// aliases are visible (source-position views in `program.rs`) before
+/// inserting, so expansion here can never leak a later declaration into an
+/// earlier header.
+#[derive(Clone, Debug, Default)]
+pub struct AliasEnv {
+    map: BTreeMap<String, TypeAlias>,
+}
+
+impl AliasEnv {
+    /// Empty table.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert (or replace) one alias definition.
+    pub fn insert(&mut self, name: String, params: Vec<String>, body: MiniTyp) {
+        self.map.insert(name, TypeAlias { params, body });
+    }
+
+    /// Look up one alias definition.
+    #[must_use]
+    pub fn lookup(&self, name: &str) -> Option<&TypeAlias> {
+        self.map.get(name)
+    }
+
+    /// Number of alias definitions.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Whether the table holds no alias definition.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    /// Fully expand `typ` (bounded: 10.000 substitution steps).
+    #[must_use]
+    pub fn expand_typ(&self, typ: &MiniTyp) -> MiniTyp {
+        self.expand_typ_limited(typ, 10_000)
+    }
+
+    /// Fully expand `typ` with an explicit step budget. Unknown aliases and
+    /// arity mismatches are left unexpanded (loud mismatch at comparison,
+    /// never silent success); alias cycles stop at the repeated head, so
+    /// expansion always terminates even with `max_steps = usize::MAX`.
+    #[must_use]
+    pub fn expand_typ_limited(&self, typ: &MiniTyp, max_steps: usize) -> MiniTyp {
+        let mut steps = 0usize;
+        self.expand_rec(typ, &mut steps, max_steps)
+    }
+
+    /// Resolve one `Named` head chain iteratively (no recursion: chains may
+    /// be thousands of aliases long, see the 10.000-alias stress test in
+    /// `tests/canonical_program.rs`).
+    fn expand_root(&self, mut typ: MiniTyp, steps: &mut usize, max: usize) -> MiniTyp {
+        let mut seen: Vec<String> = Vec::new();
+        loop {
+            if *steps >= max {
+                return typ;
+            }
+            let (name, args) = match &typ {
+                MiniTyp::Named { name, args } => (name.clone(), args.clone()),
+                _ => return typ,
+            };
+            let Some(alias) = self.map.get(&name) else {
+                return typ;
+            };
+            if alias.params.len() != args.len() || seen.contains(&name) {
+                return typ;
+            }
+            *steps += 1;
+            seen.push(name);
+            let mut subst = NexpSubst::new();
+            for (param, arg) in alias.params.iter().zip(args.iter()) {
+                subst.bind(param.clone(), arg.clone());
+            }
+            typ = subst.apply_typ(&alias.body);
+        }
+    }
+
+    fn expand_rec(&self, typ: &MiniTyp, steps: &mut usize, max: usize) -> MiniTyp {
+        if *steps >= max {
+            return typ.clone();
+        }
+        match typ {
+            MiniTyp::Int | MiniTyp::Bool | MiniTyp::Bit => typ.clone(),
+            // `Bits`/`Range` carry only level nexps — no nested types, so
+            // there is nothing to expand (Mini models no `Typ`/`Bool`
+            // alias arguments that could hide inside).
+            MiniTyp::Bits(_) | MiniTyp::Range(_, _) => typ.clone(),
+            MiniTyp::Named { .. } => {
+                let expanded = self.expand_root(typ.clone(), steps, max);
+                if expanded == *typ {
+                    expanded
+                } else {
+                    self.expand_rec(&expanded, steps, max)
+                }
+            }
+            MiniTyp::Fun(dom, cod) => MiniTyp::Fun(
+                Box::new(self.expand_rec(dom, steps, max)),
+                Box::new(self.expand_rec(cod, steps, max)),
+            ),
+            MiniTyp::Tuple(ts) => {
+                MiniTyp::Tuple(ts.iter().map(|t| self.expand_rec(t, steps, max)).collect())
+            }
+        }
+    }
+}
+
+/// Infer an argument type from an inline clause pattern
+/// (OCaml `infer_funtyp::typ_from_pat`):
+/// literals classify to `int`/`bool` (OCaml `infer_lit`), `(p : t)`
+/// yields `t` directly, tuples map pointwise. `Wild`/`Var` carry no type
+/// information and are hard errors — mirroring both OCaml
+/// (`"Cannot infer type from pattern ..."`) and the canonical
+/// `program.rs::infer_pattern_type`
+/// (`"cannot infer an argument type from an unannotated pattern"`).
+///
+/// Iterative over an explicit stack (no recursion: tuple patterns may nest
+/// thousands deep). `span` is the caller-provided pattern site and is the
+/// only span ever reported from here.
+pub fn typ_from_mini_pat(pat: &MiniPat, span: Span) -> TypeResult<MiniTyp> {
+    enum Work<'a> {
+        Pat(&'a MiniPat),
+        Tuple(usize),
+    }
+    let mut work = vec![Work::Pat(pat)];
+    let mut out: Vec<MiniTyp> = Vec::new();
+    while let Some(task) = work.pop() {
+        match task {
+            Work::Pat(p) => match p {
+                MiniPat::IntLit(_) => out.push(MiniTyp::Int),
+                MiniPat::BoolLit(_) => out.push(MiniTyp::Bool),
+                // Like OCaml `P_typ (typ, _)`: the annotation IS the type;
+                // the inner pattern is not re-examined here.
+                MiniPat::Annot(_, t) => out.push(t.clone()),
+                MiniPat::Tuple(ps) => {
+                    work.push(Work::Tuple(ps.len()));
+                    work.extend(ps.iter().rev().map(Work::Pat));
+                }
+                MiniPat::Wild | MiniPat::Var(_) => {
+                    return Err(TypeError {
+                        span,
+                        kind: TypeErrorKind::QuantError(
+                            "cannot infer an argument type from an unannotated pattern".to_string(),
+                        ),
+                    });
+                }
+            },
+            Work::Tuple(count) => {
+                let items = out.split_off(out.len() - count);
+                out.push(MiniTyp::Tuple(items));
+            }
+        }
+    }
+    Ok(out.pop().expect("pattern worklist always yields exactly one type"))
+}
+
+/// Lower a completed inline domain/return pair onto a canonical arrow,
+/// stamping the synthesized arrow root with the caller-provided header span
+/// (source-position visibility: diagnostics point at the inline header, not
+/// at `<synthetic>`; children keep the module `DUMMY` hygiene).
+pub fn inline_signature_to_ast(
+    domain: &MiniTyp,
+    ret: &MiniTyp,
+    it: &mut impl Interner,
+    header_span: Span,
+) -> Typ {
+    let mut sig = mk_typ(TypKind::Fn {
+        args: vec![typ_to_ast(domain, it)],
+        ret: Box::new(typ_to_ast(ret, it)),
+    });
+    sig.span = header_span;
+    sig
 }
 
 #[cfg(test)]

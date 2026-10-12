@@ -7,7 +7,7 @@
 
 use crate::env::TypeEnv;
 use crate::error::{Span, TypeError, TypeErrorKind, TypeResult};
-use crate::kind::{KindEnv, check_constraint_kind, check_typ_kind};
+use crate::kind::{Kind, KindEnv, check_constraint_kind, check_typ_kind};
 use crate::nexp::{MiniExp, MiniTyp, NConstraint, Nexp, TypQuant};
 use crate::pat::MiniPat;
 use crate::prove::{SolverContext, kenv_of_quants, prove_in_context};
@@ -646,6 +646,109 @@ fn sort_constraint_vars(c: &NConstraint, ints: &mut Vec<String>, bools: &mut Vec
 
 fn disp(e: &TypeError) -> String {
     e.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Inline headers (Lane 11)
+// ---------------------------------------------------------------------------
+// OCaml reference: `type_check.ml::infer_funtyp` completes an inline
+// return annotation with the clause argument patterns to a full signature,
+// and `check_tannot_opt` over `expanded_typ_identical` validates the inline
+// return type against an existing `val` return type after expanding type
+// synonyms on both sides.
+//
+// Signatur-Ergänzungsregel (implemented here):
+// `inline quant + inline ret + arg patterns  ==>  TypQuant { quants, constraint,
+// Fun(typ_from_pat(arg), ret) }`.
+// The domain comes from [`crate::conv::typ_from_mini_pat`]; `MiniTyp::Fun`
+// is unary, so a tuple pattern stays a single tuple domain — the 1-tuple /
+// multi-argument distinction exists only at the canonical `TypKind::Fn`
+// level (see [`crate::conv::inline_signature_to_ast`]).
+//
+// Alias-Fälle (all handled by [`crate::conv::AliasEnv::expand_typ`]):
+// direct match, single expansion, chained expansion (`A -> B -> int`),
+// expansion nested inside `Fun`/`Tuple`/`Bits` positions, unknown aliases
+// left unexpanded (loud mismatch), arity mismatches left unexpanded (loud
+// mismatch), and alias cycles (terminate at the repeated head).
+//
+// Source positions: every diagnostic carries a caller-provided span —
+// `header_span`/`inline_span` (the inline annotation site under validation),
+// with the `val` site quoted as `(declared here: ...)` in the message à la
+// OCaml `Hint ("declared here", vs_l, l)`. No `Span::DUMMY` is ever invented
+// here, so an inline error can never be mistaken for a synthetic location.
+
+/// Complete an inline header to a full scheme (OCaml `infer_funtyp`).
+///
+/// `quants`/`constraint` are the inline quantifier telescope, `ret` the
+/// inline return annotation, `arg_pat` the single clause argument pattern.
+/// Diagnostics carry `header_span`.
+pub fn synthesize_inline_scheme(
+    quants: Vec<(String, Kind)>,
+    constraint: NConstraint,
+    arg_pat: &MiniPat,
+    ret: &MiniTyp,
+    header_span: Span,
+) -> TypeResult<TypQuant> {
+    let domain = crate::conv::typ_from_mini_pat(arg_pat, header_span)?;
+    Ok(TypQuant {
+        quants,
+        constraint,
+        typ: MiniTyp::Fun(Box::new(domain), Box::new(ret.clone())),
+    })
+}
+
+/// Validate an inline return annotation against an existing `val` scheme
+/// (OCaml `check_tannot_opt` over `expanded_typ_identical`, return-type
+/// projection — mappings/`Typ_bidir` have no Mini counterpart).
+///
+/// - A non-empty inline telescope alongside an existing `val` spec is a
+///   duplicate-quantifier error (OCaml `"Duplicate quantifier between inline
+///   annotation and 'val' declaration"`).
+/// - Otherwise both return types are fully alias-expanded
+///   ([`crate::conv::AliasEnv::expand_typ`]) and compared syntactically;
+///   a mismatch reports `"<val-ret> and <inline-ret> do not match between
+///   function and 'val' declaration"`, mirroring OCaml.
+/// - A non-arrow `val` body type is rejected like the canonical
+///   `"function signature is not an arrow type"`.
+///
+/// All errors carry `inline_span`; the `val` site is quoted in the message
+/// as `(declared here: {val_span})`.
+pub fn check_inline_header(
+    val_scheme: &TypQuant,
+    inline_quants: &[(String, Kind)],
+    inline_ret: &MiniTyp,
+    val_span: Span,
+    inline_span: Span,
+    aliases: &crate::conv::AliasEnv,
+) -> TypeResult<()> {
+    if !inline_quants.is_empty() {
+        return Err(TypeError {
+            span: inline_span,
+            kind: TypeErrorKind::QuantError(format!(
+                "duplicate quantifier between inline annotation and 'val' declaration (declared here: {val_span})"
+            )),
+        });
+    }
+    let MiniTyp::Fun(_, val_ret) = &val_scheme.typ else {
+        return Err(TypeError {
+            span: inline_span,
+            kind: TypeErrorKind::QuantError(format!(
+                "function signature is not an arrow type (declared here: {val_span})"
+            )),
+        });
+    };
+    let expanded_val = aliases.expand_typ(val_ret);
+    let expanded_inline = aliases.expand_typ(inline_ret);
+    if expanded_val == expanded_inline {
+        Ok(())
+    } else {
+        Err(TypeError {
+            span: inline_span,
+            kind: TypeErrorKind::QuantError(format!(
+                "{val_ret} and {inline_ret} do not match between function and 'val' declaration (declared here: {val_span})"
+            )),
+        })
+    }
 }
 
 #[cfg(test)]

@@ -25,8 +25,16 @@ pub mod check;
 pub mod conv;
 pub mod env;
 pub mod error;
+pub mod exp_arms;
+pub mod exp_match;
+pub mod exp_misc;
+pub mod exp_struct;
 pub mod kind;
+pub mod lexp_bounds;
+pub mod mapping_expand;
+pub mod measure_check;
 pub mod nexp;
+pub mod outcome_elab;
 pub mod pat;
 pub mod prove;
 pub mod program;
@@ -34,9 +42,15 @@ mod canonical_body;
 mod canonical_eq;
 mod canonical_literal;
 pub mod quant;
+pub mod recursion;
 pub mod rules;
+pub mod scattered_elab;
 pub mod solver;
 pub mod subsume;
+pub mod typed_def;
+pub mod vector_lexp;
+pub mod vector_lexp_bridge;
+pub mod vector_prims;
 
 pub use advanced::{
     AdvTyp, AdvTypArg, ARM_BITVEC_WIDTHS, adv_arg_to_ast, adv_from_ast, adv_to_ast,
@@ -58,3 +72,4 @@ pub use quant::{QuantScope, QuantVar};
 pub use rules::{RuleEntry, RuleId, RuleStatus, RULE_TABLE};
 pub use solver::{CachingSolver, CacheStats, ProveResult, Solver, StubSolver};
 pub use subsume::{Coercion, NexpSubst, Subsumption};
+pub use typed_def::{TypedDef, TypedDefKind};
