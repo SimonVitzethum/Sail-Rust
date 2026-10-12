@@ -40,6 +40,16 @@ Compilerlauf nicht erfolgreich abschließen.
 | Eingebettete Bibliotheken | `crates/sail-prelude/` |
 | Diagnosen und Messinfrastruktur | `crates/sail-diag/`, `crates/sail-perf/` |
 
+Worktree-Stand (uncommitted, Lane-13/18): typisierte Rewrite-Stufe mit 10
+implementierten Pässen in `crates/sail-rewrite/src/pipeline.rs:279-311,348-394`
+(`is_typed_implemented_pass`, `TypedStubPass`, `TypedPipeline`),
+gemeinsame Helfer in `crates/sail-rewrite/src/passes/typed.rs`, neue Pässe
+`add_unspecified_rec`, `merge_function_clauses`, `minimise_recursive_functions`,
+`pat_string_append`, `remove_blocks`, `remove_duplicate_valspecs`,
+`remove_superfluous_letbinds` unter `crates/sail-rewrite/src/passes/`,
+Ordnungstests in `crates/sail-rewrite/tests/typed_pipeline.rs`;
+`crates/sail-cli/` verbraucht `TypedPipeline` weiter nicht.
+
 ## Out-of-core und Parallelisierung
 
 Die Auslagerungseinheit ist eine kanonische Definition mit ihrem lokalen
@@ -63,10 +73,18 @@ gemeinsam. Vor dem nächsten Input wird ein Credit erworben; Fehler und Panics
 beenden den weiteren Input. Das hält die Fehlerreihenfolge deterministisch.
 
 Die CLI nutzt standardmäßig höchstens 16 Worker; `SAIL_RS_THREADS` setzt die
-Anzahl. Der aktuelle Speichermechanismus begrenzt ein Definitionenfenster,
-noch kein striktes Bytebudget. Eine einzelne Definition samt Zwischenrepräsentation
-muss in RAM passen; exportierte Signaturen und Zusammenfassungen wachsen mit
-dem Programm. Auch die Solveranzahl besitzt noch keine adaptive Speicherquote.
+Anzahl. Der committete Speichermechanismus begrenzt ein Definitionenfenster,
+noch kein striktes Bytebudget. Worktree-Stand (uncommitted, Lane-22/23):
+Byte-Budget in `crates/sail-ooc/src/budget.rs:49-94`
+(`parse_byte_limit`, `byte_budget_from_env`), Scheduler mit
+`crates/sail-shard/src/scheduler.rs:57-59` (`new_byte_budget`) und
+`:324` (`run_streaming_weighed`); Z3-Quote in
+`crates/sail-solver/src/quota.rs:74-82,86,134,257,290-325`
+(`BYTES_PER_SOLVER`, `QuotaConfig`, `QuotaStats`, `set_max_live`,
+`QuotaPermit`, `QuotaRecommendation::recommend`), durchgesetzt über
+`crates/sail-solver/src/pool.rs:104-115` (`set_max_idle`/`evict_idle`) und
+`crates/sail-solver/src/cache.rs:278-289` (`set_max_bytes`/`enforce_byte_quota`),
+Politik-Hilfe in `crates/sail-perf/src/quota.rs:22-39` (`QuotaAdvice::recommend`).
 
 Spool-Priorität: `SAIL_RS_SPOOL_DIR`, sonst `$XDG_CACHE_HOME/sail-rs/spool`,
 sonst `$HOME/.cache/sail-rs/spool`, ohne beide Variablen `target/sail-rs-spool`.
@@ -110,6 +128,15 @@ sie sind keine Integerliterale oder numerischen Typgrößen.
 `Program` hält immutable Signaturen und Deklarationshistorien. Jede Körperprüfung
 sieht nur Deklarationen bis zur eigenen Quellposition. Spätere Val-Spezifikationen,
 Overload-Erweiterungen oder globale Constraints dürfen frühere Körper nicht ändern.
+Worktree-Stand (uncommitted, Lane-08/16/19): Record-/Union-Feldpayloads in
+`crates/sail-ty/src/program.rs:64-80,252,554-560,1340`
+(`RecordField`, `RecordDef`, `records`-Tabelle, `record()`), gelesen über
+`crates/sail-ty/src/ast_env.rs:97-129`
+(`record_fields_ast`, `variant_ctors_ast`, `accessor_scheme_ast`);
+Vektor-Prim-Normalisierung in `crates/sail-ty/src/vector_prims.rs:47-71,123-182`
+(`VectorPrim`, `classify`, `normalize`, `resolve_app`), Call-Site
+`crates/sail-ty/src/canonical_body.rs:647`; Arm-Planer für fehlende
+kanonische Regeln in `crates/sail-ty/src/exp_arms.rs` (Lane-19).
 Konstruktorbedingungen werden nach simultaner Parameterersetzung bewiesen.
 Inline-Rückgabeannotationen werden mit den Argumentmustern zu Signaturen ergänzt.
 Overloads werden in OCaml-Reihenfolge auf Argumente, Ergebnis und Bedingungen
@@ -137,10 +164,15 @@ optionaler Negation; sie gelten nur im jeweiligen Scope. Foreach-Indizes bekomme
 Bereichsannahmen und sind immutable. While benutzt positive Bedingungsfakten;
 Repeat/until setzt seine spätere Bedingung nicht für den Körper voraus.
 
-Der Rückgabewert der heutigen kanonischen Prüfung ist eine Anzahl geprüfter
-Ausdrücke. Vollständige typisierte Definitionen, alle Muster-/Ausdrucksregeln,
+Der Rückgabewert der committeten kanonischen Prüfung ist eine Anzahl geprüfter
+Ausdrücke. Worktree-Stand (uncommitted, Lane-17): elaborierte Emission als
+`crates/sail-ty/src/typed_def.rs:37-53` (`TypedDefKind`, `TypedDef` mit
+Typ-/Constraint-Payload statt Zählung), verdrahtet in
+`crates/sail-cli/src/typecheck.rs:3-30,229-279`; Downstream fehlt weiter,
+`require_typed_program` bricht explizit mit Exit 1 ab. Vollständige typisierte Definitionen, alle Muster-/Ausdrucksregeln,
 Refinement-/Existential-Elaboration und die Integration in Lean fehlen weiterhin.
-Die aktuelle WIP-Prüfung hat einen bestätigten 128-MiB-OOM-Befund.
+Zum 128-MiB-Befund (Test-Parallelität, kein Leak) gilt der korrigierte Stand in
+[WORK_STATE.md](WORK_STATE.md).
 
 ## Solver und Beweisgrenzen
 
@@ -156,8 +188,11 @@ Die Solverprozesse werden exklusiv ausgeliehen und vor jeder Anfrage zurückgese
 Ein begrenzter Memo-Cache hält bis zu 128 Ergebnisse. Anfragen besitzen einen
 3-Sekunden-Timeout; der I/O-Worker deckt auch blockiertes Schreiben/Lesen ab.
 Abbruch/Freigabe beendet Prozesse und wartet auf Prozess und Thread. Z3 erbt die
-cgroup-Grenzen. Die kanonischen Beweiszähler sind noch nicht vollständig an den
-CLI-Profiler angeschlossen; Nullwerte dort belegen keine fehlenden Z3-Anfragen.
+cgroup-Grenzen. Worktree-Stand (uncommitted, Lane-15): Zähler an der Quelle
+(`SolverPool::smt_totals`, `MemoCache::smt_totals`) und Profiler-Senke
+(`phase_with_counters`, `add_smt_to_last`) sind getestet; der Call-Site-Patch
+in `sail-cli/src/typecheck.rs`/`main.rs` fehlt noch. Beleg:
+`evidence/2026-10-12/lane-15-profiler.log` §1/§3.
 
 Das optionale native `z3`-Feature und die ältere `sail-nexp`-Algebra sind eigene
 Schnittstellen. Deren vereinfachende Prädikate oder Mini-AST-Tests ersetzen die
@@ -172,7 +207,10 @@ paralleles unabhängiges Speichermodell eingeführt. Eigenes Rust enthält kein
 Unsafe; der Workspace verbietet es mit `unsafe_code = "forbid"`.
 
 `sail-lake` besitzt Projekt-/Registertemplates und Golden-Fixtures unter
-`crates/sail-lake/golden/`. Defaults im Quellcode: Lean `v4.29.0`, lean-sail `v6`;
+`crates/sail-lake/golden/`. Worktree-Stand (uncommitted, Lane-14): echter
+Funktionskörper-Drucker als `doc_exp`-Port in
+`crates/sail-lean/src/exps.rs:152-199,505`
+(`print_fun_def`, `render_fun_def`, `print_exp_top`, Hauptausdruckdrucker). Defaults im Quellcode: Lean `v4.29.0`, lean-sail `v6`;
 mathlib `v4.29.0` nur bei Opt-in für reelle Zahlen. Interface V1 verwendet
 `ConcurrencyInterfaceV1`/`SpecializationV1`, V2 `ArchSem`/`SpecializationArchSem`.
 Das Layout enthält Toolchain, Lake-Konfiguration, Manifest, `<Camel>/Defs.lean`

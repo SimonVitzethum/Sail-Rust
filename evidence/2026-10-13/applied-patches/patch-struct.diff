@@ -1,0 +1,581 @@
+diff --git a/crates/sail-ty/src/canonical_body.rs b/crates/sail-ty/src/canonical_body.rs
+--- a/crates/sail-ty/src/canonical_body.rs
++++ b/crates/sail-ty/src/canonical_body.rs
+@@ -1078,6 +1078,43 @@
+             parent: Some(parent.clone()),
+         }))
+     }
++    /// OCaml `check_exp` E_struct/E_struct_update premise: resolve synonyms
++    /// of the expected type; the head must be a declared record
++    /// (`ExpectedMustBeRecord`), else "not a record".
++    fn struct_expected_record(&self, expected: &Type, span: Span) -> TypeResult<String> {
++        let resolved = self.resolve(expected)?;
++        if let Some(name) = resolved.name() {
++            if self.program.record(name, self.position).is_some() {
++                return Ok(name.to_owned());
++            }
++        }
++        Err(TypeError::mismatch(
++            span,
++            "record".to_owned(),
++            format!("not a record: {}", resolved.label()),
++        ))
++    }
++
++    /// Field payload through the record accessor contract (OCaml
++    /// `Env.get_accessor`, Lane-08 `Program::accessor`): the preserved
++    /// `Fn(record) -> field` scheme unified against the base type.
++    fn struct_field_type(
++        &self,
++        record: &str,
++        field: &str,
++        base: &Type,
++        span: Span,
++    ) -> TypeResult<Type> {
++        let scheme = self
++            .program
++            .accessor(record, field, self.position)
++            .cloned()
++            .ok_or_else(|| TypeError::unbound_var(span, field.to_owned()))?;
++        let accessor = Type::root(scheme);
++        let instantiated = self.instantiate(accessor, std::slice::from_ref(base), None, span)?;
++        Ok(instantiated.child(Step::Result))
++    }
++
+     fn compatible(&self, expected: &Type, found: &Type, span: Span) -> TypeResult<()> {
+         let mut pairs = vec![(expected.clone(), found.clone())];
+         while let Some((expected, found)) = pairs.pop() {
+@@ -1309,6 +1346,7 @@
+             Call(&'a Exp, Vec<Type>, usize),
+             Vector(&'a Exp, usize),
+             Tuple(&'a Exp, usize),
++            Struct(&'a Exp, usize),
+         }
+         let mut work = vec![Synthesis::Enter(exp)];
+         let mut results = Vec::new();
+@@ -1339,6 +1377,67 @@
+                             work.push(Synthesis::Enter(first));
+                             continue;
+                         }
++                        ExpKind::Struct { name, fields } => {
++                            // OCaml `infer_exp` E_struct ~L3774:
++                            // `SN_anon` never infers (`StructNameMustMatch`).
++                            let rectyp_id = match name {
++                                StructName::Anon => {
++                                    return Err(unsupported(
++                                        exp.span,
++                                        "Cannot infer type of struct literal",
++                                    ));
++                                }
++                                StructName::Id(id) => {
++                                    let found = self.name(id)?.to_owned();
++                                    if self.program.record(&found, self.position).is_none() {
++                                        return Err(TypeError::unbound_var(id.span, found));
++                                    }
++                                    found
++                                }
++                            };
++                            // `FullFieldCoverage`: unknown or duplicate
++                            // fields are hard errors; missing fields error.
++                            let record = self
++                                .program
++                                .record(&rectyp_id, self.position)
++                                .expect("checked struct record");
++                            {
++                                let mut seen = std::collections::BTreeSet::new();
++                                for fexp in fields.iter() {
++                                    let field_name = self.name(&fexp.field)?.to_owned();
++                                    if !record.fields.iter().any(|f| f.name == field_name) {
++                                        return Err(TypeError::unbound_var(
++                                            fexp.field.span,
++                                            field_name,
++                                        ));
++                                    }
++                                    if !seen.insert(field_name.clone()) {
++                                        return Err(unsupported(
++                                            fexp.field.span,
++                                            format!("duplicate field '{field_name}'"),
++                                        ));
++                                    }
++                                }
++                                if seen.len() != record.fields.len() {
++                                    let missing: Vec<_> = record
++                                        .fields
++                                        .iter()
++                                        .map(|f| f.name.clone())
++                                        .filter(|n| !seen.contains(n))
++                                        .collect();
++                                    return Err(unsupported(
++                                        exp.span,
++                                        format!(
++                                            "struct literal missing fields: {}",
++                                            missing.join(", ")
++                                        ),
++                                    ));
++                                }
++                            }
++                            work.push(Synthesis::Struct(exp, fields.len()));
++                            work.extend(fields.iter().rev().map(|f| Synthesis::Enter(&f.value)));
++                            continue;
++                        }
+                         ExpKind::App { func, args } => {
+                             let mut candidates = self.call_candidates(func, scope, args.len())?;
+                             if candidates.len() != 1 {
+@@ -1440,6 +1539,259 @@
+                     };
+                     results.push(self.value_type(exp, typ));
+                 }
++                Synthesis::Struct(exp, count) => {
++                    // OCaml `infer_exp` E_struct ~L3774: every field is
++                    // inferred, the telescope is unified field by field
++                    // (`merge_uvars`), missing instantiations are hard
++                    // errors. `SN_anon` never infers (rejected in `Enter`
++                    // and re-checked here).
++                    let inferred = results.split_off(results.len() - count);
++                    let ExpKind::Struct { name, fields } = &exp.kind else {
++                        unreachable!("struct synthesis shape")
++                    };
++                    let StructName::Id(id) = name else {
++                        return Err(unsupported(exp.span, "Cannot infer type of struct literal"));
++                    };
++                    let rectyp_id = self.name(id)?.to_owned();
++                    let record = self
++                        .program
++                        .record(&rectyp_id, self.position)
++                        .cloned()
++                        .ok_or_else(|| TypeError::unbound_var(id.span, rectyp_id.clone()))?;
++                    let mut quantified: Vec<Symbol> = Vec::new();
++                    let mut quantified_scalars: Vec<(Symbol, Kind)> = Vec::new();
++                    for item in &record.quant {
++                        match item {
++                            QuantItem::Id(binder) if binder.kind == Kind::Type => {
++                                quantified.push(binder.kid);
++                            }
++                            QuantItem::Id(binder) => {
++                                quantified_scalars.push((binder.kid, binder.kind));
++                            }
++                            QuantItem::Constraint(_) => {}
++                        }
++                    }
++                    let mut bindings: Vec<(Symbol, Type)> = Vec::new();
++                    let mut scalar_bindings: Vec<(Symbol, Scalar)> = Vec::new();
++                    for (fexp, inferred_typ) in fields.iter().zip(inferred.iter()) {
++                        let field_name = self.name(&fexp.field)?.to_owned();
++                        let scheme = self
++                            .program
++                            .accessor(&rectyp_id, &field_name, self.position)
++                            .cloned()
++                            .ok_or_else(|| {
++                                TypeError::unbound_var(fexp.field.span, field_name.clone())
++                            })?;
++                        let formal = Type::root(scheme).child(Step::Result);
++                        let mut pairs = vec![(formal, inferred_typ.clone())];
++                        while let Some((formal, actual)) = pairs.pop() {
++                            let formal = self.resolve(&formal)?;
++                            let actual = self.resolve(&actual)?;
++                            match &formal.node().kind {
++                                TypKind::Var(symbol) if quantified.contains(symbol) => {
++                                    if let Some((_, bound)) =
++                                        bindings.iter().find(|(bound, _)| bound == symbol)
++                                    {
++                                        self.compatible(bound, &actual, fexp.value.span)?;
++                                    } else {
++                                        bindings.push((*symbol, actual));
++                                    }
++                                }
++                                TypKind::Tuple(items) => {
++                                    let TypKind::Tuple(found) = &actual.node().kind else {
++                                        return Err(mismatch(fexp.value.span, &formal, &actual));
++                                    };
++                                    if items.len() != found.len() {
++                                        return Err(arity(fexp.value.span, items.len(), found.len()));
++                                    }
++                                    for i in 0..items.len() {
++                                        pairs.push((
++                                            formal.child(Step::Tuple(i)),
++                                            actual.child(Step::Tuple(i)),
++                                        ));
++                                    }
++                                }
++                                TypKind::App { args, .. } => {
++                                    let TypKind::App { args: found, .. } = &actual.node().kind
++                                    else {
++                                        return Err(mismatch(fexp.value.span, &formal, &actual));
++                                    };
++                                    if formal.name() != actual.name() {
++                                        return Err(mismatch(fexp.value.span, &formal, &actual));
++                                    }
++                                    if args.len() != found.len() {
++                                        return Err(arity(fexp.value.span, args.len(), found.len()));
++                                    }
++                                    for (i, (arg, _)) in args.iter().zip(found).enumerate() {
++                                        match (&arg.kind, &found[i].kind) {
++                                            (TypArgKind::Typ(_), TypArgKind::Typ(_)) => {
++                                                pairs.push((
++                                                    formal.child(Step::TypeArgument(i)),
++                                                    actual.child(Step::TypeArgument(i)),
++                                                ));
++                                            }
++                                            (
++                                                TypArgKind::NExp(_)
++                                                | TypArgKind::Bool(_),
++                                                TypArgKind::NExp(_)
++                                                | TypArgKind::Bool(_),
++                                            ) => {
++                                                let formal_arg = Scalar {
++                                                    owner: formal.clone(),
++                                                    index: i,
++                                                }
++                                                .resolved();
++                                                let actual_arg = Scalar {
++                                                    owner: actual.clone(),
++                                                    index: i,
++                                                }
++                                                .resolved();
++                                                let variable = match &formal_arg.argument().kind {
++                                                    TypArgKind::NExp(node) => match &node.kind {
++                                                        NExpKind::Var(k) => Some((*k, Kind::Int)),
++                                                        _ => None,
++                                                    },
++                                                    TypArgKind::Bool(c) => match &c.kind {
++                                                        ConstraintKind::Var(k) => {
++                                                            Some((*k, Kind::Bool))
++                                                        }
++                                                        _ => None,
++                                                    },
++                                                    _ => None,
++                                                };
++                                                if let Some((symbol, _)) = variable.filter(
++                                                    |(s, k)| {
++                                                        quantified_scalars.iter().any(
++                                                            |(bound, bound_kind)| {
++                                                                bound == s && bound_kind == k
++                                                            },
++                                                        )
++                                                    },
++                                                ) {
++                                                    if let Some((_, bound)) = scalar_bindings
++                                                        .iter()
++                                                        .find(|(bound, _)| *bound == symbol)
++                                                    {
++                                                        self.scalar_equal(
++                                                            bound,
++                                                            &actual_arg,
++                                                            fexp.value.span,
++                                                        )?;
++                                                    } else {
++                                                        scalar_bindings.push((symbol, actual_arg));
++                                                    }
++                                                } else {
++                                                    self.scalar_equal(
++                                                        &formal_arg,
++                                                        &actual_arg,
++                                                        fexp.value.span,
++                                                    )?;
++                                                }
++                                            }
++                                            _ => {
++                                                return Err(mismatch(
++                                                    fexp.value.span,
++                                                    &formal,
++                                                    &actual,
++                                                ));
++                                            }
++                                        }
++                                    }
++                                }
++                                _ => {
++                                    self.compatible(&formal, &actual, fexp.value.span)?;
++                                }
++                            }
++                        }
++                    }
++                    for item in &record.quant {
++                        if let QuantItem::Id(binder) = item {
++                            let bound = if binder.kind == Kind::Type {
++                                bindings.iter().any(|(b, _)| *b == binder.kid)
++                            } else {
++                                scalar_bindings.iter().any(|(b, _)| *b == binder.kid)
++                            };
++                            if !bound {
++                                return Err(unsupported(
++                                    exp.span,
++                                    format!(
++                                        "Failed to instantiate {} when inferring struct literal of type {}",
++                                        self.it.resolve(binder.kid).unwrap_or("<unknown>"),
++                                        rectyp_id
++                                    ),
++                                ));
++                            }
++                        }
++                    }
++                    // Apply the merged telescope bindings to the record
++                    // argument. The declaration interner still owns the
++                    // telescope symbols, so the instantiated head resolves
++                    // without fresh-symbol bookkeeping.
++                    let mut interner = (*record.interner).clone();
++                    let rec_name = Name::dummy(interner.intern(&rectyp_id));
++                    let mut args = Vec::with_capacity(record.quant.len());
++                    for item in &record.quant {
++                        let QuantItem::Id(binder) = item else {
++                            continue;
++                        };
++                        match binder.kind {
++                            Kind::Type => {
++                                args.push(Node::dummy(TypArgKind::Typ(Node::dummy(
++                                    TypKind::Var(binder.kid),
++                                ))));
++                            }
++                            Kind::Int => {
++                                args.push(Node::dummy(TypArgKind::NExp(Node::dummy(
++                                    NExpKind::Var(binder.kid),
++                                ))));
++                            }
++                            Kind::Bool => {
++                                args.push(Node::dummy(TypArgKind::Bool(Box::new(
++                                    Node::dummy(ConstraintKind::Var(binder.kid)),
++                                ))));
++                            }
++                        }
++                    }
++                    let mut record_typ = Type::owned(
++                        Node::dummy(if args.is_empty() {
++                            TypKind::Id(rec_name)
++                        } else {
++                            TypKind::App {
++                                name: rec_name,
++                                args,
++                            }
++                        }),
++                        Arc::new(interner),
++                    );
++                    record_typ.substitutions = Arc::new(Substitutions {
++                        types: bindings,
++                        scalars: scalar_bindings,
++                    });
++                    let scope = self.context.as_ref().map(|s| Type::root(s.clone()));
++                    let assumptions = self.proof_assumptions(&scope);
++                    for q in &record.quant {
++                        if let QuantItem::Constraint(c) = q {
++                            let query = CanonicalQuery::implication(
++                                &assumptions,
++                                View {
++                                    negated: false,
++                                    constraint: c,
++                                    context: record_typ.proof_context(),
++                                },
++                                None,
++                            )
++                            .map_err(|e| unsupported(exp.span, e))?;
++                            if !self.program.prove(query).is_valid() {
++                                return Err(TypeError::constraint_not_proved(
++                                    exp.span,
++                                    "dependent struct quantifier constraint",
++                                ));
++                            }
++                        }
++                    }
++                    let record_typ = self.resolve(&record_typ)?;
++                    results.push(self.value_type(exp, record_typ));
++                }
+             }
+         }
+         Ok(results.pop().expect("synthesized root"))
+@@ -2014,6 +2366,73 @@
+                             scope: scope.clone(),
+                             returning: returning.clone(),
+                         });
++                    }
++                }
++                ExpKind::Struct { name, fields } => {
++                    // OCaml `check_exp` E_struct ~L2218: the expected type
++                    // must be a declared record (`ExpectedMustBeRecord`), the
++                    // struct name must match (`StructNameMustMatch`), every
++                    // field is checked against its accessor payload and the
++                    // literal owes full coverage (`FullFieldCoverage`).
++                    let rectyp_id = self.struct_expected_record(&expected, exp.span)?;
++                    match name {
++                        StructName::Anon => {}
++                        StructName::Id(id) => {
++                            let found = self.name(id)?.to_owned();
++                            if found != rectyp_id {
++                                return Err(TypeError::mismatch(
++                                    exp.span,
++                                    rectyp_id.clone(),
++                                    format!("struct {found}"),
++                                ));
++                            }
++                        }
++                    }
++                    let record = self
++                        .program
++                        .record(&rectyp_id, self.position)
++                        .expect("checked struct record");
++                    {
++                        let mut seen = std::collections::BTreeSet::new();
++                        for fexp in fields.iter() {
++                            let field_name = self.name(&fexp.field)?.to_owned();
++                            if !record.fields.iter().any(|f| f.name == field_name) {
++                                return Err(TypeError::unbound_var(fexp.field.span, field_name));
++                            }
++                            if !seen.insert(field_name.clone()) {
++                                return Err(unsupported(
++                                    fexp.field.span,
++                                    format!("duplicate field '{field_name}'"),
++                                ));
++                            }
++                        }
++                        if seen.len() != record.fields.len() {
++                            let missing: Vec<_> = record
++                                .fields
++                                .iter()
++                                .map(|f| f.name.clone())
++                                .filter(|n| !seen.contains(n))
++                                .collect();
++                            return Err(unsupported(
++                                exp.span,
++                                format!("struct literal missing fields: {}", missing.join(", ")),
++                            ));
++                        }
++                    }
++                    for fexp in fields.iter().rev() {
++                        let field_name = self.name(&fexp.field)?.to_owned();
++                        let field_typ = self.struct_field_type(
++                            &rectyp_id,
++                            &field_name,
++                            &expected,
++                            fexp.field.span,
++                        )?;
++                        tasks.push(Task {
++                            exp: &fexp.value,
++                            expected: field_typ,
++                            scope: scope.clone(),
++                            returning: returning.clone(),
++                        });
+                     }
+                 }
+                 _ => {
+diff --git a/crates/sail-ty/tests/struct_literal.rs b/crates/sail-ty/tests/struct_literal.rs
+new file mode 100644
+--- /dev/null
++++ b/crates/sail-ty/tests/struct_literal.rs
+@@ -0,0 +1,119 @@
++#![forbid(unsafe_code)]
++//! Lane-44 struct check+infer (OCaml `check_exp` E_struct ~L2218,
++//! `infer_exp` E_struct ~L3774) via the canonical checker.
++use sail_ast::{Def, SimpleInterner, Span};
++use sail_parse::{ParserContext, RealParser};
++use sail_ty::program::Program;
++use std::sync::Arc;
++
++fn parse(sources: &[&str]) -> Vec<(Def, Arc<SimpleInterner>)> {
++    let mut context = ParserContext::default();
++    sources
++        .iter()
++        .map(|source| {
++            let mut parser = RealParser::with_context(context.clone());
++            let def = parser.parse_def(source, Span::DUMMY).unwrap();
++            context = parser.context();
++            (def, Arc::new(parser.into_interner()))
++        })
++        .collect()
++}
++
++fn declare(defs: &[(Def, Arc<SimpleInterner>)]) -> Program {
++    let mut program = Program::new();
++    for (position, (def, it)) in defs.iter().enumerate() {
++        program.declare(def, it.clone(), position).unwrap();
++    }
++    program
++}
++
++#[test]
++fn struct_check_named_anon_and_generic() {
++    let defs = parse(&[
++        "struct Point = { x : int, y : bool }",
++        "function mk() -> Point = struct Point { x = 1, y = true }",
++        "function anon_ok() -> Point = struct { x = 1, y = true }",
++        "struct Box('a : Type) = { field : 'a }",
++        "function mkbox() -> Box(int) = struct Box { field = 1 }",
++    ]);
++    let program = declare(&defs);
++    for position in [1, 2, 4] {
++        program
++            .check_definition(&defs[position].0, defs[position].1.clone(), position)
++            .unwrap();
++    }
++}
++
++#[test]
++fn struct_check_rejects_mismatch_and_coverage() {
++    for source in [
++        "function bad_type() -> int = struct Point { x = 1, y = true }",
++        "function bad_name() -> Point = struct Other { x = 1, y = true }",
++        "function unknown() -> Point = struct Point { x = 1, y = true, z = 0 }",
++        "function dup() -> Point = struct Point { x = 1, x = 2, y = true }",
++        "function missing() -> Point = struct Point { x = 1 }",
++        "function wrong_field() -> Point = struct Point { x = true, y = true }",
++    ] {
++        let defs = parse(&[
++            "struct Point = { x : int, y : bool }",
++            "struct Other = { x : int, y : bool }",
++            source,
++        ]);
++        let program = declare(&defs);
++        let position = defs.len() - 1;
++        assert!(
++            program
++                .check_definition(&defs[position].0, defs[position].1.clone(), position)
++                .is_err(),
++            "{source}"
++        );
++    }
++}
++
++#[test]
++fn struct_infer_named_and_anon_never_infers() {
++    let defs = parse(&[
++        "struct Point = { x : int, y : bool }",
++        "function via_let() -> Point = let p = struct Point { x = 1, y = true } in p",
++    ]);
++    let program = declare(&defs);
++    program
++        .check_definition(&defs[1].0, defs[1].1.clone(), 1)
++        .unwrap();
++
++    for source in [
++        "function anon() -> Point = let p = struct { x = 1, y = true } in p",
++        "function missing() -> Point = let p = struct Point { x = 1 } in p",
++        "function unknown() -> Point = let p = struct Point { x = 1, y = true, z = 0 } in p",
++    ] {
++        let defs = parse(&["struct Point = { x : int, y : bool }", source]);
++        let program = declare(&defs);
++        let position = defs.len() - 1;
++        assert!(
++            program
++                .check_definition(&defs[position].0, defs[position].1.clone(), position)
++                .is_err(),
++            "{source}"
++        );
++    }
++}
++
++#[test]
++fn struct_infer_generic_binds_telescope() {
++    let defs = parse(&[
++        "struct Box('a : Type) = { field : 'a }",
++        "function mk() -> Box(int) = let b = struct Box { field = 1 } in b",
++    ]);
++    let program = declare(&defs);
++    program
++        .check_definition(&defs[1].0, defs[1].1.clone(), 1)
++        .unwrap();
++    let defs = parse(&[
++        "struct Box('a : Type) = { field : 'a }",
++        "function bad() -> Box(bool) = let b = struct Box { field = 1 } in b",
++    ]);
++    let program = declare(&defs);
++    assert!(program
++        .check_definition(&defs[1].0, defs[1].1.clone(), 1)
++        .is_err());
++}

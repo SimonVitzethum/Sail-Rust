@@ -53,6 +53,20 @@ Speicherfehlers zuerst das betroffene Programm bzw. den betroffenen Test einzeln
 unter dem ursprünglichen Limit messen; ein höheres Limit beseitigt den Befund
 nicht. Die aktuellen 128-MiB-OOM-Ergebnisse stehen in `WORK_STATE.md`.
 
+```bash
+# Sequenzieller Re-Run (stabil bei 128M-Flakiness, Befund: Test-Parallelitaet):
+SAIL_TEST_THREADS=1 scripts/test-memory-limited.sh --workspace
+
+# Einmaliger Diagnose-Retry fehlgeschlagener Binaerdateien mit einem Thread:
+SAIL_TEST_RETRIES=1 scripts/test-memory-limited.sh -p sail-ty --test canonical_program
+```
+
+`SAIL_TEST_THREADS` (Default 4) und `SAIL_TEST_RETRIES` (Default 0) sind strikt
+additiv: Mit Defaults läuft exakt das bisherige Verhalten. Ein Retry wiederholt
+fehlgeschlagene Binärdateien einmal mit `--test-threads=1`. Beleg:
+`evidence/2026-10-12/lane-24/vollsuite-sequenziell.log` (rc=0, 104 Suiten,
+1179 Tests).
+
 Builddiagnosen im Wrapper können wegen Cargo-JSON verkürzt erscheinen. In diesem
 Fall den gezielten Build mit normaler Textausgabe benutzen. Bestehende laufende
 Handles bzw. Prozesse prüfen; Beobachtungs-Timeouts sind kein Anlass zum Neustart.
@@ -81,8 +95,10 @@ SAIL_ARM_MEMORY=28G scripts/arm-lean-gate.sh
 Das Gate baut Rust unter 4 GiB und liest die vollständige Eingabeliste aus dem
 ARMv9.4-A-Makefile einschließlich Terminierungsmaßen. Es erstellt einen frischen
 Ausgabeordner und führt Compiler, `lake build` und die elaborierte No-Sorry-Prüfung
-jeweils unter 16 GiB ohne Swap aus; alternativ 28 GiB. Alte Ausgaben oder Stubs
-werden nicht als Erfolg akzeptiert. Ausgaben liegen unter `target/arm-lean-gate/`.
+jeweils unter 16 GiB ohne Swap aus; alternativ 28 GiB. Gate-Policy: 16 GiB
+cgroup-Limit plus 2-GiB-Host-Reserve — `/tmp/opencode/sail-gate/gated-run.sh`
+wartet, bis `verfügbar >= Limit + 2048 MiB` gilt, sonst Abbruch mit Exit 99.
+Alte Ausgaben oder Stubs werden nicht als Erfolg akzeptiert. Ausgaben liegen unter `target/arm-lean-gate/`.
 `scripts/CheckLeanNoSorry.lean` untersucht Typen und Werte aller erfassten Module
 sowie transitiver Imports. `scripts/test-lean-no-sorry.sh` enthält positive und
 negative Regressionen für dieses Gate. Es setzt passende Lean-Versionen voraus.

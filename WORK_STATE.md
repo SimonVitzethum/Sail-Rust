@@ -1,3 +1,106 @@
+# Arbeitsstand und Fortsetzung — 2026-10-12 abends (Main-Agent, committet)
+
+> Alle Lane-Arbeiten 01–70 sind im Haupt-Worktree zusammengeführt, verifiziert
+> und in thematischen Commits auf `main` festgeschrieben (Basis `a972e3a` →
+> 10 Commits, ~20k Rust-Zeilen netto). Das Kapitel „2026-10-13 (Lane-39)“
+> unten bleibt als Herleitungs-Historie erhalten; seine „uncommittet“-Aussagen
+> sind durch die Commits überholt.
+
+## Commit-Reihe (alle verifiziert grün vor dem Schreiben)
+
+| Commit | Inhalt |
+| --- | --- |
+| grammar-Block-let/var | `sail.lalrpop`, Parse-Faltung, Grammatik-/Parse-Tests |
+| ty-Tabellen | Records/Unions/Mappings/Scattered/Outcomes mit Quellpositions-Sichtbarkeit |
+| ty-Inferenz | Synonyme, Implicit-Equations, Rückwärtsinferenz, Stub-Schichtung |
+| ty-kanonisch | `canonical_body`-Arme (Struct/Match/Try/Scattered/Vektor/Measure/Mapping/Outcome), geteilte Arc-Typen, iterative Drops |
+| ty-Tests | Mutable-/Vektor-/Tiny-/Rekursions-Abdeckung, Rot-Tabellen |
+| rewrite | 34 echte Pässe in Lean-Reihenfolge (typed + string), Pin-Tests |
+| solver/ooc | SMT-Zähler, Solver-Quota, Byte-Budget-Scheduler, iterative Drops |
+| cli/lean/lake | TypedDef-Emission, Rewrite-/Lean-Stufen, Drucker, Lake-Emission, ehrliche Exit-1-Pfade |
+| scripts/evidence | Runner-Knobs (Threads 2/Retry), Gate-Logs, OOM-/Paritäts-/Harness-Nachweise |
+
+## Gate-Stand (Prozessausgang + Peak, systemd, Swap 0)
+
+| Prüfung | Ergebnis |
+| --- | --- |
+| `test-memory-limited.sh` 7 Pakete | RC 0 (50 Binaries ok; Threads-Default 2) |
+| OOC-Gate 16 Worker | bestanden (568 MB AST unter 128M) |
+| NoSorry-Gate | verifiziert (positiv/negativ) |
+| ARM-Gate | OFFEN — Kopfblocker B1 (Outcome-Scoping, Lane-40 gemergt), dann B2/B3 |
+
+## Offen (Code)
+
+1. Arm-Calls: StructUpdate-Port drin; Measure/Mapping/Outcome-Calls, Field/Ref/Config/Exit/Throw/Assert/VectorAppend-Arme (Module alle vorhanden).
+2. ARM-Gate nach B1 neu treiben; danach `lake build` + voller NoSorry-Nachweis.
+3. Effekt-/Guard-/Prover-Pässe (Spec aus Lane-62 liegt vor).
+4. Mapping-App-Gate-Patch (`evidence/2026-10-13/lane-53/`) nach Direction-Infra.
+
+# Arbeitsstand und Fortsetzung — 2026-10-13 (Lane-39)
+
+> Lane-39 (Doku-Konsolidierung, nur lesend geprüft, keine Codeänderung):
+> Dieser Stand ersetzt die OOM- und Offen-Aussagen von 2026-10-11 unten.
+> „Gemergt je Lane“ = eigener Branch-Commit und/oder Inhalt im uncommitteten
+> Sammel-Worktree mit Dateibeleg — **nicht** „in `main` committet“ (`main`
+> steht weiter auf `a972e3a`). Alle Erfolgsaussagen nennen Prozessausgang
+> und Peak; Herleitung in
+> [lane-39/NOTIZ.md](evidence/2026-10-13/lane-39/NOTIZ.md).
+
+## Lane-Stand 01–24 (mit Dateibeleg)
+
+| Lane | Inhalt | Beleg | Verifikation |
+| --- | --- | --- | --- |
+| 01 OOM-Repro | Mess-Skript + Solo-Nachweis Tiefentest | `scripts/lane-01-oom-repro.sh`, `evidence/2026-10-12/lane-01-oom-single.log` | Build rc=0/199,7M; solo t1 rc=0/120,4M, t4 rc=0/120,7M |
+| 02 Speicherfix | `canonical_body.rs`-Diff im Sammel-Worktree | `crates/sail-ty/src/canonical_body.rs` (uncommitted) | Solo-Nachweis via Lane-01-Log (s. o.) |
+| 03 Grammatik/Convert | Block-let/var-Körper-Faltung | `crates/sail-grammar/src/sail.lalrpop`, `crates/sail-parse/src/convert.rs` (uncommitted) | Kein eigener Lane-Log |
+| 04 Nexp-Typen | Lokale Minimaltypen (Alt-System) | `crates/sail-ty/src/nexp.rs:1-7` | Committed, kein neuer Nachweis |
+| 05 OCaml-Mutable | Nur gemessen (15+/21−) | `evidence/2026-10-12/lane-05-ocaml-mutable.md`, `lane-05-logs/`, Positiv-/Negativ-Logs | 16× rc=0 / 21× rc=1, 0 gekreuzt, Peaks ~12M |
+| 06 Solver/Z3 | Solver-Trait/Pool/Cache (Alt-System) | `crates/sail-ty/src/solver.rs`, `crates/sail-solver/` | Committed, kein neuer Nachweis |
+| 07 Vektor-LHS | `infer_lexp` LE_vector/LE_vector_range | Branch-Commit `34f79f1`; `crates/sail-ty/src/lexp_bounds.rs`, `crates/sail-ty/tests/lexp_bounds.rs` (ungetrackt) | Branch unmerged |
+| 08 Record-/Union-Tabellen | Feld-Payloads in Programm-Tabellen | Branch-Commit `9a3b6a0`; gestagt: `crates/sail-ty/src/program.rs:64-80,252,554-560,1340`, `crates/sail-ty/src/ast_env.rs:97-129`, 2 Testdateien | Branch unmerged |
+| 09 Muster | `pat.rs`/Literal-/Eq-Diffs im Sammel-Worktree | `crates/sail-ty/src/pat.rs`, `canonical_literal.rs`, `canonical_eq.rs` (uncommitted) | Aktiv, kein eigener Lane-Log |
+| 10 Synonym/Atom | Regel-Layer im Sammel-Worktree | `crates/sail-ty/src/rules.rs` (uncommitted) | Kein eigener Nachweis |
+| 11 Inline-Header | `typ_from_pat` + Alias-Expansion | `crates/sail-ty/src/conv.rs` (uncommitted) | Kein eigener Nachweis |
+| 12 TypedDef-Fehlerpfad | Expliziter Missing-Pfad statt Stillstand | `crates/sail-cli/src/typecheck.rs:55-90` (`TypedProgramStatus::Missing`, `require_typed_program` → Exit 1) | Fehlerpfad, kein Erfolgs-Log nötig |
+| 13 Rewrite-Gerüst | 10 typisierte Pässe + Stubs | `crates/sail-rewrite/src/pipeline.rs:279-311,348`, `passes/typed.rs`, 6 neue Pass-Dateien, `tests/typed_pipeline.rs` (uncommitted) | Kein eigener Lane-Log |
+| 14 Lean-Exps | `doc_exp`-Port Funktionsdrucker | Branch-Commit `9961e01`; `crates/sail-lean/src/exps.rs:152-199,505` (ungetrackt) | Branch unmerged |
+| 15 Profiler/Quota | Zähler-Senke + Quota-Primitive + OOC-Gate | `evidence/2026-10-12/lane-15-gate-raw.log`, `lane-15-profiler.log` (lane-berichtet) | Unit 140 Tests rc=0 (Peak 989,8M/136,6M); OOC-16 bestanden, Peak 128M |
+| 16 Vektor-Prims | 4-Hash-Prim-Normalisierung, verdrahtet | `crates/sail-ty/src/vector_prims.rs:47-71,123-182`, Call-Site `canonical_body.rs:647` (uncommitted) | Kein eigener Lane-Log |
+| 17 TypedDef-Emission | Emission statt Zählungen; CLI bricht weiter ab | `crates/sail-ty/src/typed_def.rs:37-53`, `crates/sail-cli/src/typecheck.rs:3-30,229-279`, `main.rs:127` (uncommitted) | Kein Erfolgs-Log (Abbruch beabsichtigt) |
+| 18 Rewrite-Anbindung | TypedPipeline ohne CLI-Verbrauch | `crates/sail-rewrite/src/pipeline.rs:348-394`, `tests/typed_pipeline.rs`; kein Treffer in `crates/sail-cli/` (uncommitted) | Kein eigener Lane-Log |
+| 19 Exp-Regeln | Arm-Planer für fehlende kanonische Regeln | `crates/sail-ty/src/exp_arms.rs`, `lib.rs:28` (uncommitted) | Kein eigener Lane-Log |
+| 20 Nexp-Reste | Range-/arithm. Inferenz-Bausteine | Branch-Commit `755b5e3` (`nexp.rs`, `solver.rs`, `subsume.rs`, Tests; uncommitted gespiegelt) | Branch unmerged |
+| 21 Rekursions-Audit | Report + Guards + Tests | `evidence/2026-10-12/lane-21-recursion.md`, `crates/sail-ty/src/recursion.rs`, `tests/lane21_recursion.rs` (ungetrackt) | 10k-Sonden: nativ SIGABRT, Guards weisen zurück |
+| 22 Bytebudget | Budget statt Definitionsfenster | `crates/sail-ooc/src/budget.rs:49-94`, `crates/sail-shard/src/scheduler.rs:57-59,324` (uncommitted) | Kein eigener Lane-Log |
+| 23 Z3-Quote | Permit-Vergabe + Empfehlung | `crates/sail-solver/src/quota.rs:74-82,86,134,257,290-325`, `pool.rs:104-115`, `cache.rs:278-289` (uncommitted) | Kein eigener Lane-Log |
+| 24 Flakiness-Knobs | Threads/Retry-Knobs + Vollsuite/OOC-Evidence | Branch-Commits `2955a2f`, `f5ce597`; `scripts/test-memory-limited.sh`, `evidence/2026-10-12/lane-24/` (REPORT + 11 Logs) | Vollsuite seq. rc=0 (104 Suiten, 1179 Tests); OOC-16 Gate rc=0 |
+
+Lanes 25/26/28–30/33–35/37/38 sind aktive leere Worktrees (Basis `a972e3a`,
+kein Commit); `lane/41–44` ist ein separater Multicore-/Boot-Track.
+Nichts davon ist ARM-Pfad-Nachweis.
+
+## OOM-Befund (korrigiert 2026-10-13)
+
+Der Befund von 2026-10-11 („Ursache noch nicht bestimmt“) ist überholt:
+**Test-Parallelität, kein Leak.** Solo wie 4-thread derselbe Tiefentest grün
+(Lane-01: 120,4M vs. 120,7M); 35-Test-Binärdatei ~1,9× (53,5M → ~103M).
+Nur die schwere 39-Test-Kombination (inkl. uncommittetem Mutable-Tiefentest)
+kippt an der 128M-Decke je nach Scheduling (~126,6M ok vs. OOM-Kill);
+solo ~93,6M und sequenziell ~95,5M grün. Default bleibt 4, stabil ist
+`SAIL_TEST_THREADS=1`. Belege: [NOTIZ.md](evidence/2026-10-13/lane-39/NOTIZ.md) §2.
+
+## Gate-Tabelle (Stand 2026-10-13)
+
+| Gate | Urteil | Beleg |
+| --- | --- | --- |
+| Fokussuite 128M sequenziell | Bestanden (rc=0) | `evidence/2026-10-12/lane-24/vollsuite-sequenziell.log`: 104 Suiten ok, 1179 Tests, 0 failed |
+| OOC-Teilmenge 16 Worker | Bestanden (Gate rc=0, Compiler-Exit 1 erwartet) | `evidence/2026-10-12/lane-24/ooc-16workers.log`: 567919927 AST-Bytes > 128M, 0,56 s, Peak 128M |
+| OCaml-Mutable-Parität 15+/21− | Bestanden | `evidence/2026-10-12/lane-05-ocaml-mutable*.log`: 16× rc=0, 21× rc=1 |
+| ARM-Gate Ende-zu-Ende | Offen (Kette O-1→O-4 aus Audit) | `main.rs:127` bricht vor Rewrites/Lean ab; letzter ARM-Lauf historisch bei `to_bytes_le` |
+| NoSorry-Gate | Offen, blockiert (nicht defekt) | Skripte vorhanden, ohne Compiler-Output nicht ausführbar |
+
+---
+
 # Arbeitsstand und Fortsetzung — 2026-10-11
 
 Diese Datei ersetzt die alten Fortschritts-, Lane- und Übergabedokumente.
