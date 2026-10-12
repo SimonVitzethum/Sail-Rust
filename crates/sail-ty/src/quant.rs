@@ -109,3 +109,45 @@ impl QuantScope {
         out
     }
 }
+
+// ---------------------------------------------------------------------------
+// Lane 10: simple-equation instantiation for omitted implicit arguments.
+// ---------------------------------------------------------------------------
+//
+// Reference: OCaml `type_check.ml` `instantiate_simple_equations`
+// (`find_eqs`/`inst_from_eq`): a telescoped quantifier solved by a
+// top-level `NC_equal('a, nexp)` conjunct (with occurs check) in the
+// scheme constraint is instantiated away instead of requiring an
+// explicit argument. This is the `Q-Inst`-adjacent step that lets calls
+// omit implicit arguments the constraint already determines.
+
+/// Collect top-level `Var == nexp` equations from a constraint
+/// conjunction (OCaml `find_eqs`): each `Eq(Var(v), n)` / `Eq(n, Var(v))`
+/// with `v` not free in `n` solves one omitted implicit. `And`-nested
+/// conjuncts are scanned; anything else contributes nothing. Total.
+#[must_use]
+pub fn simple_equations(c: &crate::nexp::NConstraint) -> Vec<(String, crate::nexp::Nexp)> {
+    use crate::nexp::{NConstraint, Nexp};
+    fn free_in(var: &str, n: &Nexp) -> bool {
+        let mut out = Vec::new();
+        n.free_vars(&mut out);
+        out.iter().any(|v| v == var)
+    }
+    fn go(c: &NConstraint, out: &mut Vec<(String, Nexp)>) {
+        match c {
+            NConstraint::And(a, b) => {
+                go(a, out);
+                go(b, out);
+            }
+            NConstraint::Eq(a, b) => match (&**a, &**b) {
+                (Nexp::Var(v), n) if !free_in(v, n) => out.push((v.clone(), n.clone())),
+                (n, Nexp::Var(v)) if !free_in(v, n) => out.push((v.clone(), n.clone())),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    go(c, &mut out);
+    out
+}

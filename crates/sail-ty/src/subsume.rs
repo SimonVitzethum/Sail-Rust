@@ -10,11 +10,19 @@
 //! `S-BitsEq`, `S-FunContraCo`, `S-TupleArity`, `S-NamedArgs`,
 //! `S-BaseMismatch`, `X-LitToRange`, `X-RangeToInt`, `Q-Inst`, `Q-Freshen`
 //! (see [`crate::rules::RULE_TABLE`]).
+//!
+//! Lane 10 adds, on the same trait-only path: numeric/boolean synonym
+//! expansion (`implicit('n)` ≡ `atom('n)`, `bitvector('n)` ≡ `bits('n)`,
+//! `atom_bool` ≡ `bool`; OCaml `Env.expand_synonyms`), atom singleton
+//! subsumption (`atom('n)` is the exact integer `'n`), and
+//! simple-equation instantiation (OCaml `instantiate_simple_equations`:
+//! omitted implicits solved by `Var == nexp` conjuncts).
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::error::{Span, TypeError, TypeErrorKind, TypeResult};
-use crate::nexp::{MiniTyp, NConstraint, Nexp, TypQuant};
+use crate::nexp::{MiniTyp, NConstraint, Nexp, TypQuant, linear_form};
 use crate::solver::{ProveResult, Solver};
 
 // ---------------------------------------------------------------------------
@@ -192,6 +200,120 @@ pub fn instantiate_scheme(scheme: &TypQuant) -> (NConstraint, MiniTyp) {
     (fresh.constraint, fresh.typ)
 }
 
+/// Expand numeric/boolean type synonyms (OCaml `Env.expand_synonyms`,
+/// local skeleton): `implicit('n)` ≡ `atom('n)` (argument-vs-return
+/// normalization stays the caller's job, as in `implicit_to_int`),
+/// `bitvector('n)` ≡ `bits('n)`, `atom_bool` ≡ `bool` (the local
+/// [`MiniTyp::Named`] carries `Nexp`-only args, so any `atom_bool`
+/// abbreviates `bool`). Unknown heads pass through untouched.
+/// Pure and total.
+#[must_use]
+pub fn expand_synonyms_typ(t: &MiniTyp) -> MiniTyp {
+    match t {
+        MiniTyp::Int | MiniTyp::Bool | MiniTyp::Bit => t.clone(),
+        MiniTyp::Bits(n) => MiniTyp::Bits(n.clone()),
+        MiniTyp::Range(lo, hi) => MiniTyp::Range(lo.clone(), hi.clone()),
+        MiniTyp::Named { name, args } if name == "implicit" => MiniTyp::Named {
+            name: "atom".to_string(),
+            args: args.clone(),
+        },
+        MiniTyp::Named { name, args } if name == "bitvector" && args.len() == 1 => {
+            MiniTyp::Bits(Box::new(args[0].clone()))
+        }
+        MiniTyp::Named { name, .. } if name == "atom_bool" => MiniTyp::Bool,
+        MiniTyp::Named { name, args } => MiniTyp::Named {
+            name: name.clone(),
+            args: args.clone(),
+        },
+        MiniTyp::Fun(a, b) => MiniTyp::Fun(
+            Box::new(expand_synonyms_typ(a)),
+            Box::new(expand_synonyms_typ(b)),
+        ),
+        MiniTyp::Tuple(ts) => {
+            MiniTyp::Tuple(ts.iter().map(expand_synonyms_typ).collect())
+        }
+    }
+}
+
+/// Apply simple equations to a scheme telescope (OCaml `inst_from_eq`):
+/// each quantifier solved by a top-level `Var == nexp` conjunct of the
+/// scheme constraint (see [`crate::quant::simple_equations`]) is
+/// substituted into the constraint/body and dropped from the telescope.
+/// Only telescope-bound variables are solved, in telescope order with
+/// chaining (`'a` solved first is substituted into `'b`'s equation;
+/// right-hand sides are normalized so chained solutions fold).
+/// Pure and total; unsolved schemes are returned unchanged.
+#[must_use]
+pub fn apply_simple_equations(scheme: &TypQuant) -> TypQuant {
+    use std::collections::HashSet;
+    let eqs = crate::quant::simple_equations(&scheme.constraint);
+    if eqs.is_empty() || scheme.quants.is_empty() {
+        return scheme.clone();
+    }
+    let bound: HashSet<&str> = scheme.quants.iter().map(|(v, _)| v.as_str()).collect();
+    let mut subst = NexpSubst::new();
+    let mut solved: Vec<String> = Vec::new();
+    for (var, rhs) in eqs {
+        if !bound.contains(var.as_str()) || solved.iter().any(|s| s == &var) {
+            continue;
+        }
+        let rhs = crate::nexp::normalize_nexp(&subst.apply_nexp(&rhs));
+        let mut check = Vec::new();
+        rhs.free_vars(&mut check);
+        if check.iter().any(|v| v == &var) {
+            continue;
+        }
+        subst.bind(var.clone(), rhs);
+        solved.push(var);
+    }
+    if solved.is_empty() {
+        return scheme.clone();
+    }
+    TypQuant {
+        quants: scheme
+            .quants
+            .iter()
+            .filter(|(v, _)| !solved.iter().any(|s| s == v))
+            .cloned()
+            .collect(),
+        constraint: subst.apply_constraint(&scheme.constraint),
+        typ: normalize_typ(&subst.apply_typ(&scheme.typ)),
+    }
+}
+
+/// Normalize the level terms inside a type (canonical-path identity
+/// folding; see [`crate::nexp::normalize_nexp`]). Pure and total.
+fn normalize_typ(t: &MiniTyp) -> MiniTyp {
+    match t {
+        MiniTyp::Int | MiniTyp::Bool | MiniTyp::Bit => t.clone(),
+        MiniTyp::Bits(n) => MiniTyp::Bits(Box::new(crate::nexp::normalize_nexp(n))),
+        MiniTyp::Range(lo, hi) => MiniTyp::Range(
+            Box::new(crate::nexp::normalize_nexp(lo)),
+            Box::new(crate::nexp::normalize_nexp(hi)),
+        ),
+        MiniTyp::Named { name, args } => MiniTyp::Named {
+            name: name.clone(),
+            args: args.iter().map(crate::nexp::normalize_nexp).collect(),
+        },
+        MiniTyp::Fun(a, b) => MiniTyp::Fun(
+            Box::new(normalize_typ(a)),
+            Box::new(normalize_typ(b)),
+        ),
+        MiniTyp::Tuple(ts) => MiniTyp::Tuple(ts.iter().map(normalize_typ).collect()),
+    }
+}
+
+/// Instantiate with omitted-implicit solving: freshen (rule `Q-Freshen`),
+/// then discharge telescope variables already determined by
+/// `Var == nexp` constraint conjuncts (OCaml `instantiate_simple_equations`
+/// after freshening). Returns the residual obligation and body type.
+#[must_use]
+pub fn instantiate_with_equations(scheme: &TypQuant) -> (NConstraint, MiniTyp) {
+    let fresh = freshen_scheme(scheme, "inst");
+    let solved = apply_simple_equations(&fresh);
+    (solved.constraint, solved.typ)
+}
+
 // ---------------------------------------------------------------------------
 // Subsumption + coercions
 // ---------------------------------------------------------------------------
@@ -203,6 +325,9 @@ pub enum Coercion {
     Identity,
     /// `range(lo,hi) <: int`: forget the bounds.
     RangeToInt,
+    /// `atom('n) <: int`: forget the singleton value (synonym-expanded
+    /// `implicit('n)` shares this coercion).
+    AtomToInt,
     /// `range(lo1,hi1) <: range(lo2,hi2)`: narrow via proved inclusion.
     RangeNarrow,
     /// `bits(n) <: bits(m)` with `n == m` proved.
@@ -220,6 +345,7 @@ impl std::fmt::Display for Coercion {
         match self {
             Self::Identity => write!(f, "identity"),
             Self::RangeToInt => write!(f, "range-to-int"),
+            Self::AtomToInt => write!(f, "atom-to-int"),
             Self::RangeNarrow => write!(f, "range-narrow"),
             Self::BitsCongruence => write!(f, "bits-congruence"),
             Self::Fun => write!(f, "fun"),
@@ -267,7 +393,14 @@ fn and_all(mut obligations: Vec<NConstraint>) -> Option<NConstraint> {
 ///
 /// Covers `S-Refl`, `S-RangeInt`, `S-IntRangeFail`, `S-RangeRange`,
 /// `S-BitsEq`, `S-FunContraCo`, `S-TupleArity`, `S-NamedArgs`,
-/// `S-BaseMismatch`. Never calls the solver; use [`check_subtype`] to
+/// `S-BaseMismatch`, plus the Lane-10 synonym/atom layer
+/// (`implicit('n)` ≡ `atom('n)`, `bitvector('n)` ≡ `bits('n)`,
+/// `atom_bool` ≡ `bool`; `atom('n)` is the singleton integer `'n`;
+/// OCaml `Env.expand_synonyms` at the head of `subtyp`).
+/// Synonyms are matched inline, arm by arm — never via a separate
+/// pre-traversal, so deep types keep the baseline recursion profile
+/// (small-stack safe). See [`expand_synonyms_typ`] for the standalone
+/// expansion. Never calls the solver; use [`check_subtype`] to
 /// discharge [`Subsumption::NeedsProof`].
 #[must_use]
 pub fn subtype_obligation(inferred: &MiniTyp, expected: &MiniTyp) -> Subsumption {
@@ -275,20 +408,78 @@ pub fn subtype_obligation(inferred: &MiniTyp, expected: &MiniTyp) -> Subsumption
         return Subsumption::Holds(Coercion::Identity);
     }
     match (inferred, expected) {
+        // Boolean synonym: `atom_bool` ≡ `bool` (either orientation).
+        (
+            MiniTyp::Named { name: n1, .. },
+            MiniTyp::Bool,
+        )
+        | (
+            MiniTyp::Bool,
+            MiniTyp::Named { name: n1, .. },
+        ) if n1 == "atom_bool" => Subsumption::Holds(Coercion::Identity),
+        // Length synonym: `bitvector('n)` ≡ `bits('n)` (either orientation).
+        (
+            MiniTyp::Named { name: n1, args: a1 },
+            MiniTyp::Bits(m),
+        )
+        | (
+            MiniTyp::Bits(m),
+            MiniTyp::Named { name: n1, args: a1 },
+        ) if n1 == "bitvector" && a1.len() == 1 => {
+            Subsumption::NeedsProof(
+                NConstraint::Eq(Box::new(a1[0].clone()), m.clone()),
+                Coercion::BitsCongruence,
+            )
+        }
         // `range <: int` always holds: bounds are forgotten (X-RangeToInt).
         (MiniTyp::Range(_, _), MiniTyp::Int) => {
             Subsumption::Holds(Coercion::RangeToInt)
+        }
+        // `atom('n)` / `implicit('n)` <: int: the singleton value is
+        // forgotten (OCaml `implicit_to_int` normalizes arguments likewise).
+        (MiniTyp::Named { name, args }, MiniTyp::Int)
+            if is_atom_head(name) && args.len() == 1 =>
+        {
+            Subsumption::Holds(Coercion::AtomToInt)
         }
         // `int <: range` never holds without a value: literals are handled
         // at value sites (`check` special case, X-LitToRange). (S-IntRangeFail)
         (MiniTyp::Int, MiniTyp::Range(_, _)) => Subsumption::Fails(
             "int is not a subtype of range(..) outside literal sites".to_string(),
         ),
+        // `int <: atom('n)` likewise needs a value site.
+        (MiniTyp::Int, MiniTyp::Named { name, .. }) if is_atom_head(name) => {
+            Subsumption::Fails(
+                "int is not a subtype of atom(..) outside literal sites".to_string(),
+            )
+        }
         // Range inclusion: lo2 <= lo1 /\ hi1 <= hi2. (S-RangeRange)
         (MiniTyp::Range(lo1, hi1), MiniTyp::Range(lo2, hi2)) => {
             let nc = NConstraint::And(
                 Box::new(NConstraint::Le(lo2.clone(), lo1.clone())),
                 Box::new(NConstraint::Le(hi1.clone(), hi2.clone())),
+            );
+            Subsumption::NeedsProof(nc, Coercion::RangeNarrow)
+        }
+        // `range(lo,hi) <: atom('n)` iff both bounds equal the singleton.
+        (MiniTyp::Range(lo, hi), MiniTyp::Named { name, args })
+            if is_atom_head(name) && args.len() == 1 =>
+        {
+            let n = &args[0];
+            let nc = NConstraint::And(
+                Box::new(NConstraint::Eq(lo.clone(), Box::new(n.clone()))),
+                Box::new(NConstraint::Eq(hi.clone(), Box::new(n.clone()))),
+            );
+            Subsumption::NeedsProof(nc, Coercion::NamedUnfold(canon_head(name)))
+        }
+        // `atom('n) <: range(lo,hi)` iff the singleton sits inside.
+        (MiniTyp::Named { name, args }, MiniTyp::Range(lo, hi))
+            if is_atom_head(name) && args.len() == 1 =>
+        {
+            let n = &args[0];
+            let nc = NConstraint::And(
+                Box::new(NConstraint::Le(lo.clone(), Box::new(n.clone()))),
+                Box::new(NConstraint::Le(Box::new(n.clone()), hi.clone())),
             );
             Subsumption::NeedsProof(nc, Coercion::RangeNarrow)
         }
@@ -347,13 +538,14 @@ pub fn subtype_obligation(inferred: &MiniTyp, expected: &MiniTyp) -> Subsumption
                 None => Subsumption::Holds(Coercion::Tuple(ts1.len())),
             }
         }
-        // Same-head abbreviations: level arguments must be provably equal.
-        // (S-NamedArgs)
+        // Same-head abbreviations (with `implicit` ≡ `atom` canonicalized):
+        // level arguments must be provably equal. (S-NamedArgs)
         (
             MiniTyp::Named { name: n1, args: a1 },
             MiniTyp::Named { name: n2, args: a2 },
         ) => {
-            if n1 != n2 || a1.len() != a2.len() {
+            let (h1, h2) = (canon_head(n1), canon_head(n2));
+            if h1 != h2 || a1.len() != a2.len() {
                 return Subsumption::Fails(format!(
                     "named type mismatch: {inferred} vs {expected}"
                 ));
@@ -369,12 +561,27 @@ pub fn subtype_obligation(inferred: &MiniTyp, expected: &MiniTyp) -> Subsumption
             }
             match and_all(obs) {
                 Some(nc) => {
-                    Subsumption::NeedsProof(nc, Coercion::NamedUnfold(n1.clone()))
+                    Subsumption::NeedsProof(nc, Coercion::NamedUnfold(h1))
                 }
-                None => Subsumption::Holds(Coercion::NamedUnfold(n1.clone())),
+                None => Subsumption::Holds(Coercion::NamedUnfold(h1)),
             }
         }
         _ => Subsumption::Fails(format!("{inferred} is not a subtype of {expected}")),
+    }
+}
+
+/// Whether `name` heads a numeric singleton (`atom` or its `implicit`
+/// spelling, OCaml `implicit_to_int`).
+fn is_atom_head(name: &str) -> bool {
+    name == "atom" || name == "implicit"
+}
+
+/// Canonical head for synonym comparison: `implicit` ≡ `atom`.
+fn canon_head(name: &str) -> String {
+    if name == "implicit" {
+        "atom".to_string()
+    } else {
+        name.to_string()
     }
 }
 
@@ -414,6 +621,198 @@ pub fn check_subtype<S: Solver>(
             ProveResult::Refuted | ProveResult::Unknown => {
                 Err(TypeError::constraint_not_proved(span, &nc))
             }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dependent call-argument matching (existential opening / arithmetic solving)
+// ---------------------------------------------------------------------------
+
+/// Outcome of matching one formal scalar argument against its actual.
+///
+/// This pins the sound rule behind dependent-call instantiation: a formal
+/// that *is* the quantified variable binds whatever the actual denotes
+/// (the bare-variable core the canonical `instantiate` implements); a
+/// formal that is *exactly* invertible in one quantified variable solves
+/// to the unique integer preimage; anything else stays open. There is no
+/// guessing — [`ScalarMatch::Uninferred`] is the local analogue of the
+/// canonical `cannot infer dependent call parameter` error (rule
+/// `Z-UnknownSound`): the caller must reject the call, never fabricate a
+/// binding.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ScalarMatch {
+    /// Bind `var := to` (exact: bare-variable formal, or unique linear
+    /// preimage with coefficient `+1`/`-1`, or exact constant division).
+    Bind {
+        var: String,
+        to: Nexp,
+    },
+    /// The equation holds identically; nothing needs binding.
+    Holds,
+    /// No exact binding exists locally (nonlinear formal, ambiguous or
+    /// non-invertible arithmetic, rigid mismatch). `detail` names the
+    /// reason; the caller reports a sound error.
+    Uninferred {
+        detail: String,
+    },
+}
+
+/// Boolean-level counterpart of [`ScalarMatch`]: a formal that is a
+/// quantified boolean variable (optionally negated) binds exactly;
+/// anything else stays open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BoolMatch {
+    /// Bind `var := to` (exact: bare or negated-variable formal).
+    Bind {
+        var: String,
+        to: NConstraint,
+    },
+    /// The equation holds identically; nothing needs binding.
+    Holds,
+    /// No exact binding exists locally. The caller reports a sound error.
+    Uninferred {
+        detail: String,
+    },
+}
+
+/// Match one formal integer-level argument against its actual.
+///
+/// `quantified` holds the caller's quantified `K_int`-like variables (the
+/// caller sorts kinds, as [`crate::check`] does for its opaque kind
+/// environment — a `K_bool` name never belongs here).
+///
+/// Rules (all exact over the integers, checked `i128` arithmetic):
+/// - formal `Var(v)`, `v` quantified → [`ScalarMatch::Bind`](`v`,
+///   simplified actual), whatever the actual denotes (existential
+///   opening needs no solving);
+/// - otherwise the difference `formal - actual` must be linear in exactly
+///   one quantified variable `v` with coefficient `+1`/`-1`: then
+///   `v` is bound to the unique preimage (arithmetic solving, e.g. formal
+///   `'n + 1` against actual `5` binds `'n := 4`);
+/// - a non-unit coefficient binds only a constant preimage under exact
+///   division (formal `2 * 'n` against `8` binds `'n := 4`; against `7`
+///   or a symbolic term it stays open);
+/// - a difference with no quantified variable that is identically zero is
+///   [`ScalarMatch::Holds`]; everything else (nonlinear formals such as
+///   `2 ^ 'n` or `'n * 'm`, several quantified variables, rigid
+///   mismatches, overflow) is [`ScalarMatch::Uninferred`].
+#[must_use]
+pub fn match_scalar_arg(
+    formal: &Nexp,
+    actual: &Nexp,
+    quantified: &HashSet<String>,
+) -> ScalarMatch {
+    let formal = formal.simplify();
+    let actual = actual.simplify();
+    // Bare-variable rule: needs no solving, binds any actual.
+    if let Nexp::Var(v) = &formal {
+        if quantified.contains(v) {
+            return ScalarMatch::Bind { var: v.clone(), to: actual };
+        }
+    }
+    // Exact linear inversion over `formal - actual`.
+    let diff = Nexp::Sub(Box::new(formal.clone()), Box::new(actual));
+    let form = match linear_form(&diff) {
+        Some(form) => form,
+        None => {
+            return ScalarMatch::Uninferred {
+                detail: "non-linear dependent call parameter (arithmetic solving required)"
+                    .to_string(),
+            };
+        }
+    };
+    let mut solvable: Vec<(String, i128)> = Vec::new();
+    let mut rigid = crate::nexp::LinearForm::constant(form.constant);
+    for (v, c) in &form.coeffs {
+        if quantified.contains(v) {
+            solvable.push((v.clone(), *c));
+        } else {
+            let mut single = std::collections::BTreeMap::new();
+            single.insert(v.clone(), *c);
+            rigid = match rigid.add(&crate::nexp::LinearForm { constant: 0, coeffs: single }) {
+                Some(sum) => sum,
+                None => {
+                    return ScalarMatch::Uninferred {
+                        detail: "dependent call parameter overflows i128".to_string(),
+                    };
+                }
+            };
+        }
+    }
+    match solvable.as_slice() {
+        [] => {
+            if form.coeffs.is_empty() && form.constant == 0 {
+                ScalarMatch::Holds
+            } else {
+                ScalarMatch::Uninferred {
+                    detail: "no quantified variable to solve for (proof required)".to_string(),
+                }
+            }
+        }
+        [(v, 1)] => match rigid.neg() {
+            Some(rhs) => ScalarMatch::Bind { var: v.clone(), to: rhs.into_nexp().simplify() },
+            None => ScalarMatch::Uninferred {
+                detail: "dependent call parameter overflows i128".to_string(),
+            },
+        },
+        [(v, -1)] => ScalarMatch::Bind { var: v.clone(), to: rigid.into_nexp().simplify() },
+        [(v, c)] => {
+            // Non-unit coefficient: exact constant preimages only.
+            if rigid.coeffs.is_empty() {
+                if let Some(neg) = rigid.constant.checked_neg() {
+                    if neg % *c == 0 {
+                        if let Some(q) = neg.checked_div(*c) {
+                            return ScalarMatch::Bind {
+                                var: v.clone(),
+                                to: Nexp::Const(q),
+                            };
+                        }
+                    }
+                }
+            }
+            ScalarMatch::Uninferred {
+                detail: format!(
+                    "non-invertible coefficient {c} for '{v} (arithmetic solving required)"
+                ),
+            }
+        }
+        _ => ScalarMatch::Uninferred {
+            detail: "ambiguous dependent call parameter (several quantified variables)"
+                .to_string(),
+        },
+    }
+}
+
+/// Match one formal boolean-level argument against its actual.
+///
+/// `quantified` holds the caller's quantified `K_bool` variables. A bare
+/// (optionally negated) quantified variable binds exactly; an identical
+/// formal/actual pair holds; everything else stays open.
+#[must_use]
+pub fn match_bool_arg(
+    formal: &NConstraint,
+    actual: &NConstraint,
+    quantified: &HashSet<String>,
+) -> BoolMatch {
+    let formal = formal.simplify();
+    let actual = actual.simplify();
+    match &formal {
+        NConstraint::Var(v) if quantified.contains(v) => {
+            BoolMatch::Bind { var: v.clone(), to: actual }
+        }
+        NConstraint::Not(inner) => match inner.as_ref() {
+            NConstraint::Var(v) if quantified.contains(v) => BoolMatch::Bind {
+                var: v.clone(),
+                to: NConstraint::Not(Box::new(actual)).simplify(),
+            },
+            _ => BoolMatch::Uninferred {
+                detail: "non-variable boolean call parameter (proof required)".to_string(),
+            },
+        },
+        _ if formal == actual => BoolMatch::Holds,
+        _ => BoolMatch::Uninferred {
+            detail: "non-variable boolean call parameter (proof required)".to_string(),
         },
     }
 }
@@ -460,5 +859,136 @@ mod tests {
             assert_ne!(name, "n");
         }
         assert_ne!(a.quants[0].0, b.quants[0].0);
+    }
+
+    fn quants(vars: &[&str]) -> HashSet<String> {
+        vars.iter().map(|v| (*v).to_string()).collect()
+    }
+
+    fn var(v: &str) -> Nexp {
+        Nexp::Var(v.to_string())
+    }
+
+    fn const_(c: i128) -> Nexp {
+        Nexp::Const(c)
+    }
+
+    #[test]
+    fn scalar_match_binds_bare_variables_and_holds_tautologies() {
+        let q = quants(&["n"]);
+        // Bare quantified formal binds any actual (existential opening,
+        // no solving needed) — even a nonlinear one.
+        assert_eq!(
+            match_scalar_arg(&var("n"), &Nexp::Exp(Box::new(var("m"))), &q),
+            ScalarMatch::Bind { var: "n".to_string(), to: Nexp::Exp(Box::new(var("m"))) }
+        );
+        // A rigid formal against itself holds.
+        assert_eq!(match_scalar_arg(&var("m"), &var("m"), &q), ScalarMatch::Holds);
+        // Constants agree identically.
+        assert_eq!(match_scalar_arg(&const_(5), &const_(5), &q), ScalarMatch::Holds);
+    }
+
+    #[test]
+    fn scalar_match_solves_exact_linear_preimages() {
+        let q = quants(&["n"]);
+        let plus_one = Nexp::Add(Box::new(var("n")), Box::new(const_(1)));
+        // `'n + 1 = 5` binds `'n := 4`.
+        assert_eq!(
+            match_scalar_arg(&plus_one, &const_(5), &q),
+            ScalarMatch::Bind { var: "n".to_string(), to: const_(4) }
+        );
+        // Negated coefficient: `3 - 'n = 1` binds `'n := 2`.
+        let three_minus_n = Nexp::Sub(Box::new(const_(3)), Box::new(var("n")));
+        assert_eq!(
+            match_scalar_arg(&three_minus_n, &const_(1), &q),
+            ScalarMatch::Bind { var: "n".to_string(), to: const_(2) }
+        );
+        // Symbolic actuals stay exact: `'n + 1 = 'm + 1` binds `'n := 'm`.
+        let m_plus_one = Nexp::Add(Box::new(var("m")), Box::new(const_(1)));
+        assert_eq!(
+            match_scalar_arg(&plus_one, &m_plus_one, &q),
+            ScalarMatch::Bind { var: "n".to_string(), to: var("m") }
+        );
+        // Exact constant division: `2 * 'n = 8` binds `'n := 4` …
+        let twice_n = Nexp::Mul(Box::new(const_(2)), Box::new(var("n")));
+        assert_eq!(
+            match_scalar_arg(&twice_n, &const_(8), &q),
+            ScalarMatch::Bind { var: "n".to_string(), to: const_(4) }
+        );
+        // … but `2 * 'n = 7` has no integer preimage: soundly open.
+        assert!(matches!(
+            match_scalar_arg(&twice_n, &const_(7), &q),
+            ScalarMatch::Uninferred { .. }
+        ));
+    }
+
+    #[test]
+    fn scalar_match_stays_open_instead_of_guessing() {
+        let q = quants(&["n"]);
+        // Nonlinear formal (`2 ^ 'n`): no linear inversion exists.
+        assert!(matches!(
+            match_scalar_arg(&Nexp::Exp(Box::new(var("n"))), &const_(8), &q),
+            ScalarMatch::Uninferred { .. }
+        ));
+        // Several quantified variables: ambiguous.
+        let q2 = quants(&["n", "m"]);
+        let sum = Nexp::Add(Box::new(var("n")), Box::new(var("m")));
+        assert!(matches!(
+            match_scalar_arg(&sum, &const_(3), &q2),
+            ScalarMatch::Uninferred { .. }
+        ));
+        // Rigid mismatch with no quantified variable: needs a proof.
+        assert!(matches!(
+            match_scalar_arg(&var("m"), &const_(3), &q),
+            ScalarMatch::Uninferred { .. }
+        ));
+        // Non-unit coefficient against a symbolic term: not exact.
+        let twice_n = Nexp::Mul(Box::new(const_(2)), Box::new(var("n")));
+        assert!(matches!(
+            match_scalar_arg(&twice_n, &var("m"), &q),
+            ScalarMatch::Uninferred { .. }
+        ));
+        // Unquantified names never bind (kind confusion is not resolved
+        // by matching: the caller sorts `K_int` binders first).
+        assert!(matches!(
+            match_scalar_arg(&var("b"), &const_(1), &quants(&[])),
+            ScalarMatch::Uninferred { .. }
+        ));
+    }
+
+    #[test]
+    fn bool_match_binds_bare_and_negated_variables() {
+        let q = quants(&["p"]);
+        assert_eq!(
+            match_bool_arg(
+                &NConstraint::Var("p".to_string()),
+                &NConstraint::True,
+                &q
+            ),
+            BoolMatch::Bind { var: "p".to_string(), to: NConstraint::True }
+        );
+        assert_eq!(
+            match_bool_arg(
+                &NConstraint::Not(Box::new(NConstraint::Var("p".to_string()))),
+                &NConstraint::True,
+                &q
+            ),
+            BoolMatch::Bind {
+                var: "p".to_string(),
+                to: NConstraint::False
+            }
+        );
+        assert_eq!(
+            match_bool_arg(&NConstraint::True, &NConstraint::True, &q),
+            BoolMatch::Holds
+        );
+        assert!(matches!(
+            match_bool_arg(
+                &NConstraint::App("p".to_string(), vec![var("n")]),
+                &NConstraint::True,
+                &q
+            ),
+            BoolMatch::Uninferred { .. }
+        ));
     }
 }
