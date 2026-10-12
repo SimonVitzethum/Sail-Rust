@@ -1,0 +1,110 @@
+===== lane-01 OOM-Repro =====
+date: 2026-10-12T16:53:45Z
+basis-commit: a972e3ad69b029d858d437670767d4137de04055 (a972e3a)
+test-src: Haupt-Worktree uncommitted (crates/sail-ty/tests/canonical_program.rs:107), lane-01@a972e3a enthaelt den Test NICHT (nur lesen, keine Aenderung)
+sourcedir(fuer cargo): /home/simon/Dokumente/Sail/sail-rs
+memory: MemoryMax=128M MemorySwapMax=0, host-swap: 0 (free)
+
+===== build --no-run (4G) =====
+Running as unit: run-p603294-i613003.service
+   Compiling sail-nexp v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-nexp)
+warning: unused import: `Interner`
+  --> crates/sail-lex/src/token.rs:18:16
+   |
+18 | use sail_ast::{Interner, Symbol};
+   |                ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-lex` (lib) generated 1 warning
+   Compiling sail-solver v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-solver)
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+warning: unused variable: `it`
+   --> crates/sail-ty/src/conv.rs:385:35
+    |
+385 | fn typarg_nexp_only(arg: &TypArg, it: &impl Interner) -> Option<NExp> {
+    |                                   ^^ help: if this is intentional, prefix it with an underscore: `_it`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-ty` (lib) generated 1 warning (run `cargo fix --lib -p sail-ty` to apply 1 suggestion)
+    Finished `ci` profile [optimized] target(s) in 8.89s
+  Executable tests/canonical_program.rs (target/ci/deps/canonical_program-99acad002a8bc287)
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8.941s
+             CPU time consumed: 16.294s
+                   Memory peak: 199.7M (swap: 0B)
+BUILD_EXIT=0
+===== run A: single test, 128M, test-threads=1, cargo -j1 (via gated-run.sh) =====
+[gate] start mem=128M avail=12111MiB: cargo test -p sail-ty --test canonical_program ten_thousand_mutable_and_loop_scopes --profile ci -j 1 -- --nocapture --test-threads=1
+Running as unit: run-p605455-i635531.service
+warning: unused import: `Interner`
+  --> crates/sail-lex/src/token.rs:18:16
+   |
+18 | use sail_ast::{Interner, Symbol};
+   |                ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-lex` (lib) generated 1 warning
+warning: unused variable: `it`
+   --> crates/sail-ty/src/conv.rs:385:35
+    |
+385 | fn typarg_nexp_only(arg: &TypArg, it: &impl Interner) -> Option<NExp> {
+    |                                   ^^ help: if this is intentional, prefix it with an underscore: `_it`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-ty` (lib) generated 1 warning (run `cargo fix --lib -p sail-ty` to apply 1 suggestion)
+    Finished `ci` profile [optimized] target(s) in 0.04s
+     Running tests/canonical_program.rs (target/ci/deps/canonical_program-99acad002a8bc287)
+
+running 1 test
+test ten_thousand_mutable_and_loop_scopes_check_and_release_iteratively ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.56s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 637ms
+             CPU time consumed: 615ms
+                   Memory peak: 120.4M (swap: 0B)
+[gate] ende rc=0 free=1841MiB
+RUN_A_EXIT=0
+===== run B: single test, 128M, test-threads=4, cargo -j1 (via gated-run.sh) =====
+[gate] start mem=128M avail=11389MiB: cargo test -p sail-ty --test canonical_program ten_thousand_mutable_and_loop_scopes --profile ci -j 1 -- --nocapture --test-threads=4
+Running as unit: run-p605641-i593305.service
+warning: unused import: `Interner`
+  --> crates/sail-lex/src/token.rs:18:16
+   |
+18 | use sail_ast::{Interner, Symbol};
+   |                ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-lex` (lib) generated 1 warning
+warning: unused variable: `it`
+   --> crates/sail-ty/src/conv.rs:385:35
+    |
+385 | fn typarg_nexp_only(arg: &TypArg, it: &impl Interner) -> Option<NExp> {
+    |                                   ^^ help: if this is intentional, prefix it with an underscore: `_it`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-ty` (lib) generated 1 warning (run `cargo fix --lib -p sail-ty` to apply 1 suggestion)
+    Finished `ci` profile [optimized] target(s) in 0.03s
+     Running tests/canonical_program.rs (target/ci/deps/canonical_program-99acad002a8bc287)
+
+running 1 test
+test ten_thousand_mutable_and_loop_scopes_check_and_release_iteratively ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.60s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 671ms
+             CPU time consumed: 653ms
+                   Memory peak: 120.7M (swap: 0B)
+[gate] ende rc=0 free=1755MiB
+RUN_B_EXIT=0

@@ -1,0 +1,61 @@
+# Lane-15 Profiler-/Quota-Nachweis — 2026-10-12 (frisch nach Host-Reboot verifiziert)
+Branch `lane-15` auf Basis `a972e3a` (Worktree `worktrees/lane-15`).
+Abnahme: Build unter 4G + `SAIL_RS_THREADS=16 scripts/typecheck-ooc-gate.sh`
+(128MiB-Teilmenge). Alle schweren Läufe via
+`/tmp/opencode/sail-gate/gated-run.sh` (cargo max -j2, Swap 0).
+
+## 1. Unit-Tests (4G-Scope, `cargo test --profile ci -j 2
+##    -p sail-ast -p sail-solver -p sail-perf -p sail-cli`)
+- Ergebnis: SUCCESS, RC=0, 13 Suiten, 140 Tests, 0 failed (inkl. aller
+  neuer Lane-15-Tests: cache smt_counters/byte_quota/entries_for_budget,
+  pool prove_cached/idle_quota, profile phase_with_counters/add_smt_to_last/
+  diff_saturates, storage hostile_nesting/line_nesting_depth, quota x3,
+  profparse x4).
+- Build-Peak nach `cargo clean` (Erstkompilierung aller Deps): 989.8M < 4G,
+  swap 0B. Re-Run (gecacht): Peak 136.6M, swap 0B.
+- Rest-Warnings (pre-existing, nicht Lane-15): unused import `Interner`
+  (sail-lex), unused `it` (sail-ty conv.rs), dead-code in ooc.rs/e2e.rs
+  sowie `ProverCounters::new/diff` + `add_smt_to_last` als "never used"
+  (Call-Site-Verdrahtung liegt ausserhalb des Lane-15-Schreibsets, s. §3).
+
+## 2. OOC-Gate (16 Worker, MemoryMax=128M, MemorySwapMax=0)
+- `sail-rs: frontend converted 4096 definitions from 1 files using 16 workers;
+  567919927 AST bytes spooled`
+- `sail-rs: typechecked 4096 definitions and 1052672 expressions using 16 workers`
+- `Subset typecheck gate passed: 567,919,927 AST bytes under 128M, no swap.`
+  (567.9 MB AST > 128-MiB-Limit: echte Out-of-core-Last, kein RAM-Halten.)
+- Compiler-Exit 1 = erwarteter expliziter Missing-Backend-Fehler
+  (`compilation incomplete: ...`), kein OOM (cgroup meldet reguläres
+  Prozessende, kein Kill).
+- cgroup-Peak Lauf-Scope: 128M (Kappe), swap 0B.
+
+## 3. `[profile]`-Zeilen aus dem Gate-Log (stderr, `-dprofile`)
+[profile] phase="frontend" wall_s=10.717408 rss_peak_mb=50 smt_calls=0 smt_s=0.000000
+[profile] phase="typecheck" wall_s=0.628599 rss_peak_mb=57 smt_calls=0 smt_s=0.000000
+[profile] phase="total" wall_s=11.380508 rss_peak_mb=57 smt_calls=0 smt_s=0.000000
+
+Abgeleitet (ohne `total`-Doppelzählung):
+- peak_rss (CLI-VmHWM): 57 MB (typecheck) — deutlich unter Cgroup-Kappe;
+  Differenz = Scheduler-/Spool-/Z3-Kindprozesse im Scope.
+- max. Phasen-Wandzeit: 10.717408 s (frontend).
+- smt_calls/smt_s: 0 — End-to-End weiter Null (TESTING.md-Befund bleibt
+  für die Ausgabe wahr): Lane 15 liefert Zähler an der Quelle
+  (`SolverPool::smt_totals`/`MemoCache::smt_totals`, getestet) und die
+  Profiler-Senke (`phase_with_counters`/`add_smt_to_last`, getestet);
+  der 2-zeilige Call-Site-Patch in `sail-cli/src/typecheck.rs`+`main.rs`
+  liegt ausserhalb des Lane-15-Schreibsets und ist als Folgearbeit vermerkt.
+
+## 4. Adaptive Quota-Einordnung (`sail-perf::QuotaAdvice::recommend`)
+- 128-MiB-Teilmenge (Limit 134217728, Peak 134217728): max_idle_solvers=1,
+  max_cache_bytes=1 MiB (Floor), workers=1.
+  Hinweis: Das Gate fuhr per Vorgabe 16 Worker und bestand — OOC-Streaming
+  (AST-Spool auf Platte) trägt das; die Policy ist konservativ für
+  solver-lastige Phasen (Z3-Kontexte à 32 MiB) und empfiehlt dort 1.
+- 4-GiB-Build-Scope: max_idle_solvers=16 (Deckel), Rest Cache-Bytes,
+  Worker-Skalierung mit Kopfraum.
+- 16-GiB-Modellläufe (OOC/ARM, verbindlich): max_idle_solvers=16 (Deckel),
+  Cache-Anteil wächst mit; 28 GiB nur Fallback, kein Standard.
+
+## 5. Roh-Log
+Vollausgabe: `evidence/2026-10-12/lane-15-gate-raw.log`
+Gate-Artefakt (Input+compiler.log): `target/typecheck-ooc-gate/run.ZRkQnImo`

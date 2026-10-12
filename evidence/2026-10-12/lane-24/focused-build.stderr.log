@@ -1,0 +1,10 @@
+[gate] start mem=4G avail=27927MiB: cargo test --no-run --profile ci -j 2 -p sail-ty --message-format=json
+Running as unit: run-p8375-i37311.service
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-24/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 8.74s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8.778s
+             CPU time consumed: 17.049s
+                   Memory peak: 219.6M (swap: 0B)
+[gate] ende rc=0 avail=27894MiB

@@ -1,0 +1,14 @@
+[gate] start mem=4G avail=26759MiB: systemd-run --user --wait --pipe --collect -p MemoryMax=128M -p MemorySwapMax=0 -p RuntimeMaxSec=180 -p WorkingDirectory=/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-38 /home/simon/Dokumente/Sail/sail-rs/worktrees/lane-38/target/ci/deps/canonical_program-ddfe03c20e391be8 --test-threads=1
+Running as unit: run-p64619-i13024.service
+Running as unit: run-p64620-i64934.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 605ms
+             CPU time consumed: 592ms
+                   Memory peak: 53M (swap: 0B)
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 627ms
+             CPU time consumed: 10ms
+                   Memory peak: 2.4M (swap: 0B)
+[gate] ende rc=0 avail=26650MiB

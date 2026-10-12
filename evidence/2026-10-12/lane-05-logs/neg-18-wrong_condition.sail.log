@@ -1,0 +1,13 @@
+[gate] start mem=256M avail=12171MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-18-wrong_condition.sail
+Running as unit: run-p606595-i635670.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-18-wrong_condition.sail[0m:8.43-44:
+8[96m |[0mfunction wrong_condition() -> unit = while 0 do ()
+ [91m |[0m                                           [91m^[0m
+ [91m |[0m Type mismatch between bool('ex1#) and int(0)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 29ms
+             CPU time consumed: 20ms
+                   Memory peak: 11.9M (swap: 0B)
+[gate] ende rc=1 free=2216MiB

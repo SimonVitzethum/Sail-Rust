@@ -1,3 +1,5 @@
 {"phase":"fixture-parse","wall_ms":1,"peak_rss_kb":12304,"note":"host=x86_64 fixture=tiny"}
 {"phase":"fixture-hash","wall_ms":2,"peak_rss_kb":12320,"note":"host=x86_64 fixture=tiny"}
 {"phase":"fixture-sleep010","wall_ms":101,"peak_rss_kb":12452,"note":"host=x86_64 fixture=tiny"}
+{"phase":"lane-01-oom-single-t1","wall_ms":637,"peak_rss_kb":123290,"note":"host=x86_64 single-test ten_thousand_mutable_and_loop 128M threads=1 exit=0"}
+{"phase":"lane-01-oom-single-t4","wall_ms":671,"peak_rss_kb":123597,"note":"host=x86_64 single-test ten_thousand_mutable_and_loop 128M threads=4 exit=0"}

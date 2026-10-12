@@ -1,0 +1,13 @@
+[gate] start mem=256M avail=11937MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-06-shadow_local.sail
+Running as unit: run-p606195-i639682.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-06-shadow_local.sail[0m:8.46-53:
+8[96m |[0mfunction shadow_local(x : int) -> int = { var x : int = 0; x }
+ [91m |[0m                                              [91m^-----^[0m
+ [91m |[0m Cannot modify immutable let-bound constant or enumeration constructor x
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 28ms
+             CPU time consumed: 17ms
+                   Memory peak: 11.8M (swap: 0B)
+[gate] ende rc=1 free=1989MiB

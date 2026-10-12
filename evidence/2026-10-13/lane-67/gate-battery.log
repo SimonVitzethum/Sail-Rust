@@ -1,0 +1,30 @@
+[gate] start mem=4G avail=22184MiB: bash /tmp/opencode/sail-gate/lane67/lane67-run.sh
+Running as unit: run-p152346-i141289.service
+BadSorryTerm.lean:2:4: warning: declaration uses `sorry`
+BadSorryAx.lean:3:4: warning: declaration uses `sorry`
+BadOpaqueArm.lean:3:7: warning: declaration uses `sorry`
+BadTypeHole.lean:3:4: warning: declaration uses `sorry`
+BadTypeHole.lean:3:0: warning: Definition `bad_ty_hole` is a proposition; use `theorem` instead of `def`
+
+Note: This linter can be disabled with `set_option linter.defProp false`
+UseMacroHole.lean:3:4: warning: declaration uses `sorry`
+--- Gate-Laeufe (Erwartung in Klammern) ---
+GATE GoodEmit: rc=0 | Lean no-sorry check passed for 1 modules and their imports.
+GATE BadSorryTerm: rc=1 | Lean proof hole: bad_sorry_term
+GATE BadSorryAx: rc=1 | Lean proof hole: bad_sorry_ax
+GATE HelperMacro: rc=0 | Lean no-sorry check passed for 1 modules and their imports.
+GATE UseMacroHole: rc=1 | Lean proof hole: bad_macro_use
+GATE BadOpaqueArm: rc=1 | Lean proof hole: bad_opaque_arm
+GATE BadTypeHole: rc=1 | Lean proof hole: bad_ty_hole
+GATE AxiomDecl: rc=0 | Lean no-sorry check passed for 1 modules and their imports.
+GATE GoodClassical: rc=0 | Lean no-sorry check passed for 1 modules and their imports.
+--- Transitiv (Marker importiert BadSorryTerm) ---
+GATE TransMarker: rc=1 | Lean proof hole: bad_sorry_term
+LANE67-BATTERIE FERTIG
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 32.872s
+             CPU time consumed: 22.849s
+                   Memory peak: 2.1G (swap: 0B)
+[gate] ende rc=0 avail=22320MiB
+RC=0

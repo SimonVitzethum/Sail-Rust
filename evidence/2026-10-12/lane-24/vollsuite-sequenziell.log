@@ -1,0 +1,2338 @@
+[gate] start mem=4G avail=28125MiB: env SAIL_TEST_THREADS=1 bash scripts/test-memory-limited.sh --workspace
+Running as unit: run-p18400-i37917.service
+Running as unit: run-p18407-i33951.service; invocation ID: c7eeff134dd84d3681fca141b060faa7
+    Finished `ci` profile [optimized] target(s) in 0.04s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 77ms
+             CPU time consumed: 67ms
+                   Memory peak: 27.6M (swap: 0B)
+Running as unit: run-p18423-i33953.service
+
+running 1 test
+test tuple_lowering_preserves_calls_swaps_and_register_write_effects ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 15ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p18429-i33954.service
+
+running 9 tests
+test append_expression_maps_to_triple_plus ... ok
+test bitvector_literal_uses_join1 ... ok
+test cr_type_fields_match_expected_lean ... ok
+test csr_clause_with_guard_renders_verbatim ... ok
+test decode_clause_32_bits_renders_verbatim ... ok
+test every_bitvec_operation_body_matches_expected_lean ... ok
+test literal_width_mismatch_is_span_error_not_truncation ... ok
+test mapping_all_literal_arms_render_0b ... ok
+test vector_literal_reverses ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 15ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.6M (swap: 0B)
+Running as unit: run-p18443-i33964.service
+
+running 4 tests
+test rest_is_lossless_deferred_and_json_roundtrips ... ok
+test scattered_operators_and_end_land_on_sail_ast ... ok
+test shard_markers_and_small_defs_preserved ... ok
+test val_fundef_mapdef_land_on_sail_ast ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 12ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p18452-i33965.service
+
+running 9 tests
+test constraint_becomes_true_placeholder ... ok
+test instantiation_extracts_id_substs ... ok
+test let_becomes_wild_undef_skeleton ... ok
+test measure_fun_vs_loop_measures ... ok
+test other_stays_deferred_and_lossless ... ok
+test outcome_becomes_skeleton ... ok
+test register_keeps_name_and_init_presence ... ok
+test type_keyword_picks_typedefkind ... ok
+test type_without_body_keeps_header ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7ms
+             CPU time consumed: 7ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p18466-i33966.service
+
+running 35 tests
+test annotations_validate_names_and_preserve_rigid_binder_identity ... ok
+test bit_literals_and_vectors_check_exact_lengths_elements_and_inferred_calls ... ok
+test canonical_checker_handles_calls_scopes_tuples_and_rigid_polymorphism ... ok
+test conditional_and_guard_facts_prove_constraints_with_borrowed_call_substitutions ... ok
+test conditional_facts_never_leak_to_siblings_outer_scopes_or_other_clauses ... ok
+test constrained_type_applications_require_a_proof_instead_of_kind_only_success ... ok
+test constructor_constraints_are_substituted_and_proved_from_rigid_assumptions ... ok
+test constructor_substitution_is_simultaneous_and_boolean_sorted ... ok
+test declaration_kinds_and_source_order_are_checked ... ok
+test dependent_calls_instantiate_numeric_boolean_and_compound_results ... ok
+test dependent_calls_prove_constraints_and_reject_unrefined_argument_shortcuts ... ok
+test enumeration_patterns_are_constants_and_union_values_have_signatures ... ok
+test existential_shadowing_never_reuses_outer_proof_binders_or_leaks_assumptions ... ok
+test explicit_implicit_parameters_have_integer_singleton_semantics ... ok
+test inline_pattern_inference_and_header_cleanup_handle_deep_tuples_on_a_small_stack ... ok
+test inline_return_annotations_synthesize_source_ordered_recursive_signatures ... ok
+test inline_signatures_validate_existing_vals_and_reject_inconsistent_headers ... ok
+test literals_and_rigid_dependent_identities_keep_their_refinements ... ok
+test overload_declarations_reject_missing_candidates_conflicts_and_cycles ... ok
+test overload_extensions_preserve_source_position_and_candidate_order ... ok
+test overloads_check_all_arguments_results_and_dependent_constraints ... ok
+test plain_values_open_fresh_witnesses_and_opaque_results_do_not_become_constants ... ok
+test polymorphic_calls_are_fresh_and_share_one_binding_across_arguments ... ok
+test proofs_use_only_earlier_global_constraints_and_keep_annotation_scopes ... ok
+test recursive_and_sibling_dependent_calls_keep_each_instantiation_separate ... ok
+test recursive_types_and_bad_bitfield_index_names_are_rejected ... ok
+test ten_thousand_composed_dependent_results_check_and_release_iteratively ... ok
+test ten_thousand_conditional_fact_scopes_check_and_release_without_recursion ... ok
+test ten_thousand_let_scopes_check_and_release_without_recursion ... ok
+test ten_thousand_nested_polymorphic_calls_use_iterative_cached_synthesis ... ok
+test ten_thousand_nested_vector_literals_infer_check_and_release_iteratively ... ok
+test ten_thousand_parametric_aliases_expand_and_release_on_a_small_stack ... ok
+test type_errors_are_real_and_later_val_specs_do_not_retype_earlier_bodies ... ok
+test type_synonyms_compose_type_integer_boolean_and_call_substitutions ... ok
+test unsupported_obligations_do_not_silently_accept_bodies ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 602ms
+             CPU time consumed: 594ms
+                   Memory peak: 51.9M (swap: 0B)
+Running as unit: run-p18581-i37937.service
+
+running 3 tests
+test catalog_covers_every_variant_exactly_once ... ok
+test catalog_lines_match_ocaml_failwith_sites ... ok
+test every_row_is_explain_ready ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 20ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p18596-i37941.service; invocation ID: 7e362c9cafe244aeb544ab6dfeb02455
+
+running 7 tests
+test catalog_errors_case_is_parse_only ... ok
+test catalog_has_36_sorted_cases ... ok
+test catalog_sizes_current ... ok
+test catalog_tiers_partition_and_cap_consistent ... ok
+test default_config_matches_oracle_conventions ... ok
+test dump_command_carries_flag_and_limits ... ok
+test frontend_status_failure_set ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.7M (swap: 0B)
+Running as unit: run-p18608-i58283.service
+
+running 1 test
+test corpus_sail_lib_parses ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 11ms
+             CPU time consumed: 10ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p18614-i42393.service
+
+running 2 tests
+test corpus_full_lib_frontend_gate ... ok
+test corpus_vendored_frontend_gate ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 9ms
+             CPU time consumed: 9ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p18621-i42394.service
+
+running 5 tests
+test bitfield_desugars_to_abbrev_upstream ... ok
+test corpus_has_no_sorry ... ok
+test corpus_never_abbrevs_fp_bits ... ok
+test inductive_blocks_have_deriving_and_open ... ok
+test structure_blocks_derive_beq_inhabited_repr ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8ms
+             CPU time consumed: 8ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p18631-i17957.service
+
+running 9 tests
+test callgraph_edges_and_reverse ... ok
+test callgraph_extern_and_recursion ... ok
+test early_return_throw_assert ... ok
+test loops_detected_including_nested ... ok
+test predicates_are_thread_safe ... ok
+test pure_function_labels ... ok
+test reg_read_and_mem_and_nondet_are_effects ... ok
+test reg_write_is_sailm ... ok
+test sailm_dominates_exceptm ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p18649-i58284.service; invocation ID: 37eccde63f894ac7be4e38d4e4bad252
+
+running 3 tests
+test kenv_roundtrip_keeps_all_but_knat_refinement ... ok
+test kenv_telescope_covers_all_bindings_sorted ... ok
+test type_env_schemes_lower_onto_typschm ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p18657-i58285.service
+
+running 5 tests
+test kind_env_final_state ... ok
+test locals_scope_pop_keeps_program_tables ... ok
+test registers_final_state ... ok
+test val_register_namespaces_are_independent ... ok
+test val_specs_final_state ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p18667-i58286.service
+
+running 3 tests
+test empty_envs_json_roundtrip ... ok
+test kind_env_json_roundtrip ... ok
+test type_env_json_roundtrip ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2M (swap: 0B)
+Running as unit: run-p18675-i58287.service
+
+running 10 tests
+test differential_early_return_matches_expected_lean ... ok
+test differential_errors_matches_expected_lean ... ok
+test differential_ite_exit_matches_expected_lean ... ok
+test differential_try_catch_matches_expected_lean ... ok
+test fixture_errors_exit_and_assert ... ok
+test fixture_foreach_earlyreturneffect ... ok
+test fixture_foreach_earlyreturnpure ... ok
+test fixture_ite_early_return_exit ... ok
+test fixture_try_catch_early_return_selects_e ... ok
+test fixture_try_catch_prop ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p18690-i58288.service
+
+running 17 tests
+test assert_roundtrip ... ok
+test assign_roundtrip ... ok
+test block_roundtrip ... ok
+test constraint_exp_roundtrip ... ok
+test control_and_effect_roundtrip ... ok
+test extended_forms_rejected_by_infer ... ok
+test for_roundtrip ... ok
+test lexp_shapes_roundtrip ... ok
+test list_and_cons_roundtrip ... ok
+test loop_roundtrip ... ok
+test match_roundtrip ... ok
+test pat_shapes_roundtrip ... ok
+test sizeof_roundtrip ... ok
+test struct_family_roundtrip ... ok
+test try_roundtrip ... ok
+test var_decl_roundtrip ... ok
+test vector_and_append_roundtrip ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7ms
+             CPU time consumed: 7ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p18712-i58289.service
+
+running 5 tests
+test file_ids_follow_insertion_order ... ok
+test file_table_json_roundtrip ... ok
+test line_col_resolves_byte_offsets ... ok
+test snippet_matches_diag_format ... ok
+test unknown_or_dummy_locations_yield_none ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p18722-i58290.service
+
+running 2 tests
+test both_have_length_prefix_separation ... ok
+test both_stable_and_sensitive ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p18729-i58292.service
+
+running 2 tests
+test fixture_extracts_expected_registers ... ok
+test fixture_lean_snippet_stable ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p18736-i58293.service
+
+running 17 tests
+test arm_legacy_trace_include_contains_real_declarations_and_bodies ... ok
+test declared_constructor_kinds_follow_include_order_in_parallel_frontend ... ok
+test disk_backed_parallel_typechecking_checks_bodies_and_reports_errors_in_source_order ... ok
+test disk_spool_override_is_used_and_cleaned_after_successful_and_failed_frontends ... ok
+test gen_lean_dry_run_exits_zero ... ok
+test gen_lean_dry_run_via_env_without_flag ... ok
+test help_lists_ocaml_compatible_flags ... ok
+test includes_macros_attributes_and_fixities_keep_order_across_workers ... ok
+test inline_signatures_are_declared_before_disk_backed_parallel_body_checks ... ok
+test just_check_rejects_invalid_sail_and_unresolved_includes ... ok
+test legacy_val_redeclarations_do_not_stop_the_frontend ... ok
+test missing_input_file_exits_2 ... ok
+test ordinary_lean_run_rejects_missing_stages_without_stub_output ... ok
+test parallel_disk_backed_checks_resolve_overloads_and_confine_branch_assumptions ... ok
+test require_version_violation_exits_1 ... ok
+test unknown_flag_exits_1 ... ok
+test version_flag_exits_zero ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 480ms
+             CPU time consumed: 197ms
+                   Memory peak: 22.8M (swap: 0B)
+Running as unit: run-p18993-i58304.service
+
+running 41 tests
+test ast_def_covers_def_rules ... ok
+test ast_exp_covers_exp_rules ... ok
+test ast_lit_covers_lit_rule ... ok
+test ast_mpat_covers_mpat_rules ... ok
+test ast_pat_covers_pat_rules ... ok
+test ast_typ_covers_typ_rules ... ok
+test lex_attributes_pragmas_and_strings ... ok
+test lex_comments_skipped_and_doc_kept ... ok
+test lex_error_on_unexpected_character ... ok
+test lex_function_clause_shape ... ok
+test lex_numbers_and_literals ... ok
+test lex_operators_and_punctuation ... ok
+test lex_tyvar_pow2_and_fixity ... ok
+test lex_val_and_effect_tokens ... ok
+test parse_bitfield_body_strict ... ok
+test parse_bitfield_ranges ... ok
+test parse_block_bare_let_var ... ok
+test parse_call_args_split ... ok
+test parse_case_list_strict ... ok
+test parse_entry_points_surface_lex_errors ... ok
+test parse_enum_struct_fields_strict ... ok
+test parse_exp_let_requires_in ... ok
+test parse_exp_list_strict ... ok
+test parse_exp_plain_and_if ... ok
+test parse_exp_tuple_vector_list_strict ... ok
+test parse_file_def_typ_pat ... ok
+test parse_foreach_by_in ... ok
+test parse_index_range_tails ... ok
+test parse_lane102_configkey_attrs_tails ... ok
+test parse_lane103_abstract_inst_key_chain ... ok
+test parse_lane103_register_attrs_dedup ... ok
+test parse_loop_exp_tails ... ok
+test parse_mpat_list_strict ... ok
+test parse_num_list_strict ... ok
+test parse_pat_list_strict ... ok
+test parse_struct_update_vs_block ... ok
+test parse_typ_list_strict ... ok
+test parse_typaram_configkey_regdef ... ok
+test parse_type_union_empty_brace_single_tree ... ok
+test parse_typschm_effect_tails ... ok
+test parse_union_subst_extern_attr_lists ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 13ms
+             CPU time consumed: 8ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19039-i58305.service; invocation ID: 9ac1d30e707c4bc38159cf104ed4daa5
+
+running 33 tests
+test add_mul_precedence_exp ... ok
+test add_mul_precedence_typ ... ok
+test at_chains_right ... ok
+test at_cons_are_exp_only ... ok
+test at_mixes_with_user_right_same_level ... ok
+test builtin_plus_mixes_with_user_left_same_level ... ok
+test builtin_plus_rejects_user_right_same_level ... ok
+test builtin_shadows_user_table ... ok
+test builtin_star_rejects_user_nonassoc_same_level ... ok
+test caret_is_user_op ... ok
+test cons_chains_right ... ok
+test deref_is_exp_only ... ok
+test double_prefix_rejects ... ok
+test env_from_defs_collects_fixities_through_wrappers ... ok
+test exp_comparison_does_not_chain ... ok
+test fixity_level_range_checked ... ok
+test in_is_typ_only ... ok
+test level0_binds_loosest ... ok
+test minus_left_assoc ... ok
+test mul_add_precedence ... ok
+test negate_binds_looser_than_level9 ... ok
+test negate_in_rhs ... ok
+test pow2_prefix ... ok
+test prefix_needs_atomic_for_deref ... ok
+test single_atom_folds_to_leaf ... ok
+test typ_lchain_desugars_via_and ... ok
+test typ_lchain_three_nests_and_right ... ok
+test typ_mixed_lt_gt_rejects ... ok
+test typ_rchain_desugars_via_and ... ok
+test undeclared_fixity_errors ... ok
+test user_left_assoc_nests_left ... ok
+test user_nonassoc_rejects_chain ... ok
+test user_right_assoc_nests_right ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p19077-i18014.service; invocation ID: 456c859cc4034d318e3d3f51f19f7d6b
+
+running 8 tests
+test dec_loop_negates_step ... ok
+test foreachnotsopure_head_is_monadic ... ok
+test foreachpure_inner_head ... ok
+test loop_bodies_use_int_ops ... ok
+test nat_binder_refines_atom ... ok
+test range_arg_types_match_expected_lean ... ok
+test range_def_signatures ... ok
+test range_return_types_match_expected_lean ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 10ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19091-i58306.service
+
+running 2 tests
+test closed_shapes_agree ... ok
+test var_with_lower_bound_agrees ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19098-i18016.service
+
+running 2 tests
+test lean_corpus_lexes_without_errors ... ok
+test lean_corpus_streams_end_with_eof ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 10ms
+             CPU time consumed: 10ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p19141-i18017.service
+
+running 1 test
+test lean_default_pipeline_parallel_smoke ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 12ms
+             CPU time consumed: 10ms
+                   Memory peak: 3.6M (swap: 0B)
+Running as unit: run-p19167-i18018.service
+
+running 3 tests
+test comments_and_collection_closers_keep_their_lexical_roles ... ok
+test longest_operator_match_preserves_reserved_tokens_and_suffixes ... ok
+test wildcard_is_distinct_from_underscore_prefixed_identifiers ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 19ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.7M (swap: 0B)
+Running as unit: run-p19175-i58307.service
+
+running 1 test
+test fuel_combinators_agree ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19181-i58308.service
+
+running 6 tests
+test fixture_dec_order_negates_step ... ok
+test fixture_foreach_loop ... ok
+test fixture_foreach_multivar_tuple_order ... ok
+test fixture_nested_foreach_id_run_decision ... ok
+test fixture_while_loopboth ... ok
+test fixture_while_print_fuel ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19192-i18022.service
+
+running 10 tests
+test bool_match_needs_both_cases ... ok
+test empty_match_gets_single_wildcard ... ok
+test match_bv_as_wrapped_vector_still_bv ... ok
+test match_bv_sail_detected_as_bv ... ok
+test match_bv_sail_without_wildcard_needs_catch_all ... ok
+test match_sail_duplicate_arm_is_redundant ... ok
+test match_sail_full_enum_is_exhaustive_not_bv ... ok
+test match_sail_guarded_arm_gives_no_coverage ... ok
+test match_sail_partial_enum_gets_wildcard ... ok
+test match_sail_wildcard_shadows_tail ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p19207-i58309.service
+
+running 7 tests
+test constraint_converters_cover_typ_bool_app_and_equal ... ok
+test equal_not_equal_eval_per_sort ... ok
+test normalize_is_canonical_with_typargs ... ok
+test simplify_folds_per_sort ... ok
+test subst_and_vars_traverse_typ_and_bool ... ok
+test typarg_converters_cover_all_sorts ... ok
+test typarg_sorts_are_representable ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p19219-i58310.service
+
+running 6 tests
+test bounded_lru_is_mandatory ... ok
+test from_nconstraint_covers_all_nexp_forms ... ok
+test from_nconstraint_is_canonical_for_ac_operands ... ok
+test from_nconstraint_maps_leaves_to_stable_atoms ... ok
+test keys_use_names_and_separate_id_var_namespaces ... ok
+test stub_pool_and_query_basics ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19230-i58311.service
+
+running 2 tests
+test all_emitted_snippets_are_sorry_free ... ok
+test nonempty_initial_regstate_is_hard_error_with_span_and_code ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4ms
+             CPU time consumed: 4ms
+                   Memory peak: 2M (swap: 0B)
+Running as unit: run-p19238-i18026.service
+
+running 9 tests
+test collapse_ws_runs ... ok
+test from_rust_drops_shard_markers ... ok
+test from_rust_val_and_register ... ok
+test oracle_suffix_table ... ok
+test render_seq_stable_shape ... ok
+test sift_oracle_dump_empty_on_empty ... ok
+test sift_oracle_dump_kinds_and_names ... ok
+test sift_oracle_dump_unknown_suffix_is_other_with_token ... ok
+test strip_locations_only_exact_tokens ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.3M (swap: 0B)
+Running as unit: run-p19252-i37998.service
+
+running 2 tests
+test op_strings_match_canonical_table ... ok
+test render_delegates_to_canonical_impl ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19259-i37999.service
+
+running 8 tests
+test all_nconstraint_operators_evaluate ... ok
+test all_nexp_operators_evaluate ... ok
+test facts_from_constraint_covers_equal_and_set ... ok
+test lean_mapping_per_operator ... ok
+test nc_app_vars_subst_simplify ... ok
+test normalize_constraint_is_canonical_for_and_or ... ok
+test provably_family_covers_all_operators ... ok
+test simplify_identities_per_operator ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19272-i38000.service
+
+running 11 tests
+test definition_iterator_is_lazy_and_fused_after_errors ... ok
+test documentation_wraps_the_next_definition_without_becoming_signature_text ... ok
+test errors_carry_spans ... ok
+test existential_signature_does_not_consume_its_following_function ... ok
+test fundefs_val_register_type_overload_fixity ... ok
+test parallel_matches_sequential ... ok
+test pragma_shard_markers_preserved ... ok
+test registers_types_mapping ... ok
+test same_line_attributes_keep_the_following_definition ... ok
+test scattered_clauses_end_operator_names_nested_comments ... ok
+test symbolic_names_are_not_split_at_equals ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19292-i38001.service
+
+running 2 tests
+test mono_then_streaming_anf ... ok
+test wildcard_match_survives_pipeline ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.7M (swap: 0B)
+Running as unit: run-p19299-i38002.service
+
+running 6 tests
+test drop_point_checklist ... ok
+test routing_never_exceeds_per_shard_budget ... ok
+test sizing_plan_covers_and_is_tight ... ok
+test stale_removes_are_rejected ... ok
+test tuned_peak_is_below_plain_peak ... ok
+test unknown_handles_are_rejected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8ms
+             CPU time consumed: 8ms
+                   Memory peak: 5.9M (swap: 0B)
+Running as unit: run-p19311-i38003.service
+
+running 5 tests
+test embedding_present_and_consistent ... ok
+test empty_model_skeleton_check ... ok
+test inventory_matches_sail_lib ... ok
+test lookup_unknown_returns_none ... ok
+test version_is_pinned_to_dune_project ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p19321-i38004.service
+
+running 12 tests
+test constraint_simplify_preserves_eval ... ok
+test constraint_simplify_preserves_eval_with_unbound_vars ... ok
+test kids_are_stable_across_tables ... ok
+test normalize_is_canonical_for_sum ... ok
+test normalize_is_canonical_for_times ... ok
+test normalize_is_idempotent ... ok
+test normalize_preserves_eval ... ok
+test normalize_preserves_eval_with_unbound_vars ... ok
+test provably_nneg_is_sound ... ok
+test provably_zero_and_nonzero_are_sound ... ok
+test simplify_preserves_eval ... ok
+test simplify_preserves_eval_with_unbound_vars ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 25ms
+             CPU time consumed: 25ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19338-i38005.service
+
+running 3 tests
+test prove_set_app ... ok
+test prove_solver_context ... ok
+test scattered_clauses ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 16ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19347-i70681.service
+
+running 33 tests
+test arm_bitfield_concat_keeps_range_order_through_parentheses ... ok
+test bidirectional_mappings_preserve_both_patterns_and_guards ... ok
+test bit_spellings_lower_to_binary_literals_and_never_to_integer_sizes ... ok
+test builtin_type_arguments_keep_their_sorts_and_refined_names ... ok
+test constructor_arguments_use_bound_kinds_and_inference_respects_shadowing ... ok
+test custom_fixities_survive_between_fragment_calls ... ok
+test declaration_context_snapshots_and_failures_do_not_leak_signatures ... ok
+test declared_constructors_infer_kinds_without_retaining_their_bodies ... ok
+test deprecated_order_parameters_are_erased_with_their_binders ... ok
+test descending_loops_and_legacy_bitfield_calls_keep_their_semantics ... ok
+test file_real_is_lossless_over_fixtures ... ok
+test file_real_lowers_bridge_bodies ... ok
+test file_real_lowers_function_bodies_without_placeholder_fallback ... ok
+test file_real_lowers_let_register_constraint ... ok
+test file_real_wraps_empty_file_in_shard_markers ... ok
+test fragment_errors_carry_spans ... ok
+test function_domain_tuple_becomes_multiple_arguments ... ok
+test infix_folding_is_connected_to_expression_and_numeric_conversion ... ok
+test large_arm_impdef_converts_on_the_default_thread_stack ... ok
+test nat_quantifiers_retain_nonnegative_constraints_and_finite_types_elaborate ... ok
+test negated_and_conditional_constraints_keep_boolean_arguments ... ok
+test numeric_and_boolean_type_abbreviations_keep_their_result_kinds ... ok
+test omitted_binder_kinds_follow_their_uses_and_explicit_kinds_are_checked ... ok
+test outcome_bodies_are_retained_and_their_fixities_stay_local ... ok
+test real_def_val_has_typschm ... ok
+test real_exp_app_and_let ... ok
+test real_parser_starts_empty_and_reports_spans ... ok
+test real_pat_some_is_app ... ok
+test real_typ_bool_is_id ... ok
+test setter_assignments_append_rhs_once_and_keep_ocaml_argument_shapes ... ok
+test source_annotations_survive_conversion_and_serialization ... ok
+test vector_access_updates_and_lvalue_suffix_chains_match_ocaml_lowering ... ok
+test wildcard_parameters_do_not_become_named_bindings ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 29ms
+             CPU time consumed: 24ms
+                   Memory peak: 6.6M (swap: 0B)
+Running as unit: run-p19385-i38006.service
+
+running 26 tests
+test collision_typename_equals_ctorname ... ok
+test dangling_impl_clause_end_are_errors ... ok
+test deep_pattern_names_use_an_explicit_work_stack ... ok
+test distinct_duplicate_type_is_error ... ok
+test distinct_errors_per_namespace ... ok
+test duplicate_ctor_across_unions_also_renamed ... ok
+test duplicate_default_is_error ... ok
+test duplicate_function_is_error ... ok
+test enum_members_resolve_as_ctors ... ok
+test env_is_send_sync ... ok
+test fundef_binds_function_with_rec_flag_and_clause_count ... ok
+test happy_path_no_errors_no_renames ... ok
+test intra_clause_duplicate_pattern_is_error ... ok
+test meta_defs_recorded_without_errors ... ok
+test namespaces_stay_separate_across_all_kinds ... ok
+test order_independent_top_level ... ok
+test overload_extensions_append_candidates_and_can_reference_overloads ... ok
+test overload_targets_must_exist_order_independent ... ok
+test pat_names_skips_struct_references ... ok
+test repeated_valspecs_replace_in_source_order_and_preserve_externs ... ok
+test scattered_enumcl_duplicate_across_owners_renamed ... ok
+test scattered_open_clause_impl_end_roundtrip ... ok
+test scattered_unioncl_ctor_collides_like_typedef_ctor ... ok
+test self_collision_union_named_like_its_ctor ... ok
+test streamed_definitions_with_independent_interners_match_whole_program_resolution ... ok
+test top_level_let_binds_values ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 15ms
+             CPU time consumed: 8ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p19417-i38008.service
+
+running 4 tests
+test ast_is_shared_across_threads ... ok
+test compact_json_roundtrips_too ... ok
+test json_roundtrip_covers_interned_lit_payloads ... ok
+test json_roundtrip_preserves_ast ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.9M (swap: 0B)
+Running as unit: run-p19434-i38009.service
+
+running 12 tests
+test tests::mem_request_address_masking ... ok
+test tests::tiny_arm_instance_builds ... ok
+test tests::v1_access_kind_ctors_match_master ... ok
+test tests::v1_instantiation_emitter_matches_master_shape ... ok
+test tests::v1_sequential_mem_roundtrip_matches_master ... ok
+test tests::v2_instantiation_emitter_matches_master_shape ... ok
+test tests::v2_instruction_effect_has_all_15_lean_ctors ... ok
+test tests::v2_mem_request_to_archsem_copies_fields ... ok
+test tests::v2_rel_acq_is_disjunction_of_rcpc_rcsc ... ok
+test tests::v2_ret_mapping_matches_master ... ok
+test tests::v2_sequential_memory_roundtrip_is_little_endian ... ok
+test tests::v2_sequential_tagged_memory_rejected_like_master ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7ms
+             CPU time consumed: 7ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p19451-i38010.service
+
+running 10 tests
+test peak::tests::estimate_saturates_instead_of_wrapping ... ok
+test peak::tests::estimate_scales_linearly ... ok
+test peak::tests::rss_reading_does_not_panic ... ok
+test shard::tests::empty_arena_reports_zero ... ok
+test shard::tests::insert_get_remove_roundtrip ... ok
+test shard::tests::unknown_handles_are_rejected ... ok
+test sizing::tests::budgets_are_ordered ... ok
+test sizing::tests::class_boundaries ... ok
+test sizing::tests::plan_always_covers ... ok
+test sizing::tests::plan_is_tight ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19466-i21553.service
+
+running 5 tests
+test tests::alle_26_dateien_klassifiziert ... ok
+test tests::const_kontext_ohne_closure_e0015 ... ok
+test tests::sechs_shard_ok_zwanzig_defizite_mit_je_genau_einem_owner ... ok
+test tests::shard_ok_dateien_sind_die_belegten_sechs ... ok
+test tests::zeilensumme_stimmt ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19476-i21554.service
+
+running 24 tests
+test files::tests::empty_source_has_one_empty_line ... ok
+test files::tests::first_file_is_id_zero ... ok
+test files::tests::line_col_is_one_based_byte_columns ... ok
+test files::tests::line_col_survives_multibyte_chars ... ok
+test files::tests::snippet_marks_span_line_with_context ... ok
+test files::tests::span_lines_rejects_dummy_and_oob ... ok
+test id::tests::ids_and_arena_are_send_sync ... ok
+test id::tests::insert_get_remove_reuse_bumps_generation ... ok
+test id::tests::unknown_and_dummy_ids_rejected ... ok
+test interner::tests::interner_is_send_sync ... ok
+test interner::tests::json_roundtrip_preserves_symbols ... ok
+test interner::tests::same_string_same_symbol ... ok
+test interner::tests::single_storage_shared_between_map_and_vec ... ok
+test interner::tests::symbol_display_prints_raw_id ... ok
+test json::tests::empty_ast_roundtrip ... ok
+test json::tests::interner_survives_alongside_ast_json ... ok
+test json::tests::invalid_json_is_error ... ok
+test span::tests::display_matches_lex_bitvec_convention ... ok
+test span::tests::merge_across_files_is_dummy ... ok
+test span::tests::merge_covers_both_spans ... ok
+test storage::tests::a_failed_write_releases_flat_records_on_the_same_small_stack ... ok
+test storage::tests::deep_trees_roundtrip_and_drop_on_a_small_stack ... ok
+test storage::tests::malformed_graphs_are_rejected_before_reconstruction ... ok
+test storage::tests::symbols_metadata_and_payloads_are_preserved_deterministically ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 209ms
+             CPU time consumed: 208ms
+                   Memory peak: 107.1M (swap: 0B)
+Running as unit: run-p19508-i25731.service
+
+running 23 tests
+test bitfield::tests::cr_type_accessors_match_expected_lean ... ok
+test bitfield::tests::inverted_or_escaping_range_errors_with_span ... ok
+test bitfield::tests::unknown_field_errors ... ok
+test conv::tests::typ_ascription_unwraps_inner_pat ... ok
+test error::tests::display_carries_span_and_widths ... ok
+test expr::tests::append_renders_triple_plus ... ok
+test expr::tests::empty_vector_needs_zero_width ... ok
+test expr::tests::generic_vector_reverses_elements ... ok
+test expr::tests::join1_idiom_for_two_bits ... ok
+test expr::tests::join1_mixed_widths_must_sum ... ok
+test expr::tests::join1_width_mismatch_errors_with_span ... ok
+test lit::tests::expr_and_pat_shapes_match_doc_lit ... ok
+test lit::tests::invalid_digits_error ... ok
+test lit::tests::raw_bits_expands_hex_nibbles ... ok
+test lit::tests::width_mismatch_carries_span ... ok
+test ops::tests::all_eighteen_ops_covered_in_order ... ok
+test ops::tests::lean_bodies_match_expected_lean ... ok
+test pat::tests::all_literal_vector_renders_0b ... ok
+test pat::tests::concat_width_mismatch_errors_not_truncates ... ok
+test pat::tests::decode_clause_matches_expected_lean ... ok
+test pat::tests::nested_vector_distributes_and_typ_unwraps ... ok
+test pat::tests::single_bit_id_gets_width_one ... ok
+test pat::tests::unclear_width_identifier_errors_with_span ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 17ms
+             CPU time consumed: 7ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p19536-i21558.service; invocation ID: 09ec28425c9a44889b1b52bcb6c7869f
+
+running 9 tests
+test tests::fingerprint_stabil_und_sensitiv ... ok
+test tests::gc_lru_limit_mit_touch ... ok
+test tests::geaenderter_input_schreibt_neu ... ok
+test tests::limit_null_keine_retention ... ok
+test tests::lookup_miss_faelle ... ok
+test tests::nebenlaeufige_store_lookup_gc_bleiben_konsistent ... ok
+test tests::store_lookup_roundtrip ... ok
+test tests::ungueltige_ids_abgewiesen ... ok
+test tests::zweitlauf_ohne_aenderung_schreibt_nichts ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 187ms
+             CPU time consumed: 116ms
+                   Memory peak: 3.5M (swap: 0B)
+Running as unit: run-p19559-i21568.service; invocation ID: 482e43d618aa4ea9afba8323505ee13f
+
+running 14 tests
+test code::tests::codes_are_unique_and_wellformed ... ok
+test code::tests::explain_str_roundtrips_all_codes ... ok
+test code::tests::format_explain_mentions_code_and_workaround ... ok
+test error::tests::display_contains_code_span_pass_and_hint ... ok
+test error::tests::from_entry_takes_hint_from_catalog ... ok
+test error::tests::render_attaches_source_line ... ok
+test error::tests::render_dummy_or_oob_yields_no_snippet ... ok
+test exit::tests::backend_limit_maps_to_4_and_internal_to_101 ... ok
+test exit::tests::batch_picks_worst_code ... ok
+test exit::tests::exit_numbers_are_stable ... ok
+test pass::tests::pass_names_roundtrip ... ok
+test span::tests::display_dummy_and_ranged ... ok
+test span::tests::merge_across_files_is_dummy ... ok
+test span::tests::merge_covers_both_spans ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 13ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19578-i21569.service; invocation ID: f294604ade0d461ba96d35b9cfd2daa8
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p19583-i42456.service; invocation ID: 22e00415cc01454483c0ee7a06b4a3a5
+
+running 17 tests
+test detect::tests::internal_return_counts ... ok
+test detect::tests::named_early_return_app_counts ... ok
+test detect::tests::nested_return_inside_loop_body_counts ... ok
+test detect::tests::return_in_try_arm_counts_but_tried_alone_does_not ... ok
+test detect::tests::seq_finds_return_in_tail ... ok
+test detect::tests::surface_return_counts ... ok
+test detect::tests::throw_exit_and_try_alone_do_not_count ... ok
+test monad::tests::ascription_matrix_matches_prepend_monad ... ok
+test monad::tests::frame_matrix_matches_ocaml ... ok
+test monad::tests::frame_suffixes ... ok
+test monad::tests::return_type_gains_sail_m_only_when_monadic ... ok
+test render::tests::assert_shape ... ok
+test render::tests::early_return_uses_sail_me_throw_in_sail_monad ... ok
+test render::tests::exit_is_bare_everywhere ... ok
+test render::tests::throw_arrow_only_outside_monad ... ok
+test render::tests::try_catch_combinator_follows_early_return ... ok
+test render::tests::try_catch_shape ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p19605-i54958.service
+
+running 11 tests
+test tests::default_stays_lib_without_main ... ok
+test tests::detect_main_seen_scans_function_names ... ok
+test tests::effectful_main_ref_is_direct ... ok
+test tests::entry_detection_renames_only_main ... ok
+test tests::flag_plus_main_emits_stub_and_exe ... ok
+test tests::lean_exe_fragment_is_byte_stable ... ok
+test tests::main_call_chains_model_init_only_with_registers ... ok
+test tests::pure_main_ref_wraps_in_lambda ... ok
+test tests::small_model_with_flag_yields_run_target_via_sail_lake ... ok
+test tests::small_model_without_flag_stays_lib_via_sail_lake ... ok
+test tests::stub_matches_ocaml_shape ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19621-i54959.service
+
+running 8 tests
+test tests::bitvec_externs_render_as_direct_calls_like_expected_lean ... ok
+test tests::extern_types_flag_skips_typedef ... ok
+test tests::full_op_table_matches_ocaml_reference ... ok
+test tests::fundef_emission_skips_lean_externs ... ok
+test tests::int_bool_externs_render_as_operators_like_expected_lean ... ok
+test tests::missing_extern_is_hard_error_with_arm_extras_hint ... ok
+test tests::operator_arity_mismatch_is_unsupported_not_sorry ... ok
+test tests::val_spec_lean_mapping_lookup ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19635-i54960.service
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 10ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p19640-i25732.service
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 11ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19645-i38014.service
+
+running 12 tests
+test dispatch::tests::edges_extracted ... ok
+test dispatch::tests::non_monotonic_see_detected ... ok
+test measure::tests::fanout_counts_clauses_per_target ... ok
+test measure::tests::largest_sorts_and_skips_clauses ... ok
+test plan::tests::clause_always_dispatch ... ok
+test plan::tests::helpers_catch_the_rest ... ok
+test plan::tests::plan_counts_add_up ... ok
+test plan::tests::val_inherits_shard_from_name ... ok
+test scanner::tests::body_stats_count_arms_ifs_calls ... ok
+test scanner::tests::heads_found_in_order ... ok
+test scanner::tests::indented_lines_are_not_heads ... ok
+test scanner::tests::see_guard_parsed ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19662-i38015.service; invocation ID: be9f504d1cbe46f69473906280fe820b
+
+running 14 tests
+test loops::tests::combinators ... ok
+test loops::tests::dec_negates_step ... ok
+test loops::tests::effectful_drops_id_run ... ok
+test loops::tests::pure_inc_head ... ok
+test nexp::tests::constants ... ok
+test nexp::tests::shapes ... ok
+test nexp::tests::var_needs_fact ... ok
+test ops::tests::int_ops ... ok
+test ops::tests::nat_bitvec_ops ... ok
+test ops::tests::rendering_matches_backend ... ok
+test ops::tests::unknown_is_not_op ... ok
+test types::tests::atom_and_kindvar ... ok
+test types::tests::base_types ... ok
+test types::tests::range_low_decides ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19682-i38017.service
+
+running 11 tests
+test tests::arch_v2_renders_all_fields ... ok
+test tests::file_prelude_has_limits ... ok
+test tests::generator_never_emits_sorry ... ok
+test tests::inhabited_dedup_keeps_first_ctor_in_order ... ok
+test tests::lakefile_defaults_to_sail_rev_v6_without_mathlib ... ok
+test tests::lakefile_with_executable_adds_lean_exe ... ok
+test tests::lakefile_with_real_numbers_pulls_mathlib ... ok
+test tests::layout_snapshot_is_stable ... ok
+test tests::lib_path_and_git_conflict ... ok
+test tests::register_templates_dedupe_types ... ok
+test tests::toolchain_pins_default ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19698-i38018.service
+
+running 32 tests
+test pats::tests::app_ctor_dot_prefix_and_none ... ok
+test pats::tests::as_and_var_drop_binder ... ok
+test pats::tests::bitvector_detection_is_strict_as_only ... ok
+test pats::tests::ceiling_sig_still_renders ... ok
+test pats::tests::id_uses_fixup_and_enum_dot ... ok
+test pats::tests::not_or_subrange_stringappend_are_hard_errors ... ok
+test pats::tests::p_typ_drops_outside_vectors ... ok
+test pats::tests::p_typ_width_ascriptions_in_vectors ... ok
+test pats::tests::struct_and_cons_shapes ... ok
+test pats::tests::vector_concat_parts_and_width_errors ... ok
+test pats::tests::vector_lits_only_outside_match_bv ... ok
+test pats::tests::wild_and_lit_drop_width_in_patterns ... ok
+test tests::ascribed_monads_match_prepend_monad ... ok
+test tests::conv_vector_order_bitvector_and_bool_drop ... ok
+test tests::ctor_renames_and_shadowing_match_ocaml ... ok
+test tests::effect_triple_matches_legacy_labels ... ok
+test tests::fixup_match_id_matches_ocaml ... ok
+test tests::frame_suffixes_match_ocaml_dec_val_end ... ok
+test tests::kid_names_gain_k_prefix ... ok
+test tests::options_drive_prefixes ... ok
+test tests::parallel_defs_keep_order_and_stream ... ok
+test tests::parallel_printing_large_definition_inventory_uses_bounded_workers ... ok
+test tests::prelude_uses_presail_monads ... ok
+test tests::print_lit_width_flag_matches_ocaml ... ok
+test tests::prints_core_types ... ok
+test tests::prints_fun_signatures_with_monad_mapping ... ok
+test tests::prints_literals_like_ocaml_backend ... ok
+test tests::prints_nexp_with_precedence ... ok
+test tests::sanitize_matches_ocaml_fix_id ... ok
+test tests::string_escapes_match_ocaml_lean_escape_string ... ok
+test tests::throw_name_follows_sail_monad ... ok
+test tests::untranslatable_is_hard_error_with_span ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 36ms
+             CPU time consumed: 327ms
+                   Memory peak: 8.8M (swap: 0B)
+Running as unit: run-p19767-i38028.service
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 17ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p19772-i25733.service
+
+running 31 tests
+test combinator::tests::fuel_combinator_names ... ok
+test combinator::tests::fuel_kinds_need_fuel ... ok
+test combinator::tests::non_loop_names_rejected ... ok
+test combinator::tests::only_surface_for_has_no_loop_vars ... ok
+test combinator::tests::sail_names_are_loop_names ... ok
+test combinator::tests::sail_names_cover_all_combinators ... ok
+test combinator::tests::step_direction ... ok
+test effect::tests::arrow_follows_body_effects ... ok
+test effect::tests::do_wrapping_forms ... ok
+test effect::tests::frame_matrix_matches_ocaml ... ok
+test effect::tests::frame_suffixes ... ok
+test effect::tests::left_arrow_wrapping ... ok
+test effect::tests::surface_for_needs_id_run_only_when_pure ... ok
+test effect::tests::wrap_pure_adds_pure ... ok
+test render::tests::ascribed_do_matches_multivar_idiom ... ok
+test render::tests::foreach_effectful_body_uses_update_arrow ... ok
+test render::tests::foreach_pure_matches_expected_idiom ... ok
+test render::tests::fuel_spacing_matches_ocaml ... ok
+test render::tests::surface_for_effectful_body_has_no_id_run ... ok
+test render::tests::surface_for_pure_body_gets_id_run ... ok
+test render::tests::until_fuel_uses_until_combinator ... ok
+test render::tests::until_renders_repeat_idiom ... ok
+test render::tests::while_monadic_cond_gets_do_and_arrow ... ok
+test render::tests::while_non_monadic_tail_is_bare ... ok
+test render::tests::while_pure_matches_expected_idiom ... ok
+test vars::tests::foreach_lambda_carries_index_binder ... ok
+test vars::tests::fresh_names_avoid_collisions ... ok
+test vars::tests::nested_loops_get_distinct_names ... ok
+test vars::tests::single_var_init_and_pattern ... ok
+test vars::tests::tuple_var_init_and_pattern ... ok
+test vars::tests::unit_var_splits_expr_and_binder ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.7M (swap: 0B)
+Running as unit: run-p19808-i25734.service; invocation ID: 018254042d9c4ffe99aa05bf239e67aa
+
+running 22 tests
+test anf::tests::anf_accepts_wildcard_arm ... ok
+test anf::tests::anf_binop_args_are_atoms ... ok
+test anf::tests::anf_lowers_nested_calls_to_atoms ... ok
+test anf::tests::anf_rejects_non_exhaustive_match ... ok
+test anf::tests::anf_temp_limit_enforced ... ok
+test anf::tests::internal_lets_cow_borrows_untouched_trees ... ok
+test anf::tests::internal_lets_cow_rotation_is_byte_identical ... ok
+test anf::tests::internal_lets_flattens_nested_value ... ok
+test anf::tests::remove_blocks_cow_eliminates_in_order ... ok
+test anf::tests::remove_blocks_eliminates_all_blocks ... ok
+test mono::tests::mono_arity_mismatch ... ok
+test mono::tests::mono_body_size_limit ... ok
+test mono::tests::mono_monomorphic_rejected ... ok
+test mono::tests::mono_single_instance ... ok
+test mono::tests::mono_split_limit_enforced ... ok
+test mono::tests::mono_suffix_and_subst_cow_contract ... ok
+test shard::tests::lower_shard_parallel_many ... ok
+test shard::tests::lower_shard_rejects_empty ... ok
+test shard::tests::lower_shard_single_def_no_block_left ... ok
+test shard::tests::stream_error_aborts_with_span ... ok
+test shard::tests::stream_preserves_all_defs_without_collecting ... ok
+test shard::tests::stream_shard_boundaries_exact ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 11ms
+             CPU time consumed: 21ms
+                   Memory peak: 4.1M (swap: 0B)
+Running as unit: run-p20131-i25735.service
+
+running 20 tests
+test conv::boundary_tests::bidirectional_conversion_retains_guards_without_fabricating_expressions ... ok
+test conv::boundary_tests::mapping_variables_roundtrip_without_becoming_wildcards ... ok
+test encdec::tests::fixture_defs_split_into_encdec_and_execute ... ok
+test encdec::tests::suffix_classification ... ok
+test patterns::tests::direction_naming_matches_ocaml ... ok
+test patterns::tests::mapping_pattern_arm_produces_guard_and_call ... ok
+test patterns::tests::no_mapping_pattern_leaves_arms_untouched ... ok
+test patterns::tests::split_stops_at_first_mapping_arm ... ok
+test realize::tests::bidir_mapping_realizes_four_functions ... ok
+test realize::tests::bidir_val_spec_splits_into_four ... ok
+test realize::tests::direction_only_clauses_are_filtered ... ok
+test realize::tests::existing_definitions_are_not_regenerated ... ok
+test realize::tests::guards_travel_with_pattern_side ... ok
+test realize::tests::overload_entries_expand_mappings ... ok
+test untranslatable::tests::backwards_direction_stays_translatable ... ok
+test untranslatable::tests::exemption_matches_anchored_regex ... ok
+test untranslatable::tests::lets_are_stripped_on_both_levels ... ok
+test untranslatable::tests::non_match_bodies_are_translatable ... ok
+test untranslatable::tests::realized_matches_suffix_is_not_exempt ... ok
+test untranslatable::tests::string_append_forwards_is_untranslatable ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20156-i25736.service
+
+running 33 tests
+test conv::tests::constraint_typ_bool_shapes_roundtrip ... ok
+test conv::tests::nexp_roundtrips ... ok
+test conv::tests::typarg_sorts_roundtrip ... ok
+test expr::tests::constraint_eval ... ok
+test expr::tests::eval_arith_identities ... ok
+test expr::tests::eval_total_on_partial_input ... ok
+test expr::tests::kid_symbols_share_one_table_entry ... ok
+test expr::tests::subst_and_vars ... ok
+test expr::tests::subst_cow_borrows_fully_unchanged_tree ... ok
+test expr::tests::subst_cow_constraint_keeps_bool_var_folding ... ok
+test expr::tests::subst_cow_rebuilds_only_on_hit_and_matches_subst ... ok
+test lean::tests::constants_map ... ok
+test lean::tests::shapes_map ... ok
+test lean::tests::var_needs_facts_for_nat ... ok
+test pred::tests::constants ... ok
+test pred::tests::facts_drive_bounds ... ok
+test pred::tests::facts_key_on_symbols_not_strings ... ok
+test pred::tests::from_constraint_collects_bounds ... ok
+test pred::tests::from_constraint_pins_equal_and_nonzero ... ok
+test pred::tests::shapes_without_context ... ok
+test pred::tests::sign_through_arith ... ok
+test simplify::tests::borrowed_descendant_rewrites_are_not_lost_in_parents ... ok
+test simplify::tests::constraint_simplification ... ok
+test simplify::tests::folds_constants ... ok
+test simplify::tests::identities ... ok
+test simplify::tests::if_true_false_branches ... ok
+test simplify::tests::negated_sum_is_order_independent ... ok
+test simplify::tests::normalize_is_canonical_for_ac ... ok
+test simplify::tests::normalize_is_idempotent_and_canonical ... ok
+test simplify::tests::normalize_preserves_semantics ... ok
+test simplify::tests::simplify_cow_borrows_untouched_trees ... ok
+test simplify::tests::simplify_cow_fold_values_match_owned_contract ... ok
+test simplify::tests::unsound_folds_are_gone ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20194-i25737.service
+
+running 53 tests
+test barrier::tests::beleg_deckel_wirft_ab_statt_still_zu_wachsen ... ok
+test barrier::tests::beleg_traegt_content_hash_keinen_zaehler ... ok
+test barrier::tests::drop_ohne_seal_gibt_barriere_frei ... ok
+test barrier::tests::evict_gibt_barriere_frei ... ok
+test barrier::tests::evict_ohne_versiegelung ... ok
+test barrier::tests::genau_ein_heisser_shard ... ok
+test barrier::tests::verbrauchtes_token_zaehlt_drop_nicht_doppelt ... ok
+test driver::tests::abort_verwirft_ohne_cache_eintrag ... ok
+test driver::tests::disk_spills_do_not_accumulate_in_the_live_cache ... ok
+test driver::tests::fehler_nach_begin_leckt_die_barriere_nicht ... ok
+test driver::tests::finish_mit_heissem_shard_verwirft_statt_zu_lecken ... ok
+test driver::tests::memo_prove_trifft_beim_zweiten_mal_ohne_rechnen ... ok
+test driver::tests::memo_store_fehler_wird_gezaehlt_nicht_geschluckt ... ok
+test driver::tests::phasen_budgets_im_lane14_format_und_zu_gross_wird_abgewiesen ... ok
+test driver::tests::schleife_holt_sealt_spillt_und_geht_weiter ... ok
+test driver::tests::zustandsfolge_idle_heiss_idle_finished ... ok
+test driver::tests::zweiter_heisser_shard_wird_abgewiesen ... ok
+test id::tests::hex_roundtrip ... ok
+test id::tests::keine_prefix_kollision ... ok
+test id::tests::lane11_fingerprint_uebernahme ... ok
+test id::tests::sensitiv_auf_inhalt_und_domaene ... ok
+test id::tests::shard_id_geht_in_hash_ein ... ok
+test id::tests::stabil_ueber_lauefe ... ok
+test memo::tests::gc_mit_limit ... ok
+test memo::tests::key_stabil_domaenen_getrennt ... ok
+test memo::tests::run_uebergreifend_wiederverwendbar ... ok
+test memo::tests::store_lookup_zweitlauf_skip ... ok
+test summaries::tests::callgraph_rundreise_und_determinismus ... ok
+test summaries::tests::const_prop_rundreise ... ok
+test summaries::tests::decode_caps_und_try_encode_pfad ... ok
+test summaries::tests::decode_lehnt_muill_ab ... ok
+test summaries::tests::export_pflegt_ein_und_ersetzt ... ok
+test summaries::tests::mono_rundreise_ohne_bodies ... ok
+test summaries::tests::zu_grosse_summaries_werden_abgewiesen ... ok
+test summary::tests::decode_caps_weisen_riesen_counts_ab ... ok
+test summary::tests::decode_lehnt_muill_ab ... ok
+test summary::tests::record_rundreise_ueber_trait ... ok
+test summary::tests::tabelle_deckel_und_sortierte_ordnung ... ok
+test summary::tests::tabelle_insert_remove_budget ... ok
+test summary::tests::zu_grosse_summary_wird_abgewiesen ... ok
+test warm::tests::buchung_bleibt_exakt_kein_drift ... ok
+test warm::tests::budget_wird_explizit_abgewiesen ... ok
+test warm::tests::concurrent_publication_cannot_overwrite_an_existing_id ... ok
+test warm::tests::disk_storage_and_streaming_need_no_live_cache ... ok
+test warm::tests::evict_gibt_ram_frei_datei_bleibt ... ok
+test warm::tests::fremder_inhalt_unter_gleicher_id_wird_abgewiesen ... ok
+test warm::tests::get_prueft_budget_wie_spill ... ok
+test warm::tests::live_ersetzung_wird_abgewiesen_statt_still_ersetzt ... ok
+test warm::tests::prefetch_laedt_der_reihe_nach ... ok
+test warm::tests::prefetch_prueft_budget ... ok
+test warm::tests::rejects_large_sparse_blob_before_reading_it ... ok
+test warm::tests::spill_get_roundtrip ... ok
+test warm::tests::tmp_prefix_teilt_diskcache_namenwahrheit ... ok
+
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 86ms
+             CPU time consumed: 42ms
+                   Memory peak: 7.9M (swap: 0B)
+Running as unit: run-p20260-i73907.service
+
+running 36 tests
+test diff::tests::hunk_headers_are_one_based ... ok
+test diff::tests::identical_is_empty ... ok
+test diff::tests::large_middle_falls_back_without_hanging ... ok
+test diff::tests::pure_addition ... ok
+test diff::tests::simple_change_has_markers ... ok
+test diff::tests::trailing_newline_difference_ignored ... ok
+test diff::tests::truncation_kicks_in ... ok
+test normalize::tests::blank_runs_collapse_but_single_kept ... ok
+test normalize::tests::crlf_and_trailing_whitespace ... ok
+test normalize::tests::division_slashes_untouched ... ok
+test normalize::tests::empty_input_stays_empty ... ok
+test normalize::tests::leading_blanks_collapse_to_one ... ok
+test normalize::tests::longest_redaction_wins ... ok
+test normalize::tests::redactions_replace_paths ... ok
+test normalize::tests::sail_banner_dropped ... ok
+test normalize::tests::sail_prefix_without_version_kept ... ok
+test oracle::tests::classify_generic_failure_keeps_tail ... ok
+test oracle::tests::classify_oom_by_code_and_trace ... ok
+test oracle::tests::classify_timeout ... ok
+test oracle::tests::collect_joins_defs_and_top_upstream_style ... ok
+test oracle::tests::collect_reports_missing_files ... ok
+test oracle::tests::command_carries_limits ... ok
+test oracle::tests::compare_equal_is_none ... ok
+test oracle::tests::compare_mismatch_is_some_diff ... ok
+test oracle::tests::discover_finds_only_sail_sorted ... ok
+test oracle::tests::last_lines_caps ... ok
+test oracle::tests::memory_kb_conversion ... ok
+test oracle::tests::missing_backend_errs_honestly ... ok
+test oracle::tests::oversize_file_skips_without_running ... ok
+test oracle::tests::stage_copies_sail_and_sibling_json ... ok
+test oracle::tests::status_failure_set ... ok
+test report::tests::all_green_report ... ok
+test report::tests::empty_results_note ... ok
+test report::tests::failing_list_has_file_and_reason ... ok
+test report::tests::pipes_escaped_in_table ... ok
+test report::tests::skips_listed_with_reason ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 27ms
+             CPU time consumed: 11ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20301-i73908.service
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 22ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.7M (swap: 0B)
+Running as unit: run-p20306-i73909.service; invocation ID: 17b9b8e92b9d4e0f99cfb66b5e4d157f
+
+running 18 tests
+test merge::tests::concat_ok_collects_all_errors ... ok
+test merge::tests::concat_ok_joins_in_order ... ok
+test merge::tests::manifest_lists_shards_in_order ... ok
+test merge::tests::merge_empty_stays_empty ... ok
+test merge::tests::merge_sorts_by_index ... ok
+test merge::tests::par_merge_matches_serial ... ok
+test pipeline::tests::chain_variant_empty_input_returns_empty ... ok
+test pipeline::tests::chain_variant_error_isolated ... ok
+test pipeline::tests::chain_variant_matches_pipelined_manifest ... ok
+test pipeline::tests::config_normalizes_zeros ... ok
+test pipeline::tests::default_backpressure_is_8 ... ok
+test pipeline::tests::default_workers_follow_cores ... ok
+test pipeline::tests::pipelined_check_emit_errors_isolated ... ok
+test pipeline::tests::pipelined_empty_input_returns_empty ... ok
+test pipeline::tests::pipelined_error_isolated_to_shard ... ok
+test pipeline::tests::pipelined_order_stable_under_jitter ... ok
+test pipeline::tests::pipelined_preserves_input_order ... ok
+test pipeline::tests::pipelined_serial_backpressure_stays_ordered ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 36ms
+             CPU time consumed: 17ms
+                   Memory peak: 3.7M (swap: 0B)
+Running as unit: run-p20402-i29760.service
+
+running 13 tests
+test bridge::symbol_threading_tests::measure_fun_skeleton_keeps_name_and_placeholders ... ok
+test bridge::symbol_threading_tests::outcome_skeleton_keeps_name_and_unknown_typ ... ok
+test convert::symbol_threading_tests::lit_interning_deduplicates ... ok
+test convert::symbol_threading_tests::lit_payloads_are_interned_symbols ... ok
+test convert::symbol_threading_tests::subst_typ_threads_interner ... ok
+test convert::symbol_threading_tests::typedef_abbrev_threads_interner ... ok
+test convert::symbol_threading_tests::typschm_fn_and_bidir_lower ... ok
+test preprocess::tests::default_order_defines_ocaml_feature_symbols ... ok
+test preprocess::tests::directives_in_comments_and_strings_have_no_effect ... ok
+test preprocess::tests::include_defines_affect_following_parent_definitions ... ok
+test preprocess::tests::rejects_malformed_conditionals_and_ignores_inactive_errors ... ok
+test preprocess::tests::selects_nested_branches_and_target_sets ... ok
+test preprocess::tests::wraps_nonempty_includes_only_and_keeps_origin_spans ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 14ms
+             CPU time consumed: 7ms
+                   Memory peak: 2.7M (swap: 0B)
+Running as unit: run-p20420-i42513.service
+
+running 2 tests
+test tests::as_wrapper_keeps_bv ... ok
+test tests::wildcard_is_unconditional ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 11ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20427-i73910.service
+
+running 8 tests
+test tests::budgets_have_spec_values ... ok
+test tests::from_report_converts_wall_to_ms ... ok
+test tests::garbage_is_error ... ok
+test tests::missing_rss_is_error ... ok
+test tests::missing_wall_is_error ... ok
+test tests::parses_minimal_true_sample ... ok
+test tests::parses_wall_clock_with_minutes_and_hours ... ok
+test tests::timings_log_roundtrip_jsonl ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 16ms
+             CPU time consumed: 7ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20440-i73911.service
+
+running 7 tests
+test corpus::tests::inventory_counts_match ... ok
+test corpus::tests::inventory_paths_unique_and_suffixed ... ok
+test corpus::tests::owner_lookup_falls_back_to_parser ... ok
+test corpus::tests::summary_folds_reports ... ok
+test corpus::tests::vendored_matches_prelude_inventory ... ok
+test tests::empty_model_skeleton_is_present ... ok
+test tests::version_is_pinned ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20452-i73912.service
+
+running 8 tests
+test tests::default_is_fakereal_without_mathlib ... ok
+test tests::flag_selects_module_and_suffix ... ok
+test tests::literal_errors ... ok
+test tests::literal_roundtrip_rational ... ok
+test tests::mathlib_require_block_shape ... ok
+test tests::real_externs_cover_reference_files ... ok
+test tests::real_options_flag_rendering ... ok
+test tests::render_real_literal_helper_normalizes ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20465-i42517.service
+
+running 16 tests
+test bridge::tests::ast_extraction_matches_string_pipeline ... ok
+test bridge::tests::sail_spelling_covers_register_types ... ok
+test bridge::tests::typed_bridge_renders_via_printer_types ... ok
+test bridge::tests::unrenderable_init_keeps_has_init ... ok
+test bridge::tests::unresolvable_names_are_skipped ... ok
+test bridge::tests::untranslatable_typ_falls_back_to_spelling ... ok
+test tests::doc_instantiations_dedups_inhabited_per_type ... ok
+test tests::doc_reg_info_holds_enum_and_abbrev_only ... ok
+test tests::empty_registers_use_pempty_fallback ... ok
+test tests::extracts_three_registers_in_order ... ok
+test tests::initial_regstate_snippet_empty_is_unit ... ok
+test tests::initial_regstate_snippet_is_hard_error_not_sorry ... ok
+test tests::initial_values_prefer_reset_sail ... ok
+test tests::lean_typ_subset ... ok
+test tests::read_write_mapping ... ok
+test tests::regstate_grouped_and_ungrouped ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20486-i73913.service
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20491-i73914.service
+
+running 10 tests
+test env::tests::insert_ctor_duplicate_reports_without_clobbering ... ok
+test env::tests::insert_scattered_namespaces_stay_separate ... ok
+test env::tests::insert_tables_accept_distinct_names ... ok
+test env::tests::insert_type_duplicate_keeps_first_and_reports_both_spans ... ok
+test renames::tests::ctor_equals_type_name_is_renamed ... ok
+test renames::tests::deterministic_and_pure ... ok
+test renames::tests::multi_owner_collision_is_renamed ... ok
+test renames::tests::no_collision_no_renames ... ok
+test resolve::tests::happy_path_tables_fill ... ok
+test resolve::tests::union_ctor_vs_typename_collision ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20506-i73915.service
+
+running 11 tests
+test passes::simple_assignments::tests::preserves_register_writes_and_effectful_lvalues ... ok
+test passes::tuple_assignments::tests::avoids_capture_and_preserves_surrounding_statements ... ok
+test passes::tuple_assignments::tests::binds_effectful_rhs_once_before_assigning_any_target ... ok
+test passes::tuple_assignments::tests::zero_and_one_component_still_use_tuple_binding ... ok
+test passes::undefined::tests::calls_type_directed_helpers_instead_of_guessing_literals ... ok
+test passes::undefined::tests::preserves_unsupported_types_and_valspecs_and_visits_scopes ... ok
+test pipeline::tests::implemented_pipeline_rewrites_end_to_end ... ok
+test pipeline::tests::lean_default_matches_ocaml_order ... ok
+test pipeline::tests::parallel_matches_sequential_and_keeps_order ... ok
+test pipeline::tests::rejects_unknown_pass ... ok
+test pipeline::tests::stubs_pass_shards_through ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 10ms
+                   Memory peak: 3.8M (swap: 0B)
+Running as unit: run-p20542-i73916.service
+
+running 41 tests
+test args::tests::bool_flag_with_equals_is_usage_error ... ok
+test args::tests::case_sensitive_o_vs_big_o ... ok
+test args::tests::dash_underscore_and_single_double_dash_are_equivalent ... ok
+test args::tests::double_dash_ends_flag_parsing ... ok
+test args::tests::e2e_bool_mit_gleich_ist_usage_fehler ... ok
+test args::tests::e2e_flags_parsen_mit_out_dir_und_modul ... ok
+test args::tests::equals_form_works_for_value_flags ... ok
+test args::tests::help_text_covers_required_flags ... ok
+test args::tests::invalid_integer_is_exit_1 ... ok
+test args::tests::joined_short_form_is_rejected_like_ocaml ... ok
+test args::tests::lean_gen_lean_argv_parses ... ok
+test args::tests::memo_bounds_must_be_positive ... ok
+test args::tests::missing_value_is_exit_1 ... ok
+test args::tests::no_memo_z3_disables_default ... ok
+test args::tests::out_dir_underscore_form_ist_aequivalent ... ok
+test args::tests::repeatable_lean_flags_accumulate ... ok
+test args::tests::unknown_flag_is_exit_1 ... ok
+test args::tests::version_comparison_is_numeric ... ok
+test e2e::tests::exit_code_0_ohne_fails_2_bei_io_1_bei_pipeline_fails ... ok
+test e2e::tests::solver_memo_spill_wird_run_uebergreifend_genutzt ... ok
+test e2e::tests::streaming_versiegelt_jeden_shard_in_reihenfolge ... ok
+test e2e::tests::warm_budget_fehler_wird_fail_mit_genau_einem_owner ... ok
+test e2e::tests::with_input_ueberschreibt_nur_out_dir_und_modul ... ok
+test frontend::tests::library_extern_options_extend_the_effective_compiler_configuration ... ok
+test frontend::tests::spool_mount_detection_respects_components_and_escaped_paths ... ok
+test memo::tests::byte_bound_is_enforced ... ok
+test memo::tests::disabled_cache_never_stores ... ok
+test memo::tests::entry_bound_is_enforced_fifo ... ok
+test memo::tests::hits_and_misses_are_counted ... ok
+test memo::tests::oversized_single_entry_is_rejected ... ok
+test ooc::tests::barriere_laesst_nur_einen_heissen_shard_zu ... ok
+test ooc::tests::finish_mit_heissem_shard_verwirft_statt_zu_lecken ... ok
+test ooc::tests::fremder_inhalt_unter_gleichem_key_wird_abgewiesen ... ok
+test ooc::tests::memo_prove_trifft_beim_zweiten_mal ... ok
+test ooc::tests::run_shard_reihenfolge_und_summary_schranke ... ok
+test ooc::tests::stale_seal_und_abort_werden_abgewiesen ... ok
+test ooc::tests::warm_budget_mit_drop_punkt_freigeben ... ok
+test profile::tests::format_matches_documented_shape ... ok
+test profile::tests::peak_rss_does_not_panic ... ok
+test profile::tests::profiler_records_phases_and_total ... ok
+test profile::tests::simulated_phases_have_zero_wall_time ... ok
+
+test result: ok. 41 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.7M (swap: 0B)
+Running as unit: run-p20588-i42518.service
+
+running 33 tests
+test fingerprint::tests::fingerprint_all_parallel_matches_serial ... ok
+test fingerprint::tests::fingerprint_changes_on_content ... ok
+test fingerprint::tests::fingerprint_changes_on_pass_version ... ok
+test fingerprint::tests::fingerprint_hex_roundtrip ... ok
+test fingerprint::tests::fingerprint_no_prefix_collision ... ok
+test fingerprint::tests::fingerprint_stable ... ok
+test incremental::tests::changed_shard_is_dirty_others_skipped ... ok
+test incremental::tests::deserialize_rejects_garbage ... ok
+test incremental::tests::failed_build_stays_dirty ... ok
+test incremental::tests::first_run_everything_dirty ... ok
+test incremental::tests::pass_version_bump_dirties_everything ... ok
+test incremental::tests::retain_only_prunes_removed_shards ... ok
+test incremental::tests::second_run_without_changes_all_skipped ... ok
+test incremental::tests::serialize_roundtrip_preserves_plan ... ok
+test scheduler::tests::bounded_queue_limits_peak_below_items ... ok
+test scheduler::tests::config_normalizes_zeros ... ok
+test scheduler::tests::empty_input_returns_empty ... ok
+test scheduler::tests::max_inflight_is_respected ... ok
+test scheduler::tests::run_completes_all_items ... ok
+test scheduler::tests::run_ordered_preserves_input_order ... ok
+test scheduler::tests::run_rayon_matches_serial ... ok
+test scheduler::tests::streaming_accepts_borrowed_closures_and_empty_input ... ok
+test scheduler::tests::streaming_bounds_lazy_inputs_and_reordered_results ... ok
+test scheduler::tests::streaming_sink_error_cancels_lazy_ingress ... ok
+test scheduler::tests::streaming_worker_panic_cancels_without_deadlock ... ok
+test shard::tests::boundaries_from_markers ... ok
+test shard::tests::extra_split_chunks_line_bounded ... ok
+test shard::tests::extra_split_small_shard_unchanged ... ok
+test shard::tests::large_file_detection ... ok
+test shard::tests::multiple_gaps_get_unique_ids ... ok
+test shard::tests::no_markers_single_default_shard ... ok
+test shard::tests::trailing_text_becomes_postamble ... ok
+test shard::tests::unbalanced_marker_runs_to_eof ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 150ms
+             CPU time consumed: 174ms
+                   Memory peak: 9.4M (swap: 0B)
+Running as unit: run-p20683-i42519.service
+
+running 8 tests
+test tests::all_cases_have_documented_expectations ... ok
+test tests::all_fixtures_match_themselves ... ok
+test tests::case_ids_are_unique ... ok
+test tests::differing_logs_mismatch_with_detail ... ok
+test tests::find_case_roundtrip ... ok
+test tests::identical_logs_match_after_normalization ... ok
+test tests::normalize_collapses_whitespace_and_blank_lines ... ok
+test tests::runner_plan_covers_all_cases ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 17ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20696-i42520.service
+
+running 15 tests
+test cache::tests::capacity_zero_clamped_to_one ... ok
+test cache::tests::hit_miss_counters ... ok
+test cache::tests::lru_eviction_bounds_memory ... ok
+test cache::tests::ttl_expiry_counts_as_miss ... ok
+test canonical::tests::canonical_query_handles_ten_thousand_nodes_on_a_small_stack ... ok
+test canonical::tests::malformed_integer_literals_cannot_inject_smt_commands ... ok
+test pool::tests::checkout_returns_solver_to_pool ... ok
+test pool::tests::pool_is_multithreaded_exclusive ... ok
+test query::tests::cache_key_is_stable_and_timeout_sensitive ... ok
+test query::tests::keys_are_stable_across_interners_and_separate_names ... ok
+test query::tests::not_is_structural_and_var_keys_use_names ... ok
+test smtlib_backend::tests::persistent_process_resets_each_query_and_rejects_parse_errors ... ok
+test smtlib_backend::tests::wall_deadline_kills_and_reaps_a_process_that_never_reads_or_replies ... ok
+test stub::tests::stub_folds_constants ... ok
+test stub::tests::stub_terminates_with_unknown_on_opaque ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 1.070s
+             CPU time consumed: 38ms
+                   Memory peak: 22.4M (swap: 0B)
+Running as unit: run-p20730-i42521.service
+
+running 5 tests
+test patterns::tests::extern_helper_call_shape ... ok
+test patterns::tests::file_table_resolves_hit_offsets ... ok
+test patterns::tests::tokenizer_emits_punct_and_terminates ... ok
+test patterns::tests::tokenizer_skips_comments_and_strings ... ok
+test shard::tests::renders_counts_and_spans ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 14ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.3M (swap: 0B)
+Running as unit: run-p20740-i42522.service; invocation ID: b2d56cb9b4ed467d9ca1f8bfad0671d2
+
+running 15 tests
+test block::tests::def_head_handles_params_and_sig ... ok
+test block::tests::fnv_is_stable_and_sensitive ... ok
+test block::tests::matching_pair_parses ... ok
+test block::tests::name_mismatch_errors ... ok
+test block::tests::odd_def_count_errors ... ok
+test rss::tests::peak_is_nonzero_and_monotone ... ok
+test run::tests::missing_file_errors ... ok
+test run::tests::odd_config_rejected ... ok
+test run::tests::reporter_combined_hash_stable ... ok
+test run::tests::runner_counts_and_shards ... ok
+test splitter::tests::block_groups_const_defs ... ok
+test splitter::tests::braces_in_comments_and_strings_do_not_split ... ok
+test splitter::tests::license_prolog_is_skipped ... ok
+test splitter::tests::unbalanced_close_brace_errors ... ok
+test splitter::tests::val_function_pair_is_two_defs ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20760-i18147.service
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20765-i18148.service
+
+running 15 tests
+test fuel::tests::combinator_names ... ok
+test fuel::tests::non_fuel_kind_rejected ... ok
+test fuel::tests::renders_until_fuel_head ... ok
+test fuel::tests::renders_while_fuel_head ... ok
+test fuel::tests::signatures_match_sail_lean ... ok
+test pass::tests::parses_arm_reduce_form ... ok
+test pass::tests::parses_function_measure ... ok
+test pass::tests::parses_while_and_repeat ... ok
+test pass::tests::pass_attaches_and_warns ... ok
+test pass::tests::pass_rejects_duplicates ... ok
+test pass::tests::pass_warns_on_unused ... ok
+test rec_measure::tests::empty_parts_rejected ... ok
+test rec_measure::tests::multi_arg_matches_expected_lean ... ok
+test rec_measure::tests::plain_recursion_emits_nothing ... ok
+test rec_measure::tests::single_arg_matches_expected_lean ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7ms
+             CPU time consumed: 7ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20785-i18153.service
+
+running 31 tests
+test advanced::tests::arm_widths_are_recognized_and_kindcheck ... ok
+test advanced::tests::bidir_bits_congruence_needs_solver_proof ... ok
+test advanced::tests::bidir_roundtrips_through_ast ... ok
+test advanced::tests::exist_open_proves_concrete_width_with_stub ... ok
+test advanced::tests::exist_roundtrips_through_ast ... ok
+test advanced::tests::generic_app_with_mixed_args_roundtrips ... ok
+test advanced::tests::quant_item_constraint_shape_is_documented ... ok
+test advanced::tests::typ_var_kind_nat_direction ... ok
+test advanced::tests::typ_var_roundtrips_with_ktype_default ... ok
+test ast_env::tests::kenv_from_foreign_interner_yields_none ... ok
+test ast_env::tests::kenv_roundtrip_erases_knat_without_recovery ... ok
+test ast_env::tests::kenv_telescope_is_sorted_and_total ... ok
+test ast_env::tests::type_env_scheme_views_lower_onto_typschm ... ok
+test canonical_eq::tests::deep_numeric_equivalence_uses_names_scopes_and_an_explicit_stack ... ok
+test check::tests::fuel_budget_is_shared_across_siblings ... ok
+test check::tests::opaque_kenv_sorts_int_and_bool_level_vars ... ok
+test conv::tests::not_constraint_roundtrips ... ok
+test conv::tests::not_roundtrips_through_ast ... ok
+test conv::tests::synthesized_spans_are_dummy_never_file_zero ... ok
+test conv::tests::var_union_keeps_id_and_evar_distinct ... ok
+test env::tests::clone_shares_program_tables ... ok
+test env::tests::iter_covers_all_entries ... ok
+test env::tests::mutation_after_clone_does_not_leak_into_fork ... ok
+test env::tests::overwrite_is_last_wins_and_removal_is_cow ... ok
+test env::tests::registers_visible_through_clone ... ok
+test env::tests::shared_tables_are_send_sync_for_workers ... ok
+test env::tests::shared_tables_eq_and_serde_roundtrip ... ok
+test env::tests::val_register_namespaces_stay_separate ... ok
+test kind::tests::len_is_empty_remove_final_state ... ok
+test subsume::tests::bool_var_substitution_renames_through_freshening ... ok
+test subsume::tests::gensym_freshening_never_collides_or_repeats ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 15ms
+             CPU time consumed: 14ms
+                   Memory peak: 5.4M (swap: 0B)
+Running as unit: run-p20822-i42528.service; invocation ID: b57c4b4cbd5044d98dbc548e072968f7
+
+running 20 tests
+test tests::abbrev_bit_and_bits_match_expected_lean ... ok
+test tests::abstract_is_hard_error_with_span ... ok
+test tests::atom_of_constrained_kid_prints_nat ... ok
+test tests::atom_of_equal_constrained_kid_prints_nat ... ok
+test tests::atom_of_unconstrained_kid_prints_int ... ok
+test tests::bitfield_is_hard_error_with_span ... ok
+test tests::empty_enum_derives_beq_repr_only ... ok
+test tests::empty_variant_skips_inhabited ... ok
+test tests::enum_block_matches_expected_lean ... ok
+test tests::fp_bits_abbrev_is_skipped_with_comment ... ok
+test tests::nexp_bool_and_range_abbrevs ... ok
+test tests::non_beq_types_skip_beq ... ok
+test tests::option_variant_matches_expected_lean ... ok
+test tests::polymorphic_struct_infers_nat_binders ... ok
+test tests::range_with_bounded_var_lo_prints_nat ... ok
+test tests::record_field_atom_sees_typedef_quant ... ok
+test tests::rendered_typedefs_never_contain_sorry ... ok
+test tests::struct_block_matches_expected_lean ... ok
+test tests::unknown_symbol_is_hard_error ... ok
+test tests::untranslatable_field_type_is_hard_error ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20847-i42529.service
+
+running 4 tests
+test pairs_fixture_has_six_defs ... ok
+test runner_handles_tricky_block ... ok
+test runner_shards_pairs_into_blocks ... ok
+test tricky_fixture_stays_two_defs ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 12ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.4M (swap: 0B)
+Running as unit: run-p20856-i25842.service
+
+running 2 tests
+test chunk_is_deterministic_and_covers_all_defs ... ok
+test chunk_size_zero_clamps_to_one_and_empty_stays_empty ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20863-i62558.service
+
+running 8 tests
+test parallel_matches_sequential ... ok
+test scanner_single_truth_with_sail_parse ... ok
+test sme_fixture_nested_foreach_and_tile ... ok
+test sve_fixture_exact_spans ... ok
+test sve_fixture_fail_counts ... ok
+test sve_fixture_pattern_catalog ... ok
+test sve_fixture_shard_shape ... ok
+test val_dependent_sig_points_at_forall ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p20878-i62559.service; invocation ID: c9e3d799e9ea4834ad22188b12cc01b0
+
+running 6 tests
+test instrs_fixture_clause_dispatch_with_see_order ... ok
+test instrs_fixture_decode_execute_is_one_to_one ... ok
+test instrs_fixture_has_expected_def_kinds ... ok
+test instrs_fixture_largest_and_fanout ... ok
+test instrs_fixture_shard_plan ... ok
+test v8base_fixture_is_all_helper ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 6ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20889-i62560.service
+
+running 3 tests
+test canonical_memo_cache_is_bounded_lru ... ok
+test stub_verdicts_agree_on_foldable ... ok
+test ty_caching_solver_is_bounded_lru ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20897-i62561.service
+
+running 3 tests
+test cache_eviction_bounds_entries ... ok
+test pool_shares_cache_across_threads ... ok
+test stub_terminates_without_proving_opaque ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20909-i25843.service
+
+running 1 test
+test streaming_rewrites_and_spills_a_corpus_larger_than_ram ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 135ms
+             CPU time consumed: 411ms
+                   Memory peak: 12.7M (swap: 0B)
+Running as unit: run-p20924-i62562.service
+
+running 2 tests
+test fixture_end_to_end_lean_matches_reference ... ok
+test fixture_parses_all_directives ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 17ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20931-i62563.service
+
+running 8 tests
+test empty_both_is_clean ... ok
+test head_mismatch_same_kind_and_name ... ok
+test identical_is_clean ... ok
+test kind_mismatch ... ok
+test length_tails ... ok
+test name_mismatch ... ok
+test positional_not_set_semantics ... ok
+test verdict_reasons_cover_all_variants ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 14ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.7M (swap: 0B)
+Running as unit: run-p20944-i62567.service; invocation ID: c4e2d4c262c34c4f820c3a1f92c2e6fe
+
+running 8 tests
+test compare_samples_duplicate_is_loud ... ok
+test compare_samples_match_and_mismatch ... ok
+test compare_samples_missing_both_directions ... ok
+test normalize_scheme_collapses ... ok
+test sample_requests_first_n_eligible_in_order ... ok
+test sample_requests_zero_is_empty ... ok
+test sift_tc_dump_keeps_marked_lines ... ok
+test ty_def_kind_labels ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 5ms
+             CPU time consumed: 5ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20957-i25853.service
+
+running 13 tests
+test bidirectional_infer_and_check ... ok
+test caching_solver_bounded_and_thread_safe ... ok
+test caching_solver_promotes_hits_lru ... ok
+test fuel_guarantees_termination_without_solver ... ok
+test kind_int_bool_type_skeleton ... ok
+test quant_scope_bind_shadow_lookup ... ok
+test quant_scope_freshen_is_gensym_unique ... ok
+test register_types_check ... ok
+test scheme_rejects_free_var_and_accepts_closed ... ok
+test stub_solver_always_terminates_on_deep_input ... ok
+test stub_solver_proves_trivial_refutes_false ... ok
+test types_are_send_sync_for_workers ... ok
+test val_def_with_stub_solver ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8ms
+             CPU time consumed: 8ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p20983-i55066.service
+
+running 24 tests
+test caching_and_fuel ... ok
+test check_bits_and_fallback ... ok
+test check_literal_range ... ok
+test constraint_kinds ... ok
+test deferred_documented ... ok
+test env_scoping ... ok
+test infer_lits_vars ... ok
+test infer_poly_var ... ok
+test infer_tuple_if_let_app ... ok
+test kind_nexp_arith ... ok
+test kind_nexp_if ... ok
+test patterns ... ok
+test quant_freshen_instantiate ... ok
+test registers ... ok
+test rule_table_complete ... ok
+test scheme_closed_and_escape ... ok
+test scheme_depth_fuel ... ok
+test solver_trait_only_backend ... ok
+test subsumption_base ... ok
+test subsumption_fun_tuple_named ... ok
+test subsumption_range_bits ... ok
+test typ_bits_negative ... ok
+test typ_kinds ... ok
+test val_defs ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8ms
+             CPU time consumed: 9ms
+                   Memory peak: 2.2M (swap: 0B)
+Running as unit: run-p21012-i62568.service
+
+running 32 tests
+test bare_0x_falls_back_to_num_plus_id ... ok
+test basic_function_shape_and_spans ... ok
+test bit_literals_hex_bin ... ok
+test colons_dots_pipes ... ok
+test comments_are_skipped_and_nest ... ok
+test directives_pragmas_attributes ... ok
+test doc_comments_are_tokens ... ok
+test empty_input_is_just_eof ... ok
+test error_line_tracking ... ok
+test fixity_declarations ... ok
+test illegal_escape_recovers_inline ... ok
+test keywords_vs_identifiers ... ok
+test lexer_types_are_send_sync ... ok
+test long_arrow_becomes_operator ... ok
+test multiline_string_bad_prefix_is_an_error ... ok
+test multiline_string_strips_prefix ... ok
+test numbers_reals_ranges ... ok
+test operators_and_arrows ... ok
+test paren_star_comment_needs_whitespace ... ok
+test payloads_are_interned_symbols ... ok
+test reserved_words_are_errors_not_idents ... ok
+test slash_before_comment_ends_operator ... ok
+test stray_comment_closer_is_an_error ... ok
+test string_continuation_and_raw_newline ... ok
+test strings_with_escapes ... ok
+test tilde_is_plain_id_like_ocaml ... ok
+test two_caret_forms ... ok
+test tyvar_and_lone_quote_error ... ok
+test unbalanced_comment_is_recoverable ... ok
+test underscore_and_unit ... ok
+test unexpected_characters_recover ... ok
+test unterminated_string_recovers ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 7ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.7M (swap: 0B)
+Running as unit: run-p21049-i62569.service
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4ms
+             CPU time consumed: 4ms
+                   Memory peak: 2.2M (swap: 0B)
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 4.597s
+             CPU time consumed: 417ms
+                   Memory peak: 7.2M (swap: 0B)
+[gate] ende rc=0 avail=28003MiB

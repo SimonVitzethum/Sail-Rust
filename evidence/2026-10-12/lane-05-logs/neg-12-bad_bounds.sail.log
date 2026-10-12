@@ -1,0 +1,14 @@
+[gate] start mem=256M avail=12062MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-12-bad_bounds.sail
+Running as unit: run-p606429-i631487.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-12-bad_bounds.sail[0m:8.56-72:
+8[96m |[0mfunction bad_bounds() -> unit = foreach (i from 0 to 3) bounded_index(i)
+ [91m |[0m                                                        [91m^--------------^[0m
+ [91m |[0m Could not resolve quantifiers for bounded_index
+ [91m |[0m [94m*[0m (0 <= 'loop_i & 'loop_i <= 2)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 35ms
+             CPU time consumed: 18ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=1 free=2129MiB

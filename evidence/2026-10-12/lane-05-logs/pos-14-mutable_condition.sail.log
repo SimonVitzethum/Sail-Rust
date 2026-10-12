@@ -1,0 +1,8 @@
+[gate] start mem=256M avail=12171MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-14-mutable_condition.sail
+Running as unit: run-p607033-i635733.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 30ms
+             CPU time consumed: 20ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=0 free=2224MiB

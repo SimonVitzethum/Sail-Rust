@@ -1,0 +1,90 @@
+[gate] start mem=4G avail=27612MiB: cargo test --no-run --profile ci -j 2 -p sail-ty --test canonical_program --message-format=json
+Running as unit: run-p29301-i26398.service; invocation ID: 16e105e016a946d1a421f1203339b9d5
+    Updating crates.io index
+     Locking 109 packages to latest compatible versions
+      Adding generic-array v0.14.7 (available: v0.14.9)
+      Adding lalrpop v0.22.2 (available: v0.23.1)
+      Adding lalrpop-util v0.22.2 (available: v0.23.1)
+   Compiling version_check v0.9.5
+   Compiling proc-macro2 v1.0.107
+   Compiling generic-array v0.14.7
+   Compiling unicode-ident v1.0.27
+   Compiling quote v1.0.47
+   Compiling memchr v2.8.3
+   Compiling libc v0.2.190
+   Compiling typenum v1.20.1
+   Compiling serde_core v1.0.229
+   Compiling rustversion v1.0.23
+   Compiling crossbeam-utils v0.8.23
+   Compiling zmij v1.0.23
+   Compiling parking_lot_core v0.9.12
+   Compiling aho-corasick v1.1.5
+   Compiling syn v3.0.9
+   Compiling scopeguard v1.2.0
+   Compiling serde v1.0.229
+   Compiling cfg-if v1.0.5
+   Compiling regex-syntax v0.8.11
+   Compiling smallvec v1.16.3
+   Compiling serde_json v1.0.154
+   Compiling regex-automata v0.4.18
+   Compiling lock_api v0.4.14
+   Compiling serde_derive v1.0.229
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling itoa v1.0.18
+   Compiling siphasher v1.0.4
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.17.1
+   Compiling crossbeam-epoch v0.9.21
+   Compiling phf_shared v0.11.3
+   Compiling indexmap v2.14.2
+   Compiling digest v0.10.7
+   Compiling parking_lot v0.12.5
+   Compiling precomputed-hash v0.1.1
+   Compiling fixedbitset v0.5.7
+   Compiling either v1.19.0
+   Compiling same-file v1.0.6
+   Compiling new_debug_unreachable v1.0.6
+   Compiling keccak v0.1.6
+   Compiling crossbeam-deque v0.8.8
+   Compiling shlex v2.0.1
+   Compiling bit-vec v0.8.0
+   Compiling log v0.4.34
+   Compiling term v1.2.1
+   Compiling find-msvc-tools v0.1.14
+   Compiling cc v1.8.0
+   Compiling ascii-canvas v4.0.0
+   Compiling ena v0.14.4
+   Compiling bit-set v0.8.0
+   Compiling sha3 v0.10.9
+   Compiling string_cache v0.8.9
+   Compiling walkdir v2.5.0
+   Compiling itertools v0.14.0
+   Compiling petgraph v0.7.1
+   Compiling sail-ast v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-38/crates/sail-ast)
+   Compiling lalrpop-util v0.22.2
+   Compiling regex v1.13.1
+   Compiling rayon-core v1.13.0
+   Compiling unicode-xid v0.2.6
+   Compiling pico-args v0.5.0
+   Compiling lalrpop v0.22.2
+   Compiling blake3 v1.8.7
+   Compiling sail-grammar v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-38/crates/sail-grammar)
+   Compiling arrayvec v0.7.8
+   Compiling constant_time_eq v0.4.2
+   Compiling cpufeatures v0.3.1
+   Compiling rayon v1.12.0
+   Compiling sail-nexp v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-38/crates/sail-nexp)
+   Compiling crossbeam-channel v0.5.17
+   Compiling sail-shard v0.0.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-38/crates/sail-shard)
+   Compiling sail-solver v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-38/crates/sail-solver)
+   Compiling sail-lex v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-38/crates/sail-lex)
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-38/crates/sail-ty)
+   Compiling sail-parse v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-38/crates/sail-parse)
+    Finished `ci` profile [optimized] target(s) in 49.95s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 49.992s
+             CPU time consumed: 1min 37.711s
+                   Memory peak: 994.2M (swap: 0B)
+[gate] ende rc=0 avail=27834MiB

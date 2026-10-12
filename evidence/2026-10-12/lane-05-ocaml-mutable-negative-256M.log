@@ -1,0 +1,332 @@
+--- neg-00-wrong_init.sail ---
+[gate] start mem=256M avail=11763MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-00-wrong_init.sail
+Running as unit: run-p605802-i639660.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-00-wrong_init.sail[0m:8.47-52:
+8[96m |[0mfunction wrong_init() -> int = { var x : int = false; x }
+ [91m |[0m                                               [91m^---^[0m
+ [91m |[0m Type mismatch between int('ex3#) and bool(false)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 24ms
+             CPU time consumed: 18ms
+                   Memory peak: 12.3M (swap: 0B)
+[gate] ende rc=1 free=1821MiB
+
+--- neg-01-let_escape.sail ---
+[gate] start mem=256M avail=11762MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-01-let_escape.sail
+Running as unit: run-p605827-i639663.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-01-let_escape.sail[0m:8.52-53:
+8[96m |[0mfunction let_escape() -> int = { { let x = 1; () }; x }
+ [91m |[0m                                                    [91m^[0m
+ [91m |[0m Identifier x is unbound
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 35ms
+             CPU time consumed: 21ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=1 free=1820MiB
+
+--- neg-02-var_escape.sail ---
+[gate] start mem=256M avail=11759MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-02-var_escape.sail
+Running as unit: run-p605853-i604323.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-02-var_escape.sail[0m:8.58-59:
+8[96m |[0mfunction var_escape() -> int = { { var x : int = 1; () }; x }
+ [91m |[0m                                                          [91m^[0m
+ [91m |[0m Identifier x is unbound
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 30ms
+             CPU time consumed: 18ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=1 free=1816MiB
+
+--- neg-03-wrong_write.sail ---
+[gate] start mem=256M avail=11781MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-03-wrong_write.sail
+Running as unit: run-p605880-i631436.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-03-wrong_write.sail[0m:8.55-60:
+8[96m |[0mfunction wrong_write() -> int = { var x : int = 0; x = false; x }
+ [91m |[0m                                                       [91m^---^[0m
+ [91m |[0m Type mismatch between int('ex5#) and bool(false)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 29ms
+             CPU time consumed: 21ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=1 free=1866MiB
+
+--- neg-04-constant_write.sail ---
+[gate] start mem=256M avail=11807MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-04-constant_write.sail
+Running as unit: run-p605929-i639675.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-04-constant_write.sail[0m:8.52-53:
+8[96m |[0mfunction constant_write() -> int = { var x = 0; x = 1; x }
+ [91m |[0m                                                    [91m^[0m
+ [91m |[0m int(1) is not a subtype of int(0)
+ [91m |[0m as false could not be proven
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 28ms
+             CPU time consumed: 21ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=1 free=1996MiB
+
+--- neg-05-immutable_write.sail ---
+[gate] start mem=256M avail=11940MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-05-immutable_write.sail
+Running as unit: run-p605996-i627460.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-05-immutable_write.sail[0m:8.49-50:
+8[96m |[0mfunction immutable_write() -> int = { let x = 0; x = 0; x }
+ [91m |[0m                                                 [91m^[0m
+ [91m |[0m Cannot modify immutable let-bound constant or enumeration constructor x
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 26ms
+             CPU time consumed: 18ms
+                   Memory peak: 12.5M (swap: 0B)
+[gate] ende rc=1 free=1995MiB
+
+--- neg-06-shadow_local.sail ---
+[gate] start mem=256M avail=11937MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-06-shadow_local.sail
+Running as unit: run-p606195-i639682.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-06-shadow_local.sail[0m:8.46-53:
+8[96m |[0mfunction shadow_local(x : int) -> int = { var x : int = 0; x }
+ [91m |[0m                                              [91m^-----^[0m
+ [91m |[0m Cannot modify immutable let-bound constant or enumeration constructor x
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 28ms
+             CPU time consumed: 17ms
+                   Memory peak: 11.8M (swap: 0B)
+[gate] ende rc=1 free=1989MiB
+
+--- neg-07-shadow_mutable.sail ---
+[gate] start mem=256M avail=11932MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-07-shadow_mutable.sail
+Running as unit: run-p606264-i608323.service
+[93mWarning[0m: Redundant type annotation on assignment to x
+[96mtarget/mutable-reference/per-case/neg-07-shadow_mutable.sail[0m:8.58-65:
+8[96m |[0mfunction shadow_mutable() -> int = { var x : int = 0; var x : int = 1; x }
+ [91m |[0m                                                          [91m^-----^[0m
+ [91m |[0m Type is already known
+
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-07-shadow_mutable.sail[0m:8.58-65:
+8[96m |[0mfunction shadow_mutable() -> int = { var x : int = 0; var x : int = 1; x }
+ [91m |[0m                                                          [91m^-----^[0m
+ [91m |[0m var expression can only be used to declare new variables, not update them
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 33ms
+             CPU time consumed: 25ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=1 free=1990MiB
+
+--- neg-08-shadow_register.sail ---
+[gate] start mem=256M avail=11939MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-08-shadow_register.sail
+Running as unit: run-p606307-i613147.service
+[93mWarning[0m: Redundant type annotation on assignment to R
+[96mtarget/mutable-reference/per-case/neg-08-shadow_register.sail[0m:8.42-49:
+8[96m |[0mfunction shadow_register() -> int = { var R : int = 0; R }
+ [91m |[0m                                          [91m^-----^[0m
+ [91m |[0m Type is already known
+
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-08-shadow_register.sail[0m:8.42-49:
+8[96m |[0mfunction shadow_register() -> int = { var R : int = 0; R }
+ [91m |[0m                                          [91m^-----^[0m
+ [91m |[0m var expression can only be used to declare new variables, not update them
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 32ms
+             CPU time consumed: 21ms
+                   Memory peak: 12.5M (swap: 0B)
+[gate] ende rc=1 free=2040MiB
+
+--- neg-09-missing_target.sail ---
+[gate] start mem=256M avail=11993MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-09-missing_target.sail
+Running as unit: run-p606352-i573034.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-09-missing_target.sail[0m:8.36-47:
+8[96m |[0mfunction missing_target() -> unit = missing = 0
+ [91m |[0m                                    [91m^---------^[0m
+ [91m |[0m Variable declaration with unclear (or no) scope. Use an explicit var statement instead, or place in a block
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 38ms
+             CPU time consumed: 23ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=1 free=2105MiB
+
+--- neg-10-wrong_register.sail ---
+[gate] start mem=256M avail=12048MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-10-wrong_register.sail
+Running as unit: run-p606378-i608337.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-10-wrong_register.sail[0m:8.40-45:
+8[96m |[0mfunction wrong_register() -> unit = R = false
+ [91m |[0m                                        [91m^---^[0m
+ [91m |[0m Type mismatch between int('ex3#) and bool(false)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 26ms
+             CPU time consumed: 17ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=1 free=2114MiB
+
+--- neg-11-tuple_write.sail ---
+[gate] start mem=256M avail=12058MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-11-tuple_write.sail
+Running as unit: run-p606403-i635640.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-11-tuple_write.sail[0m:8.83-88:
+8[96m |[0mfunction tuple_write() -> unit = { var (x, y) = (opaque_int(), true); (x, y) = (1, false) }
+ [91m |[0m                                                                                   [91m^---^[0m
+ [91m |[0m Failed to prove constraint: ((not(false) | true) & not(true)), as it simplifies directly to false
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 32ms
+             CPU time consumed: 22ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=1 free=2118MiB
+
+--- neg-12-bad_bounds.sail ---
+[gate] start mem=256M avail=12062MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-12-bad_bounds.sail
+Running as unit: run-p606429-i631487.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-12-bad_bounds.sail[0m:8.56-72:
+8[96m |[0mfunction bad_bounds() -> unit = foreach (i from 0 to 3) bounded_index(i)
+ [91m |[0m                                                        [91m^--------------^[0m
+ [91m |[0m Could not resolve quantifiers for bounded_index
+ [91m |[0m [94m*[0m (0 <= 'loop_i & 'loop_i <= 2)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 35ms
+             CPU time consumed: 18ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=1 free=2129MiB
+
+--- neg-13-bad_descending.sail ---
+[gate] start mem=256M avail=12074MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-13-bad_descending.sail
+Running as unit: run-p606456-i593434.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-13-bad_descending.sail[0m:8.64-80:
+8[96m |[0mfunction bad_descending() -> unit = foreach (i from 3 downto 0) bounded_index(i)
+ [91m |[0m                                                                [91m^--------------^[0m
+ [91m |[0m Could not resolve quantifiers for bounded_index
+ [91m |[0m [94m*[0m (0 <= 'loop_i & 'loop_i <= 2)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 34ms
+             CPU time consumed: 21ms
+                   Memory peak: 11.9M (swap: 0B)
+[gate] ende rc=1 free=2125MiB
+
+--- neg-14-write_iterator.sail ---
+[gate] start mem=256M avail=12070MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-14-write_iterator.sail
+Running as unit: run-p606481-i573044.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-14-write_iterator.sail[0m:8.62-63:
+8[96m |[0mfunction write_iterator() -> unit = foreach (i from 0 to 2) { i = 1 }
+ [91m |[0m                                                              [91m^[0m
+ [91m |[0m Cannot modify immutable let-bound constant or enumeration constructor i
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 36ms
+             CPU time consumed: 23ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=1 free=2184MiB
+
+--- neg-15-bound_escape.sail ---
+[gate] start mem=256M avail=12122MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-15-bound_escape.sail
+Running as unit: run-p606517-i608347.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-15-bound_escape.sail[0m:8.78-79:
+8[96m |[0mfunction bound_escape() -> unit = { foreach (i from 0 to 2) (); bounded_index(i) }
+ [91m |[0m                                                                              [91m^[0m [91mchecking function argument has type int('n)[0m
+ [91m |[0m Identifier i is unbound
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 30ms
+             CPU time consumed: 22ms
+                   Memory peak: 12.4M (swap: 0B)
+[gate] ende rc=1 free=2177MiB
+
+--- neg-16-wrong_bound_type.sail ---
+[gate] start mem=256M avail=12122MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-16-wrong_bound_type.sail
+Running as unit: run-p606542-i608353.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-16-wrong_bound_type.sail[0m:8.38-68:
+8[96m |[0mfunction wrong_bound_type() -> unit = foreach (i from false to 2) ()
+ [91m |[0m                                      [91m^----------------------------^[0m
+ [91m |[0m Ranges in foreach overlap
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 29ms
+             CPU time consumed: 19ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=1 free=2167MiB
+
+--- neg-17-wrong_body_type.sail ---
+[gate] start mem=256M avail=12121MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-17-wrong_body_type.sail
+Running as unit: run-p606569-i635668.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-17-wrong_body_type.sail[0m:8.61-62:
+8[96m |[0mfunction wrong_body_type() -> unit = foreach (i from 0 to 2) 1
+ [91m |[0m                                                             [91m^[0m
+ [91m |[0m int(1) is not a subtype of unit
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 40ms
+             CPU time consumed: 23ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=1 free=2225MiB
+
+--- neg-18-wrong_condition.sail ---
+[gate] start mem=256M avail=12171MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-18-wrong_condition.sail
+Running as unit: run-p606595-i635670.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-18-wrong_condition.sail[0m:8.43-44:
+8[96m |[0mfunction wrong_condition() -> unit = while 0 do ()
+ [91m |[0m                                           [91m^[0m
+ [91m |[0m Type mismatch between bool('ex1#) and int(0)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 29ms
+             CPU time consumed: 20ms
+                   Memory peak: 11.9M (swap: 0B)
+[gate] ende rc=1 free=2216MiB
+
+--- neg-19-until_fact.sail ---
+[gate] start mem=256M avail=12163MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-19-until_fact.sail
+Running as unit: run-p606620-i608354.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-19-until_fact.sail[0m:8.46-62:
+8[96m |[0mfunction until_fact(x : int) -> unit = repeat at_least_zero(x) until ge_zero(x)
+ [91m |[0m                                              [91m^--------------^[0m
+ [91m |[0m Could not resolve quantifiers for at_least_zero
+ [91m |[0m [94m*[0m '_#x >= 0
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 36ms
+             CPU time consumed: 19ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=1 free=2231MiB
+
+--- neg-20-stale_fact.sail ---
+[gate] start mem=256M avail=12177MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-20-stale_fact.sail
+Running as unit: run-p606645-i635678.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-20-stale_fact.sail[0m:8.78-90:
+8[96m |[0mfunction stale_fact() -> unit = { var x : bool = true; if x then { x = false; only_true(x) } else () }
+ [91m |[0m                                                                              [91m^----------^[0m
+ [91m |[0m Could not resolve quantifiers for only_true
+ [91m |[0m [94m*[0m 'ex2#
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 30ms
+             CPU time consumed: 21ms
+                   Memory peak: 12M (swap: 0B)
+[gate] ende rc=1 free=2223MiB
+

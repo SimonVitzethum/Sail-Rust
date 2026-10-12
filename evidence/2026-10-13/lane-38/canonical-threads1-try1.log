@@ -1,0 +1,40 @@
+
+running 35 tests
+test annotations_validate_names_and_preserve_rigid_binder_identity ... ok
+test bit_literals_and_vectors_check_exact_lengths_elements_and_inferred_calls ... ok
+test canonical_checker_handles_calls_scopes_tuples_and_rigid_polymorphism ... ok
+test conditional_and_guard_facts_prove_constraints_with_borrowed_call_substitutions ... ok
+test conditional_facts_never_leak_to_siblings_outer_scopes_or_other_clauses ... ok
+test constrained_type_applications_require_a_proof_instead_of_kind_only_success ... ok
+test constructor_constraints_are_substituted_and_proved_from_rigid_assumptions ... ok
+test constructor_substitution_is_simultaneous_and_boolean_sorted ... ok
+test declaration_kinds_and_source_order_are_checked ... ok
+test dependent_calls_instantiate_numeric_boolean_and_compound_results ... ok
+test dependent_calls_prove_constraints_and_reject_unrefined_argument_shortcuts ... ok
+test enumeration_patterns_are_constants_and_union_values_have_signatures ... ok
+test existential_shadowing_never_reuses_outer_proof_binders_or_leaks_assumptions ... ok
+test explicit_implicit_parameters_have_integer_singleton_semantics ... ok
+test inline_pattern_inference_and_header_cleanup_handle_deep_tuples_on_a_small_stack ... ok
+test inline_return_annotations_synthesize_source_ordered_recursive_signatures ... ok
+test inline_signatures_validate_existing_vals_and_reject_inconsistent_headers ... ok
+test literals_and_rigid_dependent_identities_keep_their_refinements ... ok
+test overload_declarations_reject_missing_candidates_conflicts_and_cycles ... ok
+test overload_extensions_preserve_source_position_and_candidate_order ... ok
+test overloads_check_all_arguments_results_and_dependent_constraints ... ok
+test plain_values_open_fresh_witnesses_and_opaque_results_do_not_become_constants ... ok
+test polymorphic_calls_are_fresh_and_share_one_binding_across_arguments ... ok
+test proofs_use_only_earlier_global_constraints_and_keep_annotation_scopes ... ok
+test recursive_and_sibling_dependent_calls_keep_each_instantiation_separate ... ok
+test recursive_types_and_bad_bitfield_index_names_are_rejected ... ok
+test ten_thousand_composed_dependent_results_check_and_release_iteratively ... ok
+test ten_thousand_conditional_fact_scopes_check_and_release_without_recursion ... ok
+test ten_thousand_let_scopes_check_and_release_without_recursion ... ok
+test ten_thousand_nested_polymorphic_calls_use_iterative_cached_synthesis ... ok
+test ten_thousand_nested_vector_literals_infer_check_and_release_iteratively ... ok
+test ten_thousand_parametric_aliases_expand_and_release_on_a_small_stack ... ok
+test type_errors_are_real_and_later_val_specs_do_not_retype_earlier_bodies ... ok
+test type_synonyms_compose_type_integer_boolean_and_call_substitutions ... ok
+test unsupported_obligations_do_not_silently_accept_bodies ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+

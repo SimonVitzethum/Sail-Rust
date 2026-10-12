@@ -1,0 +1,37 @@
+Running as unit: run-p28468-i58741.service
+sail-rs: [verbose=1] memo-z3=bounded path=sail_smt_cache max_entries=10000 max_bytes=67108864
+sail-rs: [verbose=1] input=src/prelude.sail
+sail-rs: [verbose=1] input=src/decode_start.sail
+sail-rs: [verbose=1] input=src/builtins.sail
+sail-rs: [verbose=1] input=src/v8_base.sail
+sail-rs: [verbose=1] input=src/stubs.sail
+sail-rs: [verbose=1] input=src/interrupts.sail
+sail-rs: [verbose=1] input=src/interface.sail
+sail-rs: [verbose=1] input=src/devices.sail
+sail-rs: [verbose=1] input=src/impdefs.sail
+sail-rs: [verbose=1] input=src/mem.sail
+sail-rs: [verbose=1] input=src/sysregs_autogen.sail
+sail-rs: [verbose=1] input=src/sysregs.sail
+sail-rs: [verbose=1] input=src/reset.sail
+sail-rs: [verbose=1] input=src/instrs32.sail
+sail-rs: [verbose=1] input=src/instrs64.sail
+sail-rs: [verbose=1] input=src/instrs64_sve.sail
+sail-rs: [verbose=1] input=src/instrs64_sme.sail
+sail-rs: [verbose=1] input=src/decode_end.sail
+sail-rs: [verbose=1] input=src/fetch.sail
+sail-rs: [verbose=1] input=src/map_clauses.sail
+sail-rs: [verbose=1] input=src/event_clauses.sail
+sail-rs: [verbose=1] input=src/termination_measures.sail
+sail-rs: warning: duplicate val spec 'max_int' (first at file4:8826-9021, again at file1:4640-4750)
+sail-rs: warning: duplicate val spec 'pow2' (first at file4:5758-5977, again at file1:5559-5628)
+sail-rs: warning: duplicate val spec 'sub_bits_int' (first at file7:9939-10098, again at file1:8375-8509)
+sail-rs: frontend converted 31267 definitions from 45 files using 16 workers; 1018419399 AST bytes spooled
+[profile] phase="frontend" wall_s=30.510088 rss_peak_mb=192 smt_calls=0 smt_s=0.000000
+[profile] phase="typecheck" wall_s=0.024556 rss_peak_mb=192 smt_calls=0 smt_s=0.000000
+[profile] phase="total" wall_s=30.935316 rss_peak_mb=192 smt_calls=0 smt_s=0.000000
+sail-rs: <sail-lib>/concurrency_interface/read_write_v1.sail: declaration typecheck: unbound variable ''pa' at Span { file: FileId(15), start: 6288, end: 7970 }
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 30.969s
+             CPU time consumed: 19.073s
+                   Memory peak: 1.3G (swap: 0B)

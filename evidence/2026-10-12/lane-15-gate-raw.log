@@ -1,0 +1,167 @@
+[gate] start mem=4G avail=27936MiB: env SAIL_RS_THREADS=16 bash scripts/typecheck-ooc-gate.sh
+Running as unit: run-p12229-i42015.service
+Running as unit: run-p12237-i21143.service; invocation ID: 79319d2aa7ff484c88f1274b2f6d53d0
+warning: unused import: `Interner`
+  --> crates/sail-lex/src/token.rs:18:16
+   |
+18 | use sail_ast::{Interner, Symbol};
+   |                ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-lex` (lib) generated 1 warning
+warning: unused variable: `it`
+   --> crates/sail-ty/src/conv.rs:385:35
+    |
+385 | fn typarg_nexp_only(arg: &TypArg, it: &impl Interner) -> Option<NExp> {
+    |                                   ^^ help: if this is intentional, prefix it with an underscore: `_it`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-ty` (lib) generated 1 warning (run `cargo fix --lib -p sail-ty` to apply 1 suggestion)
+warning: function `run_with_ooc` is never used
+   --> crates/sail-cli/src/e2e.rs:264:8
+    |
+264 | pub fn run_with_ooc<H: OocHooks>(args: &E2eArgs, driver: &mut OocDriver<H>) -> Outcome {
+    |        ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `MEMO_DOMAIN_SOLVER_Z3` is never used
+  --> crates/sail-cli/src/ooc.rs:56:11
+   |
+56 | pub const MEMO_DOMAIN_SOLVER_Z3: &str = "ooc/memo-v1/solver/z3-v1";
+   |           ^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `WarmBudget`, `ContentMismatch`, and `Io` are never constructed
+  --> crates/sail-cli/src/ooc.rs:74:5
+   |
+61 | pub enum OocError {
+   |          -------- variants in this enum
+...
+74 |     WarmBudget {
+   |     ^^^^^^^^^^
+...
+84 |     ContentMismatch {
+   |     ^^^^^^^^^^^^^^^
+...
+96 |     Io(String),
+   |     ^^
+   |
+   = note: `OocError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `warm_fetch`, `memo_lookup`, `memo_store`, and `summary_remove` are never used
+   --> crates/sail-cli/src/ooc.rs:163:8
+    |
+152 | pub trait OocHooks {
+    |           -------- methods in this trait
+...
+163 |     fn warm_fetch(&mut self, content_key: &str) -> Option<Vec<u8>>;
+    |        ^^^^^^^^^^
+...
+168 |     fn memo_lookup(&self, query_key: &str) -> Option<Vec<u8>>;
+    |        ^^^^^^^^^^^
+169 |     /// Kalter Memo-Store (unveränderliche Werte; Erster gewinnt).
+170 |     fn memo_store(&mut self, query_key: &str, value: &[u8]);
+    |        ^^^^^^^^^^
+...
+180 |     fn summary_remove(&mut self, shard: &str) -> bool;
+    |        ^^^^^^^^^^^^^^
+
+warning: struct `RecordingHooks` is never constructed
+   --> crates/sail-cli/src/ooc.rs:226:12
+    |
+226 | pub struct RecordingHooks {
+    |            ^^^^^^^^^^^^^^
+
+warning: methods `with_max_live_bytes`, `live_bytes`, `summary_count`, and `event` are never used
+   --> crates/sail-cli/src/ooc.rs:258:12
+    |
+255 | impl RecordingHooks {
+    | ------------------- methods in this implementation
+...
+258 |     pub fn with_max_live_bytes(mut self, n: u64) -> Self {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+265 |     pub fn live_bytes(&self) -> u64 {
+    |            ^^^^^^^^^^
+...
+271 |     pub fn summary_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^
+...
+275 |     fn event(&mut self, e: String) {
+    |        ^^^^^
+
+warning: methods `hooks`, `hooks_mut`, `hot`, `into_hooks`, `memo_prove`, and `warm_recall` are never used
+   --> crates/sail-cli/src/ooc.rs:406:12
+    |
+393 | impl<H: OocHooks> OocDriver<H> {
+    | ------------------------------ methods in this implementation
+...
+406 |     pub fn hooks(&self) -> &H {
+    |            ^^^^^
+...
+411 |     pub fn hooks_mut(&mut self) -> &mut H {
+    |            ^^^^^^^^^
+...
+423 |     pub fn hot(&self) -> Option<&str> {
+    |            ^^^
+...
+429 |     pub fn into_hooks(self) -> H {
+    |            ^^^^^^^^^^
+...
+528 |     pub fn memo_prove(
+    |            ^^^^^^^^^^
+...
+545 |     pub fn warm_recall(&mut self, content_key: &str) -> Option<Vec<u8>> {
+    |            ^^^^^^^^^^^
+
+warning: associated functions `new` and `diff` are never used
+  --> crates/sail-cli/src/profile.rs:75:12
+   |
+69 | impl ProverCounters {
+   | ------------------- associated functions in this implementation
+...
+75 |     pub fn new(calls: u64, secs: f64) -> Self {
+   |            ^^^
+...
+80 |     pub fn diff(before: Self, after: Self) -> Self {
+   |            ^^^^
+
+warning: method `add_smt_to_last` is never used
+   --> crates/sail-cli/src/profile.rs:145:12
+    |
+ 95 | impl Profiler {
+    | ------------- method in this implementation
+...
+145 |     pub fn add_smt_to_last(&mut self, phase: &'static str, counters: ProverCounters) {
+    |            ^^^^^^^^^^^^^^^
+
+warning: `sail-cli` (bin "sail-rs") generated 9 warnings
+    Finished `ci` profile [optimized] target(s) in 0.03s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 57ms
+             CPU time consumed: 49ms
+                   Memory peak: 21.2M (swap: 0B)
+Running as unit: run-p12252-i21144.service
+sail-rs: frontend converted 4096 definitions from 1 files using 16 workers; 567919927 AST bytes spooled
+sail-rs: typechecked 4096 definitions and 1052672 expressions using 16 workers
+[profile] phase="frontend" wall_s=10.717408 rss_peak_mb=50 smt_calls=0 smt_s=0.000000
+[profile] phase="typecheck" wall_s=0.628599 rss_peak_mb=57 smt_calls=0 smt_s=0.000000
+[profile] phase="total" wall_s=11.380508 rss_peak_mb=57 smt_calls=0 smt_s=0.000000
+sail-rs: compilation incomplete: full Sail typechecking, rewrite integration and Lean body emission are not implemented; frontend conversion is not a successful model build
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 11.399s
+             CPU time consumed: 9.823s
+                   Memory peak: 128M (swap: 0B)
+Subset typecheck gate passed: 567,919,927 AST bytes under 128M, no swap.
+This is not a successful compiler/Lean/ARM build.
+Retained input and log: /home/simon/Dokumente/Sail/sail-rs/worktrees/lane-15/target/typecheck-ooc-gate/run.ZRkQnImo
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 11.521s
+             CPU time consumed: 47ms
+                   Memory peak: 10M (swap: 0B)
+[gate] ende rc=0 avail=28070MiB

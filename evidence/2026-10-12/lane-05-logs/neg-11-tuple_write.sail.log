@@ -1,0 +1,13 @@
+[gate] start mem=256M avail=12058MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-11-tuple_write.sail
+Running as unit: run-p606403-i635640.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-11-tuple_write.sail[0m:8.83-88:
+8[96m |[0mfunction tuple_write() -> unit = { var (x, y) = (opaque_int(), true); (x, y) = (1, false) }
+ [91m |[0m                                                                                   [91m^---^[0m
+ [91m |[0m Failed to prove constraint: ((not(false) | true) & not(true)), as it simplifies directly to false
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 32ms
+             CPU time consumed: 22ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=1 free=2118MiB

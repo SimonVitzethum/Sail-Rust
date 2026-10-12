@@ -1,0 +1,14 @@
+[gate] start mem=4G avail=28063MiB: systemd-run --user --wait --pipe --collect -p MemoryMax=128M -p MemorySwapMax=0 -p RuntimeMaxSec=180 -p WorkingDirectory=/home/simon/Dokumente/Sail/sail-rs/worktrees/lane-24 /home/simon/Dokumente/Sail/sail-rs/worktrees/lane-24/target/ci/deps/canonical_program-ddfe03c20e391be8 ten_thousand_nested_vector_literals_infer_check_and_release_iteratively --test-threads=1
+Running as unit: run-p11970-i17279.service
+Running as unit: run-p11971-i41995.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 41ms
+             CPU time consumed: 35ms
+                   Memory peak: 24.1M (swap: 0B)
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 64ms
+             CPU time consumed: 8ms
+                   Memory peak: 2.7M (swap: 0B)
+[gate] ende rc=0 avail=28052MiB

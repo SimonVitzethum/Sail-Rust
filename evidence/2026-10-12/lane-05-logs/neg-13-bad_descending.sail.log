@@ -1,0 +1,14 @@
+[gate] start mem=256M avail=12074MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-13-bad_descending.sail
+Running as unit: run-p606456-i593434.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-13-bad_descending.sail[0m:8.64-80:
+8[96m |[0mfunction bad_descending() -> unit = foreach (i from 3 downto 0) bounded_index(i)
+ [91m |[0m                                                                [91m^--------------^[0m
+ [91m |[0m Could not resolve quantifiers for bounded_index
+ [91m |[0m [94m*[0m (0 <= 'loop_i & 'loop_i <= 2)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 34ms
+             CPU time consumed: 21ms
+                   Memory peak: 11.9M (swap: 0B)
+[gate] ende rc=1 free=2125MiB

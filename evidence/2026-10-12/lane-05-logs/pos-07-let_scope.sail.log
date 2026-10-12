@@ -1,0 +1,8 @@
+[gate] start mem=256M avail=12182MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-07-let_scope.sail
+Running as unit: run-p606858-i613194.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 33ms
+             CPU time consumed: 20ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=0 free=2235MiB

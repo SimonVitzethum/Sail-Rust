@@ -1,0 +1,21 @@
+[gate] start mem=4G avail=26089MiB: bash scripts/test-memory-limited.sh -p sail-ty --test canonical_program
+Running as unit: run-p79360-i3218.service
+Running as unit: run-p79367-i95855.service
+    Finished `ci` profile [optimized] target(s) in 0.03s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 58ms
+             CPU time consumed: 46ms
+                   Memory peak: 23.9M (swap: 0B)
+Running as unit: run-p79383-i95857.service; invocation ID: c7c922f3558d4df5a9faf175dd07c869
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 344ms
+             CPU time consumed: 631ms
+                   Memory peak: 64.1M (swap: 0B)
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 451ms
+             CPU time consumed: 34ms
+                   Memory peak: 6.8M (swap: 0B)
+[gate] ende rc=0 avail=26026MiB

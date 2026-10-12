@@ -1,0 +1,14 @@
+[gate] start mem=256M avail=11807MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/neg-04-constant_write.sail
+Running as unit: run-p605929-i639675.service
+[93mType error[0m:
+[96mtarget/mutable-reference/per-case/neg-04-constant_write.sail[0m:8.52-53:
+8[96m |[0mfunction constant_write() -> int = { var x = 0; x = 1; x }
+ [91m |[0m                                                    [91m^[0m
+ [91m |[0m int(1) is not a subtype of int(0)
+ [91m |[0m as false could not be proven
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 28ms
+             CPU time consumed: 21ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=1 free=1996MiB

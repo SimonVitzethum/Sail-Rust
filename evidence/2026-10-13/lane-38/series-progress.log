@@ -1,0 +1,46 @@
+=== threads1 try1 t=1 2026-10-12T18:48:29Z ===
+rc=0 cfg=threads1 try=1
+                   Memory peak: 53M (swap: 0B)
+                   Memory peak: 2.3M (swap: 0B)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+=== threads1 try2 t=1 2026-10-12T18:50:45Z ===
+rc=0 cfg=threads1 try=2
+                   Memory peak: 53M (swap: 0B)
+                   Memory peak: 2.4M (swap: 0B)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+=== threads1 try3 t=1 2026-10-12T18:52:41Z ===
+rc=0 cfg=threads1 try=3
+                   Memory peak: 52.4M (swap: 0B)
+                   Memory peak: 2.4M (swap: 0B)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+=== threads2 try1 t=2 2026-10-12T18:52:52Z ===
+rc=0 cfg=threads2 try=1
+                   Memory peak: 75.1M (swap: 0B)
+                   Memory peak: 2.4M (swap: 0B)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+=== threads2 try2 t=2 2026-10-12T18:53:09Z ===
+rc=0 cfg=threads2 try=2
+                   Memory peak: 65.6M (swap: 0B)
+                   Memory peak: 2.5M (swap: 0B)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+=== threads2 try3 t=2 2026-10-12T18:54:24Z ===
+rc=0 cfg=threads2 try=3
+                   Memory peak: 74.5M (swap: 0B)
+                   Memory peak: 2.5M (swap: 0B)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+=== threads4 try1 t=4 2026-10-12T18:54:47Z ===
+rc=0 cfg=threads4 try=1
+                   Memory peak: 103M (swap: 0B)
+                   Memory peak: 2.5M (swap: 0B)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+=== threads4 try2 t=4 2026-10-12T18:54:49Z ===
+rc=0 cfg=threads4 try=2
+                   Memory peak: 102.3M (swap: 0B)
+                   Memory peak: 2.3M (swap: 0B)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+=== threads4 try3 t=4 2026-10-12T18:54:49Z ===
+rc=0 cfg=threads4 try=3
+                   Memory peak: 102.8M (swap: 0B)
+                   Memory peak: 2.1M (swap: 0B)
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+ALLDONE

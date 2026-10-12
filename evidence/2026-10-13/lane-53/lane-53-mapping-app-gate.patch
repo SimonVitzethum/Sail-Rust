@@ -1,0 +1,102 @@
+# Lane-53: Mapping-Expansion-Gate zuoberst in BEIDE `ExpKind::App`-Arme.
+#
+# Target: Haupt-Worktree `crates/sail-ty/src/canonical_body.rs` (Stand mit
+# Lane-16-`vector_prims`-Hook in `call_candidates` und Lane-19-`Program::mapping_expansion`).
+# NICHT gegen die lane-53-Baseline anwendbar (dort fehlen beide).
+#
+# Inhalt: je ein Hunk zuoberst im Synthese-Arm (`infer`, OCaml `infer_exp` ~L3850)
+# und im Check-Arm (`run`, OCaml `check_exp` ~L2299), jeweils VOR `call_candidates`.
+# Ordnung: Mapping-Gate zuerst, dann Vektor-Normalisierung (Lane-16-Hook in
+# `call_candidates` laeuft unveraendert weiter). Nur deklarierte Mappings werden
+# umgeschrieben (`Expansion::from_gate` bildet `None` auf keinen Rewrite ab);
+# plain/overloaded Funktionen und `vector_*#`-Primitiva fallen nie darunter.
+# Semantik: forwards-first, backwards-Fallback bei jedem `TypeError`,
+# Doppelfehler kombiniert (`Expansion::expand` / `combine` ~ `Err_no_overloading`).
+#
+# Benoetigt (Haupt-Worktree): `sail_ty::mapping_expand::Expansion::{from_gate, expand}`
+# (Referenzmodul, vorhanden) und `Program::mapping_expansion` (Lane-19, vorhanden).
+# Re-Dispatch-Flaeche (`forwards_app`/`backwards_app`-Synthese plus
+# `infer_mapping_direction`/`check_mapping_direction`, Rueckfuetterung durch den
+# `App`-Arm) nach Insert-Spec in `mapping_expand.rs` (Modul-Doc); Check-Arm
+# faedelt `Some(expected)` als Rueckgabekontext ein, Infer-Arm keinen.
+#
+# Abnahme: `git apply --check patches/lane-53-mapping-app-gate.patch` im Haupt-Worktree.
+diff --git a/crates/sail-ty/src/canonical_body.rs b/crates/sail-ty/src/canonical_body.rs
+index a9bf1d5..6011f5a 100644
+--- a/crates/sail-ty/src/canonical_body.rs
++++ b/crates/sail-ty/src/canonical_body.rs
+@@ -1379,6 +1379,29 @@ impl Checker<'_> {
+                             continue;
+                         }
+                         ExpKind::App { func, args } => {
++                            // Lane-53: mapping-expansion gate first (OCaml `infer_exp`
++                            // ~L3850): `f(xs)` with `f` a declared mapping rewrites to
++                            // `<f>_forwards(xs)`; on `Type_error` it retries
++                            // `<f>_backwards(xs)`; both failures combine
++                            // (`Err_no_overloading`). Runs BEFORE `call_candidates`
++                            // (Lane-16 `vector_prims` hook there): mapping gate first,
++                            // then vector normalization. Plain/overloaded functions and
++                            // `vector_*#` prims never match (`from_gate` maps `None`).
++                            let func_name = self.name(func)?;
++                            if let Some(expansion) = crate::mapping_expand::Expansion::from_gate(
++                                func_name,
++                                self.program.mapping_expansion(func_name, self.position),
++                            ) {
++                                // Re-dispatch: the insertion synthesizes the rewritten `App`
++                                // node (`<m>_forwards(xs)` / `<m>_backwards(xs)`) and feeds
++                                // it back through the `App` arm; infer mode threads no
++                                // expected type (check mode threads `Some(expected)`).
++                                return expansion.expand(
++                                    exp.span,
++                                    || self.infer_mapping_direction(&forwards_app, scope),
++                                    || self.infer_mapping_direction(&backwards_app, scope),
++                                );
++                            }
+                             let mut candidates = self.call_candidates(func, scope, args.len())?;
+                             if candidates.len() != 1 {
+                                 work.push(Synthesis::Call(exp, candidates, args.len()));
+@@ -2016,6 +2039,44 @@ impl Checker<'_> {
+                     });
+                 }
+                 ExpKind::App { func, args } => {
++                    // Lane-53: mapping-expansion gate first (OCaml `check_exp`
++                    // ~L2299): `f(xs)` with `f` a declared mapping rewrites to
++                    // `<f>_forwards(xs)`; on `Type_error` it retries
++                    // `<f>_backwards(xs)`; both failures combine
++                    // (`Err_no_overloading`). Runs BEFORE `call_candidates`
++                    // (Lane-16 `vector_prims` hook there): mapping gate first,
++                    // then vector normalization. Plain/overloaded functions and
++                    // `vector_*#` prims never match (`from_gate` maps `None`).
++                    let func_name = self.name(func)?;
++                    if let Some(expansion) = crate::mapping_expand::Expansion::from_gate(
++                        func_name,
++                        self.program.mapping_expansion(func_name, self.position),
++                    ) {
++                        // Re-dispatch: the insertion synthesizes the rewritten `App`
++                        // node (`<m>_forwards(xs)` / `<m>_backwards(xs)`) and feeds
++                        // it back through the `App` arm; check mode threads
++                        // `Some(expected)` as the return context (infer mode
++                        // threads none).
++                        return expansion.expand(
++                            exp.span,
++                            || {
++                                self.check_mapping_direction(
++                                    &forwards_app,
++                                    expected.clone(),
++                                    scope.clone(),
++                                    returning.clone(),
++                                )
++                            },
++                            || {
++                                self.check_mapping_direction(
++                                    &backwards_app,
++                                    expected,
++                                    scope,
++                                    returning,
++                                )
++                            },
++                        );
++                    }
+                     let mut candidates = self.call_candidates(func, &scope, args.len())?;
+                     let callee = if let Some(callee) = self.calls.get(&(exp as *const Exp)) {
+                         callee.clone()

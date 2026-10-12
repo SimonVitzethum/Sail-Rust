@@ -1,0 +1,160 @@
+[gate] start mem=256M avail=11573MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/positive.sail
+Running as unit: run-p605732-i604317.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 45ms
+             CPU time consumed: 29ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=0 free=1628MiB
+
+=== per-case positives (15x exit 0 erwartet) ===
+
+--- pos-00-mutate.sail ---
+[gate] start mem=256M avail=12169MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-00-mutate.sail
+Running as unit: run-p606670-i635681.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 29ms
+             CPU time consumed: 17ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=0 free=2222MiB
+
+--- pos-01-inferred_mutate.sail ---
+[gate] start mem=256M avail=12168MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-01-inferred_mutate.sail
+Running as unit: run-p606695-i593450.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 32ms
+             CPU time consumed: 21ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=0 free=2214MiB
+
+--- pos-02-inferred_boolean.sail ---
+[gate] start mem=256M avail=12159MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-02-inferred_boolean.sail
+Running as unit: run-p606720-i593455.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 34ms
+             CPU time consumed: 18ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=0 free=2221MiB
+
+--- pos-03-inferred_constant.sail ---
+[gate] start mem=256M avail=12168MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-03-inferred_constant.sail
+Running as unit: run-p606745-i604389.service; invocation ID: fc8dee8be1334b1aadf0d909555c3096
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 32ms
+             CPU time consumed: 21ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=0 free=2221MiB
+
+--- pos-04-tuple_mutate.sail ---
+[gate] start mem=256M avail=12187MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-04-tuple_mutate.sail
+Running as unit: run-p606770-i573057.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 33ms
+             CPU time consumed: 22ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=0 free=2247MiB
+
+--- pos-05-write_register.sail ---
+[gate] start mem=256M avail=12191MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-05-write_register.sail
+Running as unit: run-p606795-i635707.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 33ms
+             CPU time consumed: 21ms
+                   Memory peak: 11.9M (swap: 0B)
+[gate] ende rc=0 free=2245MiB
+
+--- pos-06-vector_inference.sail ---
+[gate] start mem=256M avail=12191MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-06-vector_inference.sail
+Running as unit: run-p606833-i613187.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 37ms
+             CPU time consumed: 26ms
+                   Memory peak: 11.6M (swap: 0B)
+[gate] ende rc=0 free=2236MiB
+
+--- pos-07-let_scope.sail ---
+[gate] start mem=256M avail=12182MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-07-let_scope.sail
+Running as unit: run-p606858-i613194.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 33ms
+             CPU time consumed: 20ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=0 free=2235MiB
+
+--- pos-08-ascending.sail ---
+[gate] start mem=256M avail=12181MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-08-ascending.sail
+Running as unit: run-p606883-i581282.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 26ms
+             CPU time consumed: 17ms
+                   Memory peak: 12.5M (swap: 0B)
+[gate] ende rc=0 free=2240MiB
+
+--- pos-09-descending.sail ---
+[gate] start mem=256M avail=12187MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-09-descending.sail
+Running as unit: run-p606908-i613195.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 30ms
+             CPU time consumed: 19ms
+                   Memory peak: 12.1M (swap: 0B)
+[gate] ende rc=0 free=2239MiB
+
+--- pos-10-bounded_mutate.sail ---
+[gate] start mem=256M avail=12192MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-10-bounded_mutate.sail
+Running as unit: run-p606933-i635725.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 36ms
+             CPU time consumed: 23ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=0 free=2253MiB
+
+--- pos-11-while_loop.sail ---
+[gate] start mem=256M avail=12199MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-11-while_loop.sail
+Running as unit: run-p606958-i593482.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 29ms
+             CPU time consumed: 18ms
+                   Memory peak: 12.3M (swap: 0B)
+[gate] ende rc=0 free=2244MiB
+
+--- pos-12-repeat_loop.sail ---
+[gate] start mem=256M avail=12191MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-12-repeat_loop.sail
+Running as unit: run-p606983-i573072.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 33ms
+             CPU time consumed: 19ms
+                   Memory peak: 12.7M (swap: 0B)
+[gate] ende rc=0 free=2229MiB
+
+--- pos-13-while_fact.sail ---
+[gate] start mem=256M avail=12175MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-13-while_fact.sail
+Running as unit: run-p607008-i581291.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 34ms
+             CPU time consumed: 21ms
+                   Memory peak: 12.3M (swap: 0B)
+[gate] ende rc=0 free=2225MiB
+
+--- pos-14-mutable_condition.sail ---
+[gate] start mem=256M avail=12171MiB: /home/simon/.opam/sail/bin/sail -just_check target/mutable-reference/per-case/pos-14-mutable_condition.sail
+Running as unit: run-p607033-i635733.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 30ms
+             CPU time consumed: 20ms
+                   Memory peak: 12.2M (swap: 0B)
+[gate] ende rc=0 free=2224MiB
