@@ -35,6 +35,12 @@
   ohne `append`-Überladung ehrlich `UnboundVar` (wie OCaml).
   `reverse_endianness`-Muster als Fixture + OCaml-paritätisch verifiziert;
   4 Regressionstests (`vector_append.rs`) grün.
+- Erledigt (Append-Synthese): `append_result`-Helper aus `run()`-Arm
+  extrahiert, in `synthesize()` als `Synthesis::VectorAppend`
+  verdrahtet (anmerkungsfreie `let`-Bindungen wie in
+  `reverse_endianness` checken).
+- Infra: `/tmp` von 6,4G auf 356M aufgeräumt (alte Lane-Verzeichnisse;
+  tmpfs belegte direkt RAM); avail zurück bei ~17GiB.
 
 # Arbeitsstand und Fortsetzung — 2026-10-12 abends (Main-Agent, committet)
 
