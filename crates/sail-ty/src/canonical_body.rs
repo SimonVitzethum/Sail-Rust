@@ -967,39 +967,123 @@ impl Checker<'_> {
         }
         Ok(child)
     }
-    /// Prove a vector-LHS bounds obligation through the canonical SMT backend.
+    /// Prove a numeric mini-obligation with view-linked variables (B2).
     /// Mirrors `scalar_equal`: only a valid `program.prove` verdict is
     /// accepted, anything else is `ConstraintNotProved` (`Unknown` never
     /// becomes a proof). Emitter rejections (symbolic powers, numeric
     /// applications, unexpandable synonyms) surface as `Unsupported`.
     /// A syntactically decided obligation short-circuits without a query.
+    ///
+    /// Variable linking: every distinct mini variable resolves to a real
+    /// view — nearest scope local (witness NExp + local view) first, else
+    /// the function-scheme view (fresh node, text rigid). Unresolvable
+    /// variables are `Unsupported`, never guessed. Names coincide with
+    /// assumption-side names only on true identity (scope-Arc equality),
+    /// so a missed link can fail closed but never prove wrong.
     fn prove_vector_bounds(
         &self,
         obligation: &crate::nexp::NConstraint,
+        scope: &Scope,
         span: Span,
         what: &str,
     ) -> TypeResult<()> {
         if let Some(true) = obligation.simplify().as_bool() {
             return Ok(());
         }
-        let mut it = SimpleInterner::new();
-        let constraint = crate::conv::constraint_to_ast(obligation, &mut it);
-        let scope = self.context.as_ref().map(|s| Type::root(s.clone()));
-        let assumptions = self.proof_assumptions(&scope);
-        let query = CanonicalQuery::implication(
-            &assumptions,
-            View {
-                constraint: &constraint,
-                context: Context {
-                    interner: &it,
-                    variables: &EMPTY_PROOF_VARS,
-                    bindings: None,
+        let mut vars = Vec::new();
+        obligation.free_vars(&mut vars);
+        vars.sort();
+        vars.dedup();
+        let context_view = self.context.as_ref().map(|s| Type::root(s.clone()));
+        let mut git = SimpleInterner::new();
+        // Phase 1: alle Symbole internieren (danach keine Mutation mehr).
+        let syms: Vec<Symbol> = vars.iter().map(|text| git.intern(text)).collect();
+        // Phase 2: frische Knoten für Fallback-Variablen bauen.
+        enum Slot {
+            Local,
+            Fresh(usize),
+        }
+        let mut fresh_args: Vec<sail_ast::TypArg> = Vec::new();
+        let mut slots = Vec::new();
+        for (text, sym) in vars.iter().zip(syms.iter()) {
+            if scope.get(text).is_some() {
+                slots.push((text, sym, Slot::Local));
+            } else {
+                if context_view.is_none() {
+                    return Err(unsupported(
+                        span,
+                        format!("index variable {text} is unbound"),
+                    ));
+                }
+                fresh_args.push(Node::dummy(TypArgKind::NExp(Node::dummy(
+                    NExpKind::Var(*sym),
+                ))));
+                let idx = fresh_args.len() - 1;
+                slots.push((text, sym, Slot::Fresh(idx)));
+            }
+        }
+        // Phase 3: Goal-Constraint bauen (letzte Mutation).
+        let constraint = crate::conv::constraint_to_ast(obligation, &mut git);
+        // Phase 4: Map (nur noch geteilte Ausleihen).
+        let mut map = Vec::new();
+        for (text, sym, slot) in &slots {
+            let (arg, ctx) = match slot {
+                Slot::Local => {
+                    let (typ, _) = scope.get(text).expect("slot decided");
+                    // Witness-NExp aus Local-Sicht (App mit genau einem
+                    // NExp-Argument); sonst ehrlich `Unsupported`.
+                    let node = match &typ.node().kind {
+                        TypKind::App { args, .. } if args.len() == 1 => &args[0],
+                        _ => {
+                            return Err(unsupported(
+                                span,
+                                format!("index variable {text} has no numeric witness"),
+                            ));
+                        }
+                    };
+                    let TypArgKind::NExp(_) = &node.kind else {
+                        return Err(unsupported(
+                            span,
+                            format!("index variable {text} has no numeric witness"),
+                        ));
+                    };
+                    (node, typ.proof_context())
+                }
+                Slot::Fresh(idx) => {
+                    // Funktions-Scope: frischer Knoten, Text-Rigid über die
+                    // Funktions-Sicht (derselbe Arc wie in den Annahmen).
+                    let node = &fresh_args[*idx];
+                    (
+                        node,
+                        Context {
+                            interner: &git,
+                            variables: &EMPTY_PROOF_VARS,
+                            bindings: Some(context_view.as_ref().expect("checked")),
+                        },
+                    )
+                }
+            };
+            map.push((
+                **sym,
+                Argument {
+                    argument: arg,
+                    context: ctx,
                 },
-                negated: false,
+            ));
+        }
+        let goalmap = GoalMap { map };
+        let view = View {
+            constraint: &constraint,
+            context: Context {
+                interner: &git,
+                variables: &EMPTY_PROOF_VARS,
+                bindings: Some(&goalmap),
             },
-            None,
-        )
-        .map_err(|e| unsupported(span, e))?;
+            negated: false,
+        };
+        let scope = self.context.as_ref().map(|s| Type::root(s.clone()));
+        let query = CanonicalQuery::implication(&self.proof_assumptions(&scope), view, None)
+            .map_err(|e| unsupported(span, format!("{what} [{obligation}]: {e}")))?;
         if !self.program.prove(query).is_valid() {
             return Err(TypeError::constraint_not_proved(
                 span,
@@ -1007,6 +1091,173 @@ impl Checker<'_> {
             ));
         }
         Ok(())
+    }
+    /// Length argument of a resolved vector/bitvector root, following the
+    /// substitution chain (`Scalar::resolved`).
+    ///
+    /// The raw AST node still carries the unsubstituted variable (e.g. `'n`
+    /// from `bits('n)`); call-result bindings may already close it to a
+    /// compound length (`8 * 'n` from `sail_zeros(8 * n)`). Using the raw
+    /// node would state the wrong obligation (`< 'n` instead of `< 8 * 'n`),
+    /// so the followed node is always used. Name resolution for the
+    /// followed node must see the bound owner's tables (symbols collide by
+    /// number across tables), hence the union includes the grounded
+    /// owner's interners first.
+    fn vector_len_nexp(&self, root: &Type, span: Span) -> TypeResult<crate::nexp::Nexp> {
+        let TypKind::App { args, .. } = &root.node().kind else {
+            return Err(unsupported(span, "Invalid vector assignment l-expression"));
+        };
+        args.first()
+            .ok_or_else(|| unsupported(span, "Invalid vector assignment l-expression"))?;
+        let top = Scalar {
+            owner: root.clone(),
+            index: 0,
+        };
+        self.ground_scalar(&top, &[root.clone()], &mut Vec::new(), 0)
+            .ok_or_else(|| unsupported(span, "Invalid vector assignment l-expression"))
+    }
+
+    /// Find the binding for `symbol` in the home owner's own substitution
+    /// map. Same-table only: cross-table symbols collide by number, and
+    /// even texts collide across scopes (function `'n` vs instantiated
+    /// `'n`), so consulting a foreign map can alias distinct rigids.
+    /// A variable occurrence is bound by its own owner's map; anything
+    /// else stays rigid and links later via scope/function views.
+    fn find_binding(symbol: Symbol, home: &Type) -> Option<Scalar> {
+        home.substitutions.get_scalar(symbol).cloned()
+    }
+
+    /// Follow a scalar argument through substitution chains and lower it
+    /// to a Mini-`Nexp`, grounding variables bound (transitively) to
+    /// constants. Unbound variables stay rigid and link later via
+    /// scope/function views (`prove_vector_bounds`). Cycle-guarded
+    /// (`visited` over substitution-`Arc` + symbol) and fuel-capped;
+    /// `None` is honest `Unsupported`, never a guess.
+    fn ground_scalar(
+        &self,
+        scalar: &Scalar,
+        extra: &[Type],
+        visited: &mut Vec<(usize, Symbol)>,
+        depth: usize,
+    ) -> Option<crate::nexp::Nexp> {
+        if depth > 64 {
+            return None;
+        }
+        let mut owners: Vec<Type> = Vec::with_capacity(extra.len() + 1);
+        owners.push(scalar.owner.clone());
+        owners.extend(extra.iter().cloned());
+        let mut current = scalar.clone();
+        let mut fuel = 64;
+        loop {
+            if fuel == 0 {
+                return None;
+            }
+            fuel -= 1;
+            let symbol = match &current.argument().kind {
+                TypArgKind::NExp(node) => match &node.kind {
+                    NExpKind::Var(symbol) => *symbol,
+                    _ => break,
+                },
+                TypArgKind::Bool(constraint) => match &constraint.kind {
+                    ConstraintKind::Var(symbol) => *symbol,
+                    _ => break,
+                },
+                _ => break,
+            };
+            if !owners
+                .iter()
+                .any(|owner| Arc::ptr_eq(&owner.substitutions, &current.owner.substitutions))
+            {
+                owners.insert(0, current.owner.clone());
+            }
+            let key = (Arc::as_ptr(&current.owner.substitutions) as usize, symbol);
+            if visited.contains(&key) {
+                break;
+            }
+            let Some(bound) = Self::find_binding(symbol, &current.owner) else {
+                break;
+            };
+            visited.push(key);
+            current = bound;
+        }
+        match &current.argument().kind {
+            TypArgKind::NExp(node) => {
+                self.ground_nexp(node, &current.owner, &owners, visited, depth + 1)
+            }
+            _ => None,
+        }
+    }
+
+    /// Lower an AST-`NExp` to Mini, grounding bound variables recursively.
+    /// Supported: constants, variables, `+`/`-`/`*`, unary `-`, `2 ^`.
+    /// Anything else (`if`, numeric applications, `Id`) is `None`
+    /// (honest `Unsupported`, never guessed).
+    fn ground_nexp(
+        &self,
+        node: &NExp,
+        owner: &Type,
+        extra: &[Type],
+        visited: &mut Vec<(usize, Symbol)>,
+        depth: usize,
+    ) -> Option<crate::nexp::Nexp> {
+        use crate::nexp::Nexp as Mini;
+        if depth > 64 {
+            return None;
+        }
+        match &node.kind {
+            NExpKind::Constant(text) => text.parse::<i128>().ok().map(Mini::Const),
+            NExpKind::Var(symbol) => {
+                let mut owners: Vec<Type> = Vec::with_capacity(extra.len() + 1);
+                owners.push(owner.clone());
+                owners.extend(extra.iter().cloned());
+                let key = (Arc::as_ptr(&owner.substitutions) as usize, *symbol);
+                if !visited.contains(&key) {
+                    if let Some(bound) = Self::find_binding(*symbol, owner) {
+                        visited.push(key);
+                        return self.ground_scalar(&bound, &owners, visited, depth + 1);
+                    }
+                }
+                // Rigid remainder: home tables first, then outer tables.
+                let mut chain: Vec<&dyn sail_ast::Interner> =
+                    Vec::with_capacity(2 * owners.len() + 1);
+                for table in &owners {
+                    chain.push(&*table.root.interner as &dyn sail_ast::Interner);
+                    chain.push(&*table.scope.interner as &dyn sail_ast::Interner);
+                }
+                chain.push(&*self.it as &dyn sail_ast::Interner);
+                let union = crate::vector_lexp::Union::over(chain);
+                union
+                    .resolve(*symbol)
+                    .map(|text| Mini::Var(text.to_owned()))
+            }
+            NExpKind::Sum(first, second) => Some(Mini::Add(
+                Box::new(self.ground_nexp(first, owner, extra, visited, depth + 1)?),
+                Box::new(self.ground_nexp(second, owner, extra, visited, depth + 1)?),
+            )),
+            NExpKind::Minus(first, second) => Some(Mini::Sub(
+                Box::new(self.ground_nexp(first, owner, extra, visited, depth + 1)?),
+                Box::new(self.ground_nexp(second, owner, extra, visited, depth + 1)?),
+            )),
+            NExpKind::Times(first, second) => Some(Mini::Mul(
+                Box::new(self.ground_nexp(first, owner, extra, visited, depth + 1)?),
+                Box::new(self.ground_nexp(second, owner, extra, visited, depth + 1)?),
+            )),
+            NExpKind::Neg(inner) => Some(Mini::Neg(Box::new(self.ground_nexp(
+                inner,
+                owner,
+                extra,
+                visited,
+                depth + 1,
+            )?))),
+            NExpKind::Exp(inner) => Some(Mini::Exp(Box::new(self.ground_nexp(
+                inner,
+                owner,
+                extra,
+                visited,
+                depth + 1,
+            )?))),
+            _ => None,
+        }
     }
     /// Vector-LHS target type (Lane 41 hook for `assignment_type`).
     ///
@@ -1037,8 +1288,6 @@ impl Checker<'_> {
         if let Some((base, index)) = as_vector(lexp) {
             let base_typ = self.assignment_type(base, scope)?;
             let root = self.resolve(&base_typ)?;
-            for (b, s) in root.substitutions.scalars.iter() {
-            }
             let mut union = crate::vector_lexp::Union::over(vec![
                 &*root.root.interner as &dyn sail_ast::Interner,
                 &*root.scope.interner as &dyn sail_ast::Interner,
@@ -1046,6 +1295,9 @@ impl Checker<'_> {
             ]);
             let vector_root =
                 bridge::vector_root_of_canonical(root.node(), &mut union, lexp.span)?;
+            // Len folgt der Substitutions-Kette (Helper; NLL beendet die
+            // obige Union-Ausleihe vor dem &mut-Borrow).
+            let len_nexp = self.vector_len_nexp(&root, lexp.span)?;
             let inferred = self.infer(index, scope)?;
             let index_typ = self.resolve(&inferred)?;
             let mini_index_typ = bridge::mini_typ_of_canonical(
@@ -1054,144 +1306,39 @@ impl Checker<'_> {
                 index.span,
             )?;
             check_index_typ(&mini_index_typ, index.span)?;
-            // Bounds-Beweis über GoalMap (B2): frische Goal-Variablen mappen
-            // auf reale TypArgumente mit je eigenem Kontext; der Emitter
-            // folgt den Ketten, Namen fallen nur bei echter Identität
-            // zusammen. Kein Raten: unauflösbare Seiten sind `Unsupported`,
-            // unbeweisbare Bounds `ConstraintNotProved`.
-            let len_typarg = match &root.node().kind {
-                TypKind::App { args, .. } => args.first().ok_or_else(|| {
-                    unsupported(lexp.span, "Invalid vector assignment l-expression")
-                })?,
-                _ => {
-                    return Err(unsupported(lexp.span, "Invalid vector assignment l-expression"));
-                }
-            };
-            let TypArgKind::NExp(_) = &len_typarg.kind else {
-                return Err(unsupported(lexp.span, "Invalid vector assignment l-expression"));
-            };
-            let (index_typarg, index_ctx) = match &index_typ.node().kind {
-                TypKind::App { args, .. } if args.len() == 1 => {
-                    let TypArgKind::NExp(_) = &args[0].kind else {
-                        return Err(unsupported(lexp.span, "index value not addressable"));
-                    };
-                    (&args[0], index_typ.proof_context())
-                }
-                _ => return Err(unsupported(lexp.span, "index value not addressable")),
-            };
-            // Len-Knoten leben in der Scope-Tabelle (nicht Root): eigener
-            // Kontext mit Scope-Interner, Bindings via GoalMap (s.u.).
-            // WICHTIG: starre Namen ('n) lösen über die self.context-Sicht
-            // (Funktions-Scheme = derselbe Arc wie in den Annahmen; Ptr-
-            // Gleichheit ist die Link-Bedingung des Emitters).
-            let context_view = self
-                .context
-                .as_ref()
-                .map(|s| Type::root(s.clone()))
-                .ok_or_else(|| unsupported(lexp.span, "vector bounds need function context"))?;
-            let len_ctx = Context {
-                interner: &root.scope.interner,
-                variables: &EMPTY_PROOF_VARS,
-                bindings: Some(&context_view),
-            };
-            use sail_solver::canonical::Bindings as _;
-            let mut git = SimpleInterner::new();
-            // TEMP B2: Upper-Kette aus foreach-Fact lesen.
-            let mut sc2 = Some(scope);
-            while let Some(s) = sc2 {
-                for (scalar, _neg) in &s.facts {
-                    if let TypArgKind::Bool(c) = &scalar.argument().kind {
-                        if let ConstraintKind::And(_, b) = &c.kind {
-                            if let ConstraintKind::Le(_, hi) = &b.kind {
-                                if let NExpKind::Var(hs) = hi.kind {
-                                    if let Some(bound) = scalar.owner.substitutions.get_scalar(hs) {
-                                        let owner = &bound.owner;
-                                    } else {
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                sc2 = s.parent.as_deref();
-            }
-            let mut sc = Some(scope);
-            while let Some(s) = sc {
-                for (scalar, neg) in &s.facts {
-                }
-                sc = s.parent.as_deref();
-            }
-            let gi = git.intern("__goal_index");
-            let gl = git.intern("__goal_len");
-            let mk_var = |s| Node::dummy(NExpKind::Var(s));
-            let goal = Node::dummy(ConstraintKind::And(
-                Box::new(Node::dummy(ConstraintKind::Ge(
-                    mk_var(gi),
-                    Node::dummy(NExpKind::Constant("0".to_owned())),
-                ))),
-                Box::new(Node::dummy(ConstraintKind::Lt(
-                    mk_var(gi),
-                    mk_var(gl),
-                ))),
-            ));
-            let goalmap = GoalMap {
-                map: vec![
-                    (
-                        gi,
-                        Argument {
-                            argument: index_typarg,
-                            context: index_ctx,
-                        },
-                    ),
-                    (
-                        gl,
-                        Argument {
-                            argument: len_typarg,
-                            context: len_ctx,
-                        },
-                    ),
-                ],
-            };
-            let view = View {
-                constraint: &goal,
-                context: Context {
-                    interner: &git,
-                    variables: &EMPTY_PROOF_VARS,
-                    bindings: Some(&goalmap),
-                },
-                negated: false,
-            };
-            let context = self.context.as_ref().map(|s| Type::root(s.clone()));
-            let query = CanonicalQuery::implication(&self.proof_assumptions(&context), view, None)
-                .map_err(|e| unsupported(lexp.span, e))?;
-            if !self.program.prove(query).is_valid() {
-                return Err(TypeError::constraint_not_proved(
-                    lexp.span,
-                    "vector index bounds",
-                ));
-            }
-            let mut it = SimpleInterner::new();
+            // Bounds als Mini-Obligation; Variablen-Linking über
+            // `prove_vector_bounds` (Scope-Locals, sonst Funktionssicht).
+            // Frische Union: die obige Ausleihe ist durch NLL beendet.
+            let mut union2 = crate::vector_lexp::Union::over(vec![
+                &*root.root.interner as &dyn sail_ast::Interner,
+                &*root.scope.interner as &dyn sail_ast::Interner,
+                &*self.it as &dyn sail_ast::Interner,
+            ]);
+            let index_nexp = bridge::index_nexp_from_exp(index, &mut union2)?;
+            self.prove_vector_bounds(
+                &crate::lexp_bounds::index_obligation(&index_nexp, &len_nexp),
+                scope,
+                lexp.span,
+                "vector index bounds",
+            )?;
             // Das Element aus der substituierten Sicht lesen (call-result
             // Bindings anwenden, z.B. `'a := bits(8)` aus `vector_init`):
             // die rohe AST-Ansicht trägt noch die unsubstituierte Variable.
-            let elem_mini = match &vector_root {
-                VectorRoot::Bitvector { .. } => crate::nexp::MiniTyp::Bit,
+            // WICHTIG: kein Mini-Roundtrip (`ast_of_mini_typ` baut frische
+            // Tabellen ohne Scope und zerreisst rigide Identitäten); die
+            // substituierte Sicht direkt zurückgeben.
+            match &vector_root {
+                VectorRoot::Bitvector { .. } => return Ok(self.builtin("bit")),
                 VectorRoot::Vector { .. } => {
                     let elem_view = root.child(Step::TypeArgument(1)).resolved();
-                    if let TypKind::App { name, args } = &elem_view.node().kind {
-                    }
-                    let mini = crate::conv::typ_from_ast(elem_view.node(), &*elem_view.root.interner);
-                    mini.ok_or_else(|| {
-                        unsupported(lexp.span, "Invalid vector assignment l-expression")
-                    })?
+                    return Ok(elem_view);
                 }
-            };
-            let lifted = bridge::ast_of_mini_typ(&elem_mini, &mut it);
-            return Ok(Type::owned(lifted, Arc::new(it)));
+            }
         }
         if let Some((base, first, second)) = as_vector_range(lexp) {
             let base_typ = self.assignment_type(base, scope)?;
             let root = self.resolve(&base_typ)?;
+
             let mut union = crate::vector_lexp::Union::over(vec![
                 &*root.root.interner as &dyn sail_ast::Interner,
                 &*root.scope.interner as &dyn sail_ast::Interner,
@@ -1200,10 +1347,26 @@ impl Checker<'_> {
             let vector_root =
                 bridge::vector_root_of_canonical(root.node(), &mut union, lexp.span)?;
             // Ein `vector`-Root ist hier ein Mismatch (OCaml:
-            // "Cannot assign slice of non vector type"); erst danach
-            // käme die ordnungsabhängige Obligation.
+            // "Cannot assign slice of non vector type").
             let _len = check_slice_root_len(&vector_root, lexp.span)?;
-            for bound in [first, second] {
+            // Default-Order (OCaml `Env.get_default_order`); ohne gesetzte
+            // Order ehrlich `Unsupported` (kein impliziter Fallback).
+            let order = self.program.default_order(self.position).ok_or_else(|| {
+                unsupported(
+                    lexp.span,
+                    "vector slice assignment needs a default order (Env.get_default_order); no implicit fallback",
+                )
+            })?;
+            let order = match order {
+                sail_ast::Order::Inc => crate::nexp::MiniOrder::Inc,
+                sail_ast::Order::Dec => crate::nexp::MiniOrder::Dec,
+            };
+            // Len folgt der Substitutions-Kette (Helper; NLL beendet die
+            // obige Union-Ausleihe vor dem &mut-Borrow).
+            let len_nexp = self.vector_len_nexp(&root, lexp.span)?;
+            let mut first_nexp = None;
+            let mut second_nexp = None;
+            for (bound, slot) in [(first, &mut first_nexp), (second, &mut second_nexp)] {
                 let inferred = self.infer(bound, scope)?;
                 let bound_typ = self.resolve(&inferred)?;
                 let mini = bridge::mini_typ_of_canonical(
@@ -1212,12 +1375,75 @@ impl Checker<'_> {
                     bound.span,
                 )?;
                 check_index_typ(&mini, bound.span)?;
-                let _ = bridge::index_nexp_from_exp(bound, &*self.it)?;
+                let mut bunion =
+                    crate::vector_lexp::Union::over(vec![&*self.it as &dyn sail_ast::Interner]);
+                *slot = Some(bridge::index_nexp_from_exp(bound, &mut bunion)?);
             }
-            return Err(unsupported(
-                lexp.span,
-                "vector slice assignment needs a default order (Env.get_default_order); no implicit fallback",
-            ));
+            let (first_nexp, second_nexp) = (first_nexp.expect("set"), second_nexp.expect("set"));
+            let (slice_len, check) =
+                crate::lexp_bounds::slice_obligation(&first_nexp, &second_nexp, &len_nexp, order);
+            self.prove_vector_bounds(&check, scope, lexp.span, "vector slice bounds")?;
+            // Slice-Typ mit verlinkten Substitutionen (keine Orphan-Sicht):
+            // `bits(slice_len)` frisch, jede Variable auf Local-Witness
+            // abgebildet (unabgebildete = ehrlich `Unsupported`).
+            let mut git = SimpleInterner::new();
+            let mut texts = Vec::new();
+            slice_len.free_vars(&mut texts);
+            texts.sort();
+            texts.dedup();
+            let mut scalars = Vec::new();
+            for text in &texts {
+                let (typ, _) = scope.get(text).ok_or_else(|| {
+                    unsupported(
+                        lexp.span,
+                        format!("slice length variable {text} is unbound"),
+                    )
+                })?;
+                match &typ.node().kind {
+                    TypKind::App { args, .. } if args.len() == 1 => {
+                        let TypArgKind::NExp(_) = &args[0].kind else {
+                            return Err(unsupported(
+                                lexp.span,
+                                format!("slice length variable {text} has no numeric witness"),
+                            ));
+                        };
+                        let sym = git.intern(text);
+                        scalars.push((
+                            sym,
+                            Scalar {
+                                owner: typ.clone(),
+                                index: 0,
+                            },
+                        ));
+                    }
+                    _ => {
+                        return Err(unsupported(
+                            lexp.span,
+                            format!("slice length variable {text} has no numeric witness"),
+                        ));
+                    }
+                }
+            }
+            let len_node = crate::conv::nexp_to_ast(&slice_len, &mut git);
+            let bits = git.intern("bits");
+            let typ = Node::dummy(TypKind::App {
+                name: Name::dummy(bits),
+                args: vec![Node::dummy(TypArgKind::NExp(len_node))],
+            });
+            let root = Arc::new(Scheme {
+                typschm: TypSchm { quant: vec![], typ },
+                interner: Arc::new(git),
+            });
+            return Ok(Type {
+                root: root.clone(),
+                path: Vec::new(),
+                scope: root,
+                substitutions: Arc::new(Substitutions {
+                    types: Vec::new(),
+                    scalars,
+                }),
+                implicit_argument: false,
+            });
         }
         unreachable!("vector_target_type called on a non-vector LExp");
     }

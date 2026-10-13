@@ -1,6 +1,6 @@
-# Arbeitsstand und Fortsetzung — 2026-10-13 (Main-Agent, B2 solventiert)
+# Arbeitsstand und Fortsetzung — 2026-10-13 (Main-Agent, B2-Slice solventiert)
 
-## B2 (`res[i]`, `to_bytes_le`): LHS-Hook bewiesen, Rest präzise offen
+## B2 (`res[i]`, `to_bytes_le`/`from_bytes_le`): Index- und Slice-Bounds bewiesen
 
 - `vector_target_type`-Hook prüft Vektor-LHS Ende-zu-Ende: Wurzel + Index-
   Typ + Bounds-Beweis zuerst + substituierter Element-Typ. Chaingemessen:
@@ -8,14 +8,23 @@
 - Neu: `Union`-Interner-Sicht (mehrere Tabellen, frische Namen lokal),
   `GoalMap`-Bindings (fresh→real mit je eigenem Kontext),
   Elem-Substitution via `.resolved()` (z. B. `'a := bits(8)`).
-- Suite grün (sail-ty + sail-solver via Gate, RC 0).
-- OFFEN (B2b, ein Fall): `scalar_equal` mit frischer `bitvector('n)`-
-  Orphan-Sicht (leeres Scope-Quant) in RHS/`subrange`-Prüfung meldet
-  `unbound rigid proof variable 'n`. Spuren: Scope-Ptrs, Emitter-Hops und
-  Tabellen-Inhalte sind vermessen (Details bei Bedarf aus Gate-Logs);
-  Nächster Schritt: Erzeuger der Orphan-Sicht identifizieren (frische
-  `Type::owned`-Hülle mit var-haltigem Baum) und Scope nachziehen oder
-  ehrlich als `ConstraintNotProved` melden.
+- Neu: `vector_len_nexp` + `ground_scalar`/`ground_nexp`/`find_binding`
+  (`canonical_body.rs`): Längen-Argument folgt der Substitutions-Kette
+  rekursiv (`sail_zeros(8*n)` → `8*'n` statt rohem `'n`); Konstanten werden
+  gegroundet, rigide Reste bleiben für Scope-/Funktionssicht-Linking.
+  Bindungsregel strikt same-table (Fremdtabellen kollidieren per Nummer
+  UND Text — Funktion-`'n` vs. Instanz-`'n` aliasierten sonst zu `8*8`);
+  Zyklen/Fuel-gesichert, Lücken ehrlich `Unsupported`.
+- Neu: numerische Index-Bounds (`+ - *`, unäres `-`) über Union-Sicht
+  (`vector_lexp_bridge.rs`); `default Order`-Deklaration (`program.rs`,
+  `frontend.rs`: `DefKind::Default` wird deklariert und positionsgeprüft).
+- Suite grün (sail-ty + sail-solver via Gate, RC 0, 26 ok).
+- `vector.sail` komplett grün (Fixture + ARM-Pfad bis `option.sail`).
+- OFFEN (B3, ein Fall): `option.sail is_none` (`Some(_)`/`None()`):
+  `PatKind::App`-Konstruktor-Patternbindung meldet ehrlich
+  `constructor, vector, list, disjunctive or dependent pattern binding`.
+  Nächster Schritt: Union-Konstruktor-Pattern (Scheme freshen, Args
+  unifizieren, Payload binden).
 
 # Arbeitsstand und Fortsetzung — 2026-10-12 abends (Main-Agent, committet)
 

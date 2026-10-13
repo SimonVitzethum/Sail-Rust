@@ -448,10 +448,20 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
                     .map_err(|e| error(format!("{}: {e}", record.path)))?
             };
             let interner = parser.into_interner();
-            let declaration = matches!(&def.kind, DefKind::Type(_) | DefKind::Val(_)
-                | DefKind::Register(_) | DefKind::Constraint(_) | DefKind::Outcome { .. }
-                | DefKind::Overload {..}
-                | DefKind::Fundef {annot:sail_ast::TAnnotOpt::Some {..},..});
+            let declaration = matches!(
+                &def.kind,
+                DefKind::Type(_)
+                    | DefKind::Val(_)
+                    | DefKind::Register(_)
+                    | DefKind::Constraint(_)
+                    | DefKind::Outcome { .. }
+                    | DefKind::Overload { .. }
+                    | DefKind::Default(_)
+                    | DefKind::Fundef {
+                        annot: sail_ast::TAnnotOpt::Some { .. },
+                        ..
+                    }
+            );
             if opts.verbose >= 2 { eprintln!("sail-rs: spool {}:{}", record.path, record.span); }
             let snapshot = DefinitionSnapshot::new(def);
             let mut bytes = Vec::new();

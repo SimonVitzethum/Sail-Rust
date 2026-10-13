@@ -274,6 +274,7 @@ pub struct Program {
     instantiations: Vec<Binding<(String, Span)>>,
     constraints: Vec<Binding<(Arc<Constraint>, Arc<SimpleInterner>)>>,
     solvers: SolverPool<SmtLibSolver>,
+    default_order: Option<(Order, usize)>,
 }
 impl Default for Program {
     fn default() -> Self {
@@ -296,6 +297,7 @@ impl Default for Program {
             instantiations: Vec::new(),
             constraints: Vec::new(),
             solvers: SolverPool::with_default_cache(SmtLibSolver::new),
+            default_order: None,
         }
     }
 }
@@ -938,8 +940,32 @@ impl Program {
                 });
                 Ok(())
             }
+            DefKind::Default(order) => self.set_default_order(*order, position, def.span),
             _ => Ok(()),
         }
+    }
+
+    /// Global default order (`default Order`, OCaml `Env.get_default_order`):
+    /// set once, second set is an error; use before set behaves as unset.
+    /// Position-checked: declarations before the order do not see it.
+    fn set_default_order(&mut self, order: Order, position: usize, span: Span) -> TypeResult<()> {
+        if self.default_order.is_some() {
+            return Err(failure(
+                span,
+                "Cannot change default order once already set",
+            ));
+        }
+        self.default_order = Some((order, position));
+        Ok(())
+    }
+
+    /// Default order visible at `position`, else `None` (OCaml
+    /// `get_default_order` errors; callers report honest `Unsupported`).
+    #[must_use]
+    pub fn default_order(&self, position: usize) -> Option<Order> {
+        self.default_order
+            .filter(|(_, set_at)| *set_at <= position)
+            .map(|(order, _)| order)
     }
 
     /// Record one `scattered` definition header or clause. Openings push a
