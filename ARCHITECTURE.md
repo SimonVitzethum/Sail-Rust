@@ -164,6 +164,38 @@ optionaler Negation; sie gelten nur im jeweiligen Scope. Foreach-Indizes bekomme
 Bereichsannahmen und sind immutable. While benutzt positive Bedingungsfakten;
 Repeat/until setzt seine spätere Bedingung nicht für den Körper voraus.
 
+### Beweisverlinkung über Symboltabellen (B2–B3)
+
+`Symbol` gilt nur in seinem Interner; frische Tabellen (Mini-Roundtrips,
+`ast_of_mini_typ`) zerreissen rigide Identitäten. Alle Längen- und
+Fakt-Konstruktion folgt darum echten Substitutionsketten statt Rohtypen:
+
+- `vector_len_nexp` (`canonical_body.rs:1182`) mit `ground_scalar`/`ground_nexp`/
+  `find_binding` (`:1202`, `:1212`, `:1271`): Längenargument folgt der Kette
+  (`sail_zeros(8*n)` → `8*'n`), Konstanten werden gegroundet, rigide Reste
+  bleiben für Scope-/Funktionssicht-Linking. Bindungsregel strikt same-table
+  (Fremdtabellen kollidieren per Nummer UND Text); zyklen-/fuel-gesichert.
+- `guard_mini`/`guard_fact` (`:1672`, `:1840`): Vergleichs-Guards über Atomen
+  (`m < 'n` ⇒ `'m < 'n`), `&`/`|`-Kombinationen (Scope-Arc-Konflikte bleiben
+  `None`), `E_constraint` (rigid-geprüft), Literale. `condition` nutzt
+  `guard_fact`, verfeinerte `bool(..)`-Bedingungen passieren direkt.
+- `sizeof_type` (`:1589`) mit `rehome_nexp` (`:1551`): `'n` synthetisiert
+  `atom('n)` (Konvertierung `int(args)`→`atom` beachten), Scope =
+  Funktionsschema; `__size`-Deklarations-Gate wie OCaml.
+- `check_assert` (`:1893`): `assert` prüft cond/msg und fädelt Fakten in den
+  Continuation-Scope (Block-Threading); `E_constraint`-Ausdrücke denotieren
+  `atom_bool`.
+- `append_result` (`:1349`): `@` summiert gegroundete Längen, Variablen
+  verlinkt auf Seiten-Sichten; `append`-Deklarations-Gate.
+- `align_call`/`is_implicit_formal` (`:791`, `:807`): ausgelassene
+  `implicit(..)`-Formale (`extzv([bitzero])`); `select_call` probiert alle
+  Kandidaten; `has_overload` (`program.rs:1392`) prüft nur Deklaration
+  (dangling Members wie `__id` ok).
+- `field_type` (`:2291`): `record.field` via Accessor-Teleskop, in `run`
+  und `infer` (`Synthesis::Field`). Pattern-Seite: Union-Konstruktoren via
+  `instantiate`, `P_vector`/`P_vector_concat` mit Konstantbreiten
+  (ein Wildcard nimmt den Rest).
+
 Der Rückgabewert der committeten kanonischen Prüfung ist eine Anzahl geprüfter
 Ausdrücke. Worktree-Stand (uncommitted, Lane-17): elaborierte Emission als
 `crates/sail-ty/src/typed_def.rs:37-53` (`TypedDefKind`, `TypedDef` mit

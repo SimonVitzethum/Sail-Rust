@@ -785,6 +785,52 @@ impl Checker<'_> {
         }
         Ok(vec![self.resolve(&self.id(name, scope)?)?])
     }
+    /// Whether a callee formal is an omittable `implicit(..)` argument.
+    /// Reads the raw head, bypassing the `implicit`→`atom` display
+    /// mapping in `Type::name`.
+    fn is_implicit_formal(callee: &Type, formal: &Typ) -> bool {
+        match &formal.kind {
+            TypKind::App { name, .. } => {
+                callee.root.interner.resolve(name.symbol) == Some("implicit")
+            }
+            _ => false,
+        }
+    }
+
+    /// Align call-site actuals against callee formals, skipping omitted
+    /// `implicit(..)` formals (OCaml `infer_funapp`, e.g.
+    /// `extzv([bitzero])` for `(implicit('m), bits('n))`). Returns
+    /// per-formal the actual index, or `None` for an omitted implicit.
+    /// Passing every formal explicitly (equal counts) keeps working;
+    /// anything else is a hard arity error (no ambiguous partial
+    /// omission).
+    fn align_call(
+        callee: &Type,
+        formal: &[Typ],
+        actual_count: usize,
+        span: Span,
+    ) -> TypeResult<Vec<Option<usize>>> {
+        if actual_count == formal.len() {
+            return Ok((0..formal.len()).map(Some).collect());
+        }
+        let mut alignment = Vec::with_capacity(formal.len());
+        let mut next = 0;
+        for formal_typ in formal {
+            if Self::is_implicit_formal(callee, formal_typ) {
+                alignment.push(None);
+            } else {
+                if next >= actual_count {
+                    return Err(arity(span, formal.len(), actual_count));
+                }
+                alignment.push(Some(next));
+                next += 1;
+            }
+        }
+        if next != actual_count {
+            return Err(arity(span, formal.len(), actual_count));
+        }
+        Ok(alignment)
+    }
     fn select_call(
         &self,
         candidates: Vec<Type>,
@@ -799,16 +845,23 @@ impl Checker<'_> {
                 let TypKind::Fn { args, .. } = &callee.node().kind else {
                     return Err(unsupported(span,"overload candidate is not an elaborated function (mapping expansion may be required)"));
                 };
-                if args.len() != actual.len() {
-                    return Err(arity(span, args.len(), actual.len()));
-                }
+                let alignment = Self::align_call(&callee, args, actual.len(), span)?;
+                let explicit: Vec<usize> = alignment
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(formal, slot)| slot.map(|_| formal))
+                    .collect();
                 let callee = if callee.root.typschm.quant.is_empty() {
                     callee
                 } else {
                     self.instantiate(callee, actual, expected, span)?
                 };
-                for (index, typ) in actual.iter().enumerate() {
-                    self.compatible(&callee.child(Step::Argument(index)), typ, span)?;
+                for (actual_index, typ) in actual.iter().enumerate() {
+                    self.compatible(
+                        &callee.child(Step::Argument(explicit[actual_index])),
+                        typ,
+                        span,
+                    )?;
                 }
                 if let Some(expected) = expected {
                     self.compatible(expected, &callee.child(Step::Result), span)?;
@@ -2882,9 +2935,7 @@ impl Checker<'_> {
                             let TypKind::Fn { args: formal, .. } = &callee.node().kind else {
                                 return Err(unsupported(exp.span, "application of non-function"));
                             };
-                            if args.len() != formal.len() {
-                                return Err(arity(exp.span, formal.len(), args.len()));
-                            }
+                            let _ = Self::align_call(&callee, formal, args.len(), exp.span)?;
                             if callee.root.typschm.quant.is_empty() {
                                 self.resolve(&callee.child(Step::Result))?
                             } else {
@@ -3314,11 +3365,23 @@ impl Checker<'_> {
         }
         let mut bindings: Vec<(Symbol, Type)> = Vec::new();
         let mut scalar_bindings: Vec<(Symbol, Scalar)> = Vec::new();
-        let mut pairs: Vec<_> = actual
-            .iter()
-            .enumerate()
-            .map(|(i, typ)| (callee.child(Step::Argument(i)), typ.clone(), false))
-            .collect();
+        // Omitted `implicit(..)` formals consume no actual (aligned by
+        // `align_call`: same deterministic mapping as the callers).
+        let formal_arity = match &callee.node().kind {
+            TypKind::Fn { args, .. } => args.clone(),
+            _ => return Err(unsupported(span, "application of non-function")),
+        };
+        let alignment = Self::align_call(&callee, &formal_arity, actual.len(), span)?;
+        let mut pairs = Vec::with_capacity(actual.len() + 1);
+        for (formal_index, slot) in alignment.iter().enumerate() {
+            if let Some(actual_index) = slot {
+                pairs.push((
+                    callee.child(Step::Argument(formal_index)),
+                    actual[*actual_index].clone(),
+                    false,
+                ));
+            }
+        }
         if let Some(expected) = expected {
             pairs.push((callee.child(Step::Result), expected.clone(), true));
         }
@@ -3600,16 +3663,19 @@ impl Checker<'_> {
                     let TypKind::Fn { args: formal, .. } = &callee.node().kind else {
                         return Err(unsupported(exp.span, "application of non-function"));
                     };
-                    if args.len() != formal.len() {
-                        return Err(arity(exp.span, formal.len(), args.len()));
-                    }
+                    let explicit: Vec<usize> =
+                        Self::align_call(&callee, formal, args.len(), exp.span)?
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(formal, slot)| slot.map(|_| formal))
+                            .collect();
                     let result = self.resolve(&callee.child(Step::Result))?;
                     let result = self.value_type(exp, result);
                     self.compatible(&expected, &result, exp.span)?;
                     for (index, arg) in args.iter().enumerate().rev() {
                         tasks.push(Task {
                             exp: arg,
-                            expected: callee.child(Step::Argument(index)),
+                            expected: callee.child(Step::Argument(explicit[index])),
                             scope: scope.clone(),
                             returning: returning.clone(),
                         });

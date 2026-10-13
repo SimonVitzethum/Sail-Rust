@@ -1,4 +1,25 @@
-# Arbeitsstand und Fortsetzung — 2026-10-13 (Main-Agent, B2-Slice solventiert)
+# Arbeitsstand und Fortsetzung — 2026-10-13 (Main-Agent, Agenten-Lücken in Arbeit)
+
+## Stand: Typprüfer-Abdeckung nach Agenten-Vergleich (OCaml vs. Rust)
+
+- Suite grün (sail-ty + sail-solver via Gate, RC 0, 28+ ok).
+- Erledigt (Kontrollausdrücke): `throw` gegen `exception`-Union,
+  `exit` gegen `unit`, `constraint(..)` als Faktquelle, `assert` mit
+  Continuation-Fakten (Block-threading, `impdefs`-Muster beidseitig
+  grün); `select_call` probiert alle Overload-Kandidaten (kein
+  `Unsupported`-Abbruch); `P_vector`/`P_vector_concat` mit
+  Konstantbreiten (Decode-Form `[..] @ 0x0 @ _`, 4 Tests grün);
+  ausgelassene `implicit(..)`-Formale (`extzv([bitzero])`, 4 Tests).
+- Agenten-Report (1 Subagent, Solo-Session, Vollread beider Typechecker):
+  Top-5 = E_field ✅, E_assert/E_constraint ✅, E_throw/E_exit ✅,
+  select_call ✅, Guard-And/Or ✅ + P_vector_concat ✅. Offen: E_match-
+  Exhaustiveness (nur Checking, lenient), NExp-App/Div/Mod-Grounding,
+  Mapping-Applikation, E_if/E_let/E_block-Infer, E_config/E_ref,
+  Outcomes/Scattered-Bodies, `sizeof`-Compounds (Rewrite via
+  `add_atom`/…), Bitvector-Order-Args in synthetisierten Typen.
+- Nächste Blocker-Kandidaten im ARM-Gate: `mono_rewrites.sail extzv`
+  (implizites `'m` + Guard), danach `builtins`/`v8_base` (`PSTATE.*`
+  via E_field ✅, `foreach`-Bounds, Asserts).
 
 ## B2 (`res[i]`, `to_bytes_le`/`from_bytes_le`): Index- und Slice-Bounds bewiesen
 
