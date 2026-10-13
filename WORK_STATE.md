@@ -1,3 +1,22 @@
+# Arbeitsstand und Fortsetzung — 2026-10-13 (Main-Agent, B2 solventiert)
+
+## B2 (`res[i]`, `to_bytes_le`): LHS-Hook bewiesen, Rest präzise offen
+
+- `vector_target_type`-Hook prüft Vektor-LHS Ende-zu-Ende: Wurzel + Index-
+  Typ + Bounds-Beweis zuerst + substituierter Element-Typ. Chaingemessen:
+  Solo-Tiefentest 93,6M; Hook-Beweise laufen mit rigiden Variablen (GoalMap).
+- Neu: `Union`-Interner-Sicht (mehrere Tabellen, frische Namen lokal),
+  `GoalMap`-Bindings (fresh→real mit je eigenem Kontext),
+  Elem-Substitution via `.resolved()` (z. B. `'a := bits(8)`).
+- Suite grün (sail-ty + sail-solver via Gate, RC 0).
+- OFFEN (B2b, ein Fall): `scalar_equal` mit frischer `bitvector('n)`-
+  Orphan-Sicht (leeres Scope-Quant) in RHS/`subrange`-Prüfung meldet
+  `unbound rigid proof variable 'n`. Spuren: Scope-Ptrs, Emitter-Hops und
+  Tabellen-Inhalte sind vermessen (Details bei Bedarf aus Gate-Logs);
+  Nächster Schritt: Erzeuger der Orphan-Sicht identifizieren (frische
+  `Type::owned`-Hülle mit var-haltigem Baum) und Scope nachziehen oder
+  ehrlich als `ConstraintNotProved` melden.
+
 # Arbeitsstand und Fortsetzung — 2026-10-12 abends (Main-Agent, committet)
 
 > Alle Lane-Arbeiten 01–70 sind im Haupt-Worktree zusammengeführt, verifiziert
