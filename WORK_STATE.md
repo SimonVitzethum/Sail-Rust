@@ -20,11 +20,14 @@
   `frontend.rs`: `DefKind::Default` wird deklariert und positionsgeprüft).
 - Suite grün (sail-ty + sail-solver via Gate, RC 0, 26 ok).
 - `vector.sail` komplett grün (Fixture + ARM-Pfad bis `option.sail`).
-- OFFEN (B3, ein Fall): `option.sail is_none` (`Some(_)`/`None()`):
-  `PatKind::App`-Konstruktor-Patternbindung meldet ehrlich
-  `constructor, vector, list, disjunctive or dependent pattern binding`.
-  Nächster Schritt: Union-Konstruktor-Pattern (Scheme freshen, Args
-  unifizieren, Payload binden).
+- Erledigt (B3): Union-Konstruktor-Pattern (`PatKind::App`) in `pattern()`:
+  Scheme aus `values`, via `instantiate` gegen Skrutinee-Typ binden
+  (quantifizierte Variablen + Constraint-Beweise), Payload-Patterns an
+  substituierte Formal-Typen. Unbekannte Namen ehrlich `UnboundVar`,
+  Nicht-Funktion/Arität harte Fehler. `option.sail is_none`
+  (`Some(_)`/`None()`) und Tiny-`describe` (`Circle(n)`/`Square(_)`)
+  checken; OCaml-Referenz stimmt zu (`sail -just_check` RC 0).
+  Rot-Tabelle `lane70_tiny`: nur noch `get_x` (E_field).
 
 # Arbeitsstand und Fortsetzung — 2026-10-12 abends (Main-Agent, committet)
 

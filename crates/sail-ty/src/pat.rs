@@ -137,8 +137,11 @@ pub enum StructNamePlan {
 /// previously the canonical checker (`canonical_body::pattern`) only
 /// handled wild/id/as/typ/tuple/lit and failed the rest with one shared
 /// "constructor, vector, list, disjunctive or dependent pattern binding"
-/// diagnostic. Variants carrying a [`PendingGate`] name the exact
-/// environment/solver query still owed — status, not silence.
+/// diagnostic; union constructor application (`PatKind::App`) is now
+/// bound via scheme instantiation, the remainder fails with "vector,
+/// list, disjunctive or dependent pattern binding". Variants carrying
+/// a [`PendingGate`] name the exact environment/solver query still
+/// owed — status, not silence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PatPlan<'a> {
     Wild,

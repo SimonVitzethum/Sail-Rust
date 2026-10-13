@@ -1785,10 +1785,61 @@ impl Checker<'_> {
                     let actual = self.literal(lit)?;
                     self.compatible(&typ, &actual, pat.span)?;
                 }
+                PatKind::App { func, args } => {
+                    // Union-Konstruktor-Applikation (`Some(x)`, `Circle(n)`):
+                    // Scheme über `values` holen (Union-Member werden dort
+                    // deklariert), gegen den Skrutinee-Typ instanziieren
+                    // (quantifizierte Variablen binden, Constraints beweisen)
+                    // und Payload-Patterns an die substituierten formalen
+                    // Argument-Typen binden. Kein Raten: unbekannte Namen
+                    // sind ungebunden, Nicht-Funktionen und Aritäten harte
+                    // Fehler, nicht inferierbare Variablen ehrlich
+                    // `Unsupported` (aus `instantiate`).
+                    let name_text = self.name(func)?;
+                    let Some(scheme) =
+                        self.program.value(name_text, self.position).cloned()
+                    else {
+                        return Err(TypeError::unbound_var(
+                            pat.span,
+                            name_text.to_owned(),
+                        ));
+                    };
+                    let callee = Type::root(scheme);
+                    let TypKind::Fn { args: formals, .. } = &callee.node().kind
+                    else {
+                        return Err(unsupported(
+                            pat.span,
+                            format!("pattern constructor '{name_text}' is not a function"),
+                        ));
+                    };
+                    if formals.len() != args.len() {
+                        return Err(arity(pat.span, formals.len(), args.len()));
+                    }
+                    let callee = if callee.root.typschm.quant.is_empty() {
+                        self.compatible(
+                            &typ,
+                            &callee.child(Step::Result),
+                            pat.span,
+                        )?;
+                        callee
+                    } else {
+                        let callee =
+                            self.instantiate(callee, &[], Some(&typ), pat.span)?;
+                        self.compatible(
+                            &typ,
+                            &callee.child(Step::Result),
+                            pat.span,
+                        )?;
+                        callee
+                    };
+                    for (index, pat) in args.iter().enumerate().rev() {
+                        work.push((pat, callee.child(Step::Argument(index))));
+                    }
+                }
                 _ => {
                     return Err(unsupported(
                         pat.span,
-                        "constructor, vector, list, disjunctive or dependent pattern binding",
+                        "vector, list, disjunctive or dependent pattern binding",
                     ))
                 }
             }

@@ -2,8 +2,9 @@
 //! Lane-42: check-only `match` (OCaml `check_exp` E_match ~L2176).
 //! Scrutinee is inferred, `mapping_match` checks `<= option(Expected)`,
 //! guards `<= bool`, bodies `<= Expected`. Completeness stays an oracle
-//! reference (see `crate::exp_match::MatchCompletenessOracle`); constructor
-//! patterns remain honest `Unsupported` via the pattern checker.
+//! reference (see `crate::exp_match::MatchCompletenessOracle`); union
+//! constructor patterns bind via scheme instantiation, unknown names stay
+//! honest `UnboundVar`.
 
 use sail_ast::*;
 use sail_parse::{ParserContext, RealParser};
@@ -73,15 +74,36 @@ fn match_scrutinee_is_inferred() {
 
 #[test]
 fn match_constructor_pattern_is_honest_unsupported() {
-    // `Wrap(y)` needs constructor/mapping resolution (Lane-09 oracle);
-    // the checker must not silently accept it.
+    // Undeclared `Wrap` has no constructor scheme: the checker must not
+    // silently accept it (honest `UnboundVar`, never a guessed binding).
     let res = check_all(&["function f(x : int) -> int = match x { Wrap(y) => y, _ => x }"]);
     assert!(res[0].is_err(), "constructor pattern must not succeed: {:?}", res[0]);
     let err = res[0].as_ref().err().unwrap();
     assert!(
-        matches!(err.kind, TypeErrorKind::Unsupported(_)),
-        "constructor pattern should be honest Unsupported, got {err:?}"
+        matches!(
+            err.kind,
+            TypeErrorKind::UnboundVar(_) | TypeErrorKind::Unsupported(_)
+        ),
+        "unknown constructor should be honest UnboundVar/Unsupported, got {err:?}"
     );
+}
+
+#[test]
+fn match_known_constructor_pattern_binds_payload() {
+    // Declared union constructor resolves through scheme instantiation:
+    // `Circle(n)` binds `n : int` against scrutinee `Shape`.
+    let program = [
+        "union Shape = { Circle : int, Square : bool }",
+        "val describe : Shape -> int",
+    ];
+    let defs = parse(&program);
+    let mut prog = declare(&defs);
+    let bodies =
+        parse(&["function describe(s : Shape) -> int = match s { Circle(n) => n, Square(_) => 0 }"]);
+    for (def, it) in &bodies {
+        prog.check_definition(def, it.clone(), 1)
+            .expect("known constructor pattern should check");
+    }
 }
 
 #[test]
