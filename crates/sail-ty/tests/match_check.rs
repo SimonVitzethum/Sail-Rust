@@ -89,6 +89,25 @@ fn match_constructor_pattern_is_honest_unsupported() {
 }
 
 #[test]
+fn match_nullary_constructor_pattern_checks() {
+    // `None()` carries one unit sub-pattern (OCaml `id Unit` rule);
+    // result-only instantiation binds the union variable.
+    let program = [
+        "union option2('a : Type) = { Some2 : 'a, None2 : unit }",
+        "val is_none2 : forall 'a. option2('a) -> bool",
+    ];
+    let defs = parse(&program);
+    let prog = declare(&defs);
+    let bodies = parse(&[
+        "function is_none2(opt) = match opt { Some2(_) => false, None2() => true }",
+    ]);
+    for (def, it) in &bodies {
+        prog.check_definition(def, it.clone(), 2)
+            .expect("nullary constructor pattern should check");
+    }
+}
+
+#[test]
 fn match_known_constructor_pattern_binds_payload() {
     // Declared union constructor resolves through scheme instantiation:
     // `Circle(n)` binds `n : int` against scrutinee `Shape`.

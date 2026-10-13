@@ -17,9 +17,10 @@
   Mapping-Applikation, E_if/E_let/E_block-Infer, E_config/E_ref,
   Outcomes/Scattered-Bodies, `sizeof`-Compounds (Rewrite via
   `add_atom`/…), Bitvector-Order-Args in synthetisierten Typen.
-- Nächste Blocker-Kandidaten im ARM-Gate: `mono_rewrites.sail extzv`
-  (implizites `'m` + Guard), danach `builtins`/`v8_base` (`PSTATE.*`
-  via E_field ✅, `foreach`-Bounds, Asserts).
+- Nächste Blocker-Kandidaten im ARM-Gate: `option.sail is_none`
+  (`None()` via Result-only-Instantiation ✅ seit diesem Commit),
+  danach `builtins`/`v8_base` (`PSTATE.*` via E_field ✅,
+  `foreach`-Bounds, Asserts).
 
 ## B2 (`res[i]`, `to_bytes_le`/`from_bytes_le`): Index- und Slice-Bounds bewiesen
 

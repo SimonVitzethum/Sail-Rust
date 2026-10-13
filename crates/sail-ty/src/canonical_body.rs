@@ -2616,9 +2616,14 @@ impl Checker<'_> {
                             format!("pattern constructor '{name_text}' is not a function"),
                         ));
                     };
-                    if formals.len() != args.len() {
-                        return Err(arity(pat.span, formals.len(), args.len()));
-                    }
+                    // Sub-patterns align to explicit formals (omitted
+                    // `implicit(..)` formals allowed, as at call sites).
+                    let explicit: Vec<usize> =
+                        Self::align_call(&callee, formals, args.len(), pat.span)?
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(formal, slot)| slot.map(|_| formal))
+                            .collect();
                     let callee = if callee.root.typschm.quant.is_empty() {
                         self.compatible(
                             &typ,
@@ -2627,8 +2632,13 @@ impl Checker<'_> {
                         )?;
                         callee
                     } else {
-                        let callee =
-                            self.instantiate(callee, &[], Some(&typ), pat.span)?;
+                        // Result-only instantiation: payload patterns have
+                        // no types yet; the scrutinee binds the result
+                        // variables, sub-patterns check against the
+                        // substituted formal types below.
+                        let callee = self.instantiate_relaxed(
+                            callee, &[], Some(&typ), pat.span,
+                        )?;
                         self.compatible(
                             &typ,
                             &callee.child(Step::Result),
@@ -2637,7 +2647,7 @@ impl Checker<'_> {
                         callee
                     };
                     for (index, pat) in args.iter().enumerate().rev() {
-                        work.push((pat, callee.child(Step::Argument(index))));
+                        work.push((pat, callee.child(Step::Argument(explicit[index]))));
                     }
                 }
                 _ => {
@@ -3343,10 +3353,35 @@ impl Checker<'_> {
 
     fn instantiate(
         &self,
+        callee: Type,
+        actual: &[Type],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> TypeResult<Type> {
+        self.instantiate_inner(callee, actual, expected, span, false)
+    }
+
+    /// Result-only instantiation for patterns: payload sub-patterns carry
+    /// no types yet, so no arity is enforced here (the caller aligns
+    /// sub-patterns to explicit formals itself); the scrutinee binds the
+    /// result variables through the regular checks below.
+    fn instantiate_relaxed(
+        &self,
+        callee: Type,
+        actual: &[Type],
+        expected: Option<&Type>,
+        span: Span,
+    ) -> TypeResult<Type> {
+        self.instantiate_inner(callee, actual, expected, span, true)
+    }
+
+    fn instantiate_inner(
+        &self,
         mut callee: Type,
         actual: &[Type],
         expected: Option<&Type>,
         span: Span,
+        relaxed_arity: bool,
     ) -> TypeResult<Type> {
         // Compact vectors: most calls quantify zero to a handful of
         // variables; tree nodes per call retain megabytes in deep programs.
@@ -3365,21 +3400,29 @@ impl Checker<'_> {
         }
         let mut bindings: Vec<(Symbol, Type)> = Vec::new();
         let mut scalar_bindings: Vec<(Symbol, Scalar)> = Vec::new();
+        let mut pairs = Vec::with_capacity(actual.len() + 1);
         // Omitted `implicit(..)` formals consume no actual (aligned by
         // `align_call`: same deterministic mapping as the callers).
-        let formal_arity = match &callee.node().kind {
-            TypKind::Fn { args, .. } => args.clone(),
-            _ => return Err(unsupported(span, "application of non-function")),
-        };
-        let alignment = Self::align_call(&callee, &formal_arity, actual.len(), span)?;
-        let mut pairs = Vec::with_capacity(actual.len() + 1);
-        for (formal_index, slot) in alignment.iter().enumerate() {
-            if let Some(actual_index) = slot {
-                pairs.push((
-                    callee.child(Step::Argument(formal_index)),
-                    actual[*actual_index].clone(),
-                    false,
-                ));
+        // Relaxed (patterns): sub-patterns carry no types yet; the
+        // caller pre-checked their arity itself.
+        if relaxed_arity {
+            for (index, typ) in actual.iter().enumerate() {
+                pairs.push((callee.child(Step::Argument(index)), typ.clone(), false));
+            }
+        } else {
+            let formal_arity = match &callee.node().kind {
+                TypKind::Fn { args, .. } => args.clone(),
+                _ => return Err(unsupported(span, "application of non-function")),
+            };
+            let alignment = Self::align_call(&callee, &formal_arity, actual.len(), span)?;
+            for (formal_index, slot) in alignment.iter().enumerate() {
+                if let Some(actual_index) = slot {
+                    pairs.push((
+                        callee.child(Step::Argument(formal_index)),
+                        actual[*actual_index].clone(),
+                        false,
+                    ));
+                }
             }
         }
         if let Some(expected) = expected {
