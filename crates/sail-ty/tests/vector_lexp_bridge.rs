@@ -76,7 +76,7 @@ fn full_index_pipeline_const_proves_and_lifts_element() {
     );
 
     let index_exp = mk_num_exp(&mut it, "3");
-    let index_nexp = index_nexp_from_exp(&index_exp, &it).unwrap();
+    let index_nexp = { let mut union = Union::over(vec![&it as &dyn Interner]); index_nexp_from_exp(&index_exp, &mut union) }.unwrap();
     assert_eq!(index_nexp, Nexp::Const(3));
 
     let index_typ_ast = mk_int_typ(&mut it);
@@ -105,7 +105,8 @@ fn full_index_pipeline_out_of_bounds_is_constraint_not_proved() {
     let elem = mk_int_typ(&mut it);
     let root_typ = mk_vector_typ(&mut it, "8", elem);
     let root = { let mut union = Union::over(vec![&it as &dyn Interner]); vector_root_of_canonical(&root_typ, &mut union, Span::DUMMY) }.unwrap();
-    let index_nexp = index_nexp_from_exp(&mk_num_exp(&mut it, "8"), &it).unwrap();
+    let num = mk_num_exp(&mut it, "8");
+    let index_nexp = { let mut union = Union::over(vec![&it as &dyn Interner]); index_nexp_from_exp(&num, &mut union) }.unwrap();
     let err = infer_vector_elem(
         &StubSolver::new(),
         &root,
@@ -143,7 +144,7 @@ fn variable_index_synthesizes_to_var() {
     let mut it = SimpleInterner::new();
     let exp = mk_id_exp(&mut it, "i");
     assert_eq!(
-        index_nexp_from_exp(&exp, &it).unwrap(),
+        { let mut union = Union::over(vec![&it as &dyn Interner]); index_nexp_from_exp(&exp, &mut union) }.unwrap(),
         Nexp::Var("i".to_owned())
     );
 }
@@ -155,7 +156,7 @@ fn non_index_expression_is_unsupported_never_guessed() {
         func: mk_name(&mut it, "add"),
         args: vec![mk_id_exp(&mut it, "i")],
     });
-    let err = index_nexp_from_exp(&app, &it).unwrap_err();
+    let err = { let mut union = Union::over(vec![&it as &dyn Interner]); index_nexp_from_exp(&app, &mut union) }.unwrap_err();
     assert!(matches!(err.kind, TypeErrorKind::Unsupported(_)));
 }
 

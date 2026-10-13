@@ -52,11 +52,13 @@ fn unsupported(span: Span, message: &str) -> TypeError {
 
 /// Synthetisiert den Index-[`Nexp`] aus einem kanonischen [`Exp`].
 ///
-/// Abgebildet werden nur `Lit(Num)` (dezimal, `i128`-parsebar) und `Id`
-/// (aufgelöster Bezeichnername) sowie transparente `Typ`-Annotationen.
+/// Abgebildet werden `Lit(Num)` (dezimal, `i128`-parsebar), `Id`
+/// (aufgelöster Bezeichnername), transparente `Typ`-Annotationen sowie
+/// reine Zahlen-Binops (`+`, `-`, `*`, unäres `-`) darüber.
 /// Jede andere Form braucht Elaboration vor dem Beweis und ist
-/// `Unsupported` — es wird nie ein Nexp geraten.
-pub fn index_nexp_from_exp(exp: &Exp, it: &impl Interner) -> TypeResult<Nexp> {
+/// `Unsupported` — es wird nie ein Nexp geraten. Namen lösen über die
+/// Union-Sicht auf (mehrere Tabellen); Unbekanntes bleibt `Unsupported`.
+pub fn index_nexp_from_exp(exp: &Exp, it: &mut crate::vector_lexp::Union<'_>) -> TypeResult<Nexp> {
     let span = exp.span;
     match &exp.kind {
         ExpKind::Lit(lit) => match &lit.kind {
@@ -79,6 +81,30 @@ pub fn index_nexp_from_exp(exp: &Exp, it: &impl Interner) -> TypeResult<Nexp> {
                 unsupported(span, "vector index variable needs elaboration before proof")
             }),
         ExpKind::Typ { exp: inner, .. } => index_nexp_from_exp(inner, it),
+        ExpKind::App { func, args } => {
+            let op = it.resolve(func.symbol).unwrap_or("");
+            match (op, args.as_slice()) {
+                ("+", [a, b]) => Ok(Nexp::Add(
+                    Box::new(index_nexp_from_exp(a, it)?),
+                    Box::new(index_nexp_from_exp(b, it)?),
+                )),
+                ("-", [a, b]) => Ok(Nexp::Sub(
+                    Box::new(index_nexp_from_exp(a, it)?),
+                    Box::new(index_nexp_from_exp(b, it)?),
+                )),
+                ("*", [a, b]) => Ok(Nexp::Mul(
+                    Box::new(index_nexp_from_exp(a, it)?),
+                    Box::new(index_nexp_from_exp(b, it)?),
+                )),
+                ("negate", [a]) | ("-", [a]) => Ok(Nexp::Neg(Box::new(
+                    index_nexp_from_exp(a, it)?,
+                ))),
+                _ => Err(unsupported(
+                    span,
+                    "vector index expression needs elaboration before proof",
+                )),
+            }
+        }
         _ => Err(unsupported(
             span,
             "vector index expression needs elaboration before proof",
@@ -152,6 +178,11 @@ mod tests {
         Node::dummy(ExpKind::Id(mk_name(it, name)))
     }
 
+    fn exp_nexp(exp: &Exp, it: &mut SimpleInterner) -> TypeResult<Nexp> {
+        let mut union = crate::vector_lexp::Union::over(vec![it as &dyn Interner]);
+        index_nexp_from_exp(exp, &mut union)
+    }
+
     fn mk_int_typ(it: &mut impl Interner) -> Typ {
         Node::dummy(TypKind::Id(mk_name(it, "int")))
     }
@@ -170,10 +201,10 @@ mod tests {
     fn index_synth_accepts_lit_id_and_annotation() {
         let mut it = SimpleInterner::new();
         let lit = mk_lit_num(&mut it, "42");
-        assert_eq!(index_nexp_from_exp(&lit, &it).unwrap(), Nexp::Const(42));
+        assert_eq!(exp_nexp(&lit, &mut it).unwrap(), Nexp::Const(42));
         let id = mk_id(&mut it, "i");
         assert_eq!(
-            index_nexp_from_exp(&id, &it).unwrap(),
+            exp_nexp(&id, &mut it).unwrap(),
             Nexp::Var("i".to_owned())
         );
         let annot: Exp = Node::dummy(ExpKind::Typ {
@@ -181,7 +212,7 @@ mod tests {
             exp: Box::new(mk_id(&mut it, "j")),
         });
         assert_eq!(
-            index_nexp_from_exp(&annot, &it).unwrap(),
+            exp_nexp(&annot, &mut it).unwrap(),
             Nexp::Var("j".to_owned())
         );
     }
@@ -194,17 +225,17 @@ mod tests {
             func: mk_name(&mut it, "add"),
             args: vec![mk_id(&mut it, "i")],
         });
-        let err = index_nexp_from_exp(&app, &it).unwrap_err();
+        let err = exp_nexp(&app, &mut it).unwrap_err();
         assert!(matches!(err.kind, TypeErrorKind::Unsupported(_)));
 
         // Nicht-numerisches Literal.
         let tru: Exp = Node::dummy(ExpKind::Lit(Node::dummy(LitKind::True)));
-        let err = index_nexp_from_exp(&tru, &it).unwrap_err();
+        let err = exp_nexp(&tru, &mut it).unwrap_err();
         assert!(matches!(err.kind, TypeErrorKind::Unsupported(_)));
 
         // Block/Vektor: ebenfalls Lücke.
         let vec: Exp = Node::dummy(ExpKind::Vector(vec![mk_id(&mut it, "i")]));
-        let err = index_nexp_from_exp(&vec, &it).unwrap_err();
+        let err = exp_nexp(&vec, &mut it).unwrap_err();
         assert!(matches!(err.kind, TypeErrorKind::Unsupported(_)));
     }
 
@@ -213,7 +244,7 @@ mod tests {
         let mut it = SimpleInterner::new();
         // Symbol löst auf, parst aber nicht als i128.
         let lit = mk_lit_num(&mut it, "not-a-number");
-        let err = index_nexp_from_exp(&lit, &it).unwrap_err();
+        let err = exp_nexp(&lit, &mut it).unwrap_err();
         assert!(matches!(err.kind, TypeErrorKind::Unsupported(_)));
     }
 
