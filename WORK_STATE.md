@@ -19,6 +19,7 @@
   `add_atom`/…), Bitvector-Order-Args in synthetisierten Typen.
 - Nächste Blocker-Kandidaten im ARM-Gate: `option.sail is_none`
   (`None()` via Result-only-Instantiation ✅ seit diesem Commit),
+  `mono_rewrites is_zero_subrange` (Geschwister-Unifikation ✅),
   danach `builtins`/`v8_base` (`PSTATE.*` via E_field ✅,
   `foreach`-Bounds, Asserts).
 

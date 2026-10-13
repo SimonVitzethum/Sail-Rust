@@ -831,6 +831,83 @@ impl Checker<'_> {
         }
         Ok(alignment)
     }
+    /// Infer call operands, retrying failed ones against inferred
+    /// siblings. An operand whose result variables nothing pins
+    /// (omitted implicits, e.g. `extzv(..)` as an `==` operand) retries
+    /// as a call against each inferred sibling type; the first success
+    /// wins and checks downstream like any annotation. Non-recursive:
+    /// inner failures propagate unchanged. Anything else returns the
+    /// first inference error.
+    fn infer_app_actuals(
+        &mut self,
+        args: &[Exp],
+        scope: &Scope,
+        span: Span,
+    ) -> TypeResult<Vec<Type>> {
+        let mut actual: Vec<Option<Type>> = Vec::with_capacity(args.len());
+        let mut first_error = None;
+        for arg in args {
+            match self.infer(arg, scope) {
+                Ok(typ) => actual.push(Some(typ)),
+                Err(error) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                    actual.push(None);
+                }
+            }
+        }
+        let Some(first_error) = first_error else {
+            return Ok(actual
+                .into_iter()
+                .map(|typ| typ.expect("all operands inferred"))
+                .collect());
+        };
+        for index in 0..args.len() {
+            if actual[index].is_some() {
+                continue;
+            }
+            let ExpKind::App {
+                func: inner,
+                args: inner_args,
+            } = &args[index].kind
+            else {
+                return Err(first_error);
+            };
+            let inner_actual = inner_args
+                .iter()
+                .map(|arg| self.infer(arg, scope))
+                .collect::<TypeResult<Vec<_>>>()?;
+            let inner_candidates = self.call_candidates(inner, scope, inner_args.len())?;
+            let siblings: Vec<Type> = actual.iter().filter_map(|typ| typ.clone()).collect();
+            let mut recovered = None;
+            for sibling in &siblings {
+                match self.select_call(
+                    inner_candidates.clone(),
+                    &inner_actual,
+                    Some(sibling),
+                    span,
+                ) {
+                    Ok(callee) => {
+                        // Like the `App` arm: the operand denotes the
+                        // result, not the callee scheme.
+                        let result = self.resolve(&callee.child(Step::Result))?;
+                        recovered = Some(result);
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            let Some(result) = recovered else {
+                return Err(first_error);
+            };
+            actual[index] = Some(self.value_type(&args[index], result));
+        }
+        Ok(actual
+            .into_iter()
+            .map(|typ| typ.expect("all operands recovered"))
+            .collect())
+    }
     fn select_call(
         &self,
         candidates: Vec<Type>,
@@ -3695,10 +3772,7 @@ impl Checker<'_> {
                         callee.clone()
                     } else if candidates.len() != 1 || !candidates[0].root.typschm.quant.is_empty()
                     {
-                        let actual = args
-                            .iter()
-                            .map(|arg| self.infer(arg, &scope))
-                            .collect::<TypeResult<Vec<_>>>()?;
+                        let actual = self.infer_app_actuals(args, &scope, exp.span)?;
                         self.select_call(candidates, &actual, Some(&expected), exp.span)?
                     } else {
                         candidates.pop().unwrap()

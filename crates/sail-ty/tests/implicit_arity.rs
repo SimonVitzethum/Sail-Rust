@@ -88,6 +88,22 @@ fn unsolvable_implicit_stays_honest_error() {
 }
 
 #[test]
+fn sibling_type_solves_omitted_implicit() {
+    // `extzv(..)`-Resultat traegt freies `'m`; das Geschwister (`xs`)
+    // loest es per Retry (`is_zero_subrange`-Muster, beidseitig gruen).
+    check_with(&[
+        "val eq_bits : forall 'n. (bits('n), bits('n)) -> bool",
+        "overload operator == = {eq_bits}",
+        "val extzv_like2 : forall 'n 'm, 'm >= 0. (implicit('m), bits('n)) -> bits('m)",
+        "val bitvector_length : forall 'n. bits('n) -> int('n)",
+        "overload __size = {bitvector_length}",
+        "val is_zero : forall 'n, 'n >= 0. bits('n) -> bool",
+        "function is_zero(xs) = { xs == extzv_like2([bitzero]) }",
+    ])
+    .expect("sibling type should solve the omitted implicit");
+}
+
+#[test]
 fn wrong_arity_still_fails() {
     let err = check_with(&[
         "val use_wrong : forall 'n. bits('n) -> bits(8)",
