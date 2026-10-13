@@ -48,6 +48,12 @@
   bei (`m < 'n` ⇒ `'m < 'n`, `extzv`-Muster beidseitig grün);
   `record.field` via Accessor-Teleskop (`field_access.rs`, Tiny-`get_x`
   grün, Rot-Tabelle leer).
+- Erledigt (Kontrollausdrücke): `throw` gegen `exception`-Union,
+  `exit` gegen `unit`, `constraint(..)` als Faktquelle, `assert` mit
+  Continuation-Fakten (Block-threading, `impdefs`-Muster beidseitig
+  grün); `select_call` probiert alle Overload-Kandidaten;
+  `P_vector`/`P_vector_concat` mit Konstantbreiten (Decode-Form
+  `[..] @ 0x0 @ _`, 4 Tests grün).
 
 # Arbeitsstand und Fortsetzung — 2026-10-12 abends (Main-Agent, committet)
 

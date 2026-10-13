@@ -817,9 +817,9 @@ impl Checker<'_> {
             })();
             match attempt {
                 Ok(callee) => return Ok(callee),
-                Err(error) if matches!(error.kind, TypeErrorKind::Unsupported(_)) => {
-                    return Err(error)
-                }
+                // OCaml tries every overload candidate: a gap in one
+                // (`Unsupported`) must not abort the others; if none
+                // matches, the last error (of any kind) is reported.
                 Err(error) => last = Some(error),
             }
         }
@@ -1601,101 +1601,208 @@ impl Checker<'_> {
             implicit_argument: false,
         })
     }
-    /// Comparison guard fact for `condition` (OCaml `E_if` assumptions):
-    /// `m < 'n` with atom operands contributes `Lt('m, 'n)` over the
-    /// operands' *declared* type variables, so branch bodies can discharge
-    /// callee constraints (`truncate` needs `'m <= 'n`). Operands ground
-    /// through the full substitution chain; every variable links to a
-    /// declared-side view (same-table precise). Anything unshaped
-    /// (non-`atom` heads, ungroundable sides, unlinked variables) yields
-    /// `None`: the condition still checks, it just assumes nothing —
-    /// current behavior, never a guess. Only the six numeric comparisons;
-    /// `bool`/custom operators contribute nothing.
-    fn comparison_fact(
+    /// Guard assumption synthesis for conditions (OCaml `E_if`
+    /// assumptions and `assert_constraint`): numeric comparisons over
+    /// atoms contribute their constraint over the operands' *declared*
+    /// type variables (`m < 'n` gives `'m < 'n`), so branch bodies can
+    /// discharge callee constraints (`truncate` needs `'m <= 'n`);
+    /// conjunctions/disjunctions combine recursively; `E_constraint`
+    /// contributes its (rigid-checked) constraint; literals contribute
+    /// `True`/`False`. Anything unshaped yields `None`: the condition
+    /// still checks, it just assumes nothing — current behavior, never
+    /// a guess. Only numeric comparisons and `&`/`|` over them; `bool`
+    /// operators and custom forms contribute nothing.
+    ///
+    /// Links map each variable text to a declared-side scalar view
+    /// (`Some`, same-table precise) or to a function-scope rigid
+    /// (`None`, resolved via the fact scope).
+    fn guard_mini(
+        &mut self,
+        exp: &Exp,
+        scope: &Scope,
+        span: Span,
+    ) -> TypeResult<Option<(crate::nexp::NConstraint, Vec<(String, Option<Scalar>)>)>>
+    {
+        use crate::nexp::{NConstraint as MiniCons, Nexp as Mini};
+        match &exp.kind {
+            ExpKind::App { func, args } if args.len() == 2 => {
+                let op = self.name(func)?;
+                if matches!(op, "&" | "|" | "and_bool" | "or_bool") {
+                    let ctor: fn(Box<MiniCons>, Box<MiniCons>) -> MiniCons =
+                        match op {
+                            "&" | "and_bool" => MiniCons::And,
+                            _ => MiniCons::Or,
+                        };
+                    let Some((left, left_links)) =
+                        self.guard_mini(&args[0], scope, span)?
+                    else {
+                        return Ok(None);
+                    };
+                    let Some((right, right_links)) =
+                        self.guard_mini(&args[1], scope, span)?
+                    else {
+                        return Ok(None);
+                    };
+                    // Same text from different binder scopes must not
+                    // conflate: fail closed instead of proving about the
+                    // wrong rigid.
+                    fn provenance(
+                        link: &Option<Scalar>,
+                        context: &Option<Arc<Scheme>>,
+                    ) -> Option<usize> {
+                        match link {
+                            Some(scalar) => {
+                                Some(Arc::as_ptr(&scalar.owner.scope) as usize)
+                            }
+                            None => context.as_ref().map(|s| Arc::as_ptr(s) as usize),
+                        }
+                    }
+                    let mut links = left_links;
+                    for (text, link) in right_links {
+                        if let Some(existing) = links.iter().find(|(bound, _)| bound == &text) {
+                            if provenance(&existing.1, &self.context)
+                                != provenance(&link, &self.context)
+                            {
+                                return Ok(None);
+                            }
+                        } else {
+                            links.push((text, link));
+                        }
+                    }
+                    return Ok(Some((ctor(Box::new(left), Box::new(right)), links)));
+                }
+                let ctor: fn(Box<Mini>, Box<Mini>) -> MiniCons = match op {
+                    "<" => MiniCons::Lt,
+                    "<=" => MiniCons::Le,
+                    ">" => MiniCons::Gt,
+                    ">=" => MiniCons::Ge,
+                    "==" => MiniCons::Eq,
+                    "!=" => MiniCons::Neq,
+                    _ => return Ok(None),
+                };
+                let mut sides = Vec::with_capacity(2);
+                for arg in args {
+                    let inferred = self.infer(arg, scope)?;
+                    let value = self.resolve(&inferred)?;
+                    let TypKind::App { .. } = &value.node().kind else {
+                        return Ok(None);
+                    };
+                    if value.name() != Some("atom") {
+                        return Ok(None);
+                    }
+                    // Declared (pre-opening) views carry the linkable
+                    // variables; opened `__value` witnesses cannot link by
+                    // design.
+                    let declared = self
+                        .inferred
+                        .get(&(arg as *const Exp))
+                        .map(|inferred| (*inferred.declared).clone())
+                        .unwrap_or_else(|| value.clone());
+                    let grounded = self.ground_scalar(
+                        &Scalar {
+                            owner: declared.clone(),
+                            index: 0,
+                        },
+                        &[declared.clone()],
+                        &mut Vec::new(),
+                        0,
+                    );
+                    let Some(grounded) = grounded else {
+                        return Ok(None);
+                    };
+                    sides.push((declared, grounded));
+                }
+                let [(left_typ, left_nexp), (right_typ, right_nexp)] = sides.as_slice()
+                else {
+                    unreachable!("two comparison operands")
+                };
+                let mut left_texts = Vec::new();
+                left_nexp.free_vars(&mut left_texts);
+                let mut right_texts = Vec::new();
+                right_nexp.free_vars(&mut right_texts);
+                let obligation = ctor(
+                    Box::new(left_nexp.clone()),
+                    Box::new(right_nexp.clone()),
+                );
+                let mut texts = Vec::new();
+                obligation.free_vars(&mut texts);
+                texts.sort();
+                texts.dedup();
+                let mut links = Vec::new();
+                for text in &texts {
+                    let link = if left_texts.contains(text) {
+                        Some(Scalar {
+                            owner: left_typ.clone(),
+                            index: 0,
+                        })
+                    } else if right_texts.contains(text) {
+                        Some(Scalar {
+                            owner: right_typ.clone(),
+                            index: 0,
+                        })
+                    } else {
+                        return Ok(None);
+                    };
+                    links.push((text.clone(), link));
+                }
+                Ok(Some((obligation, links)))
+            }
+            ExpKind::Constraint(node) => {
+                // Source constraint over rigid scope variables (like
+                // `sizeof`); anything else stays `Unsupported`-free `None`.
+                let Some(obligation) =
+                    crate::conv::constraint_from_ast(node, &*self.it)
+                else {
+                    return Ok(None);
+                };
+                let Some(context) = self.context.clone() else {
+                    return Ok(None);
+                };
+                let view = Type::root(context);
+                let mut texts = Vec::new();
+                obligation.free_vars(&mut texts);
+                for text in &texts {
+                    if (&view as &dyn Bindings).rigid(text).is_none() {
+                        return Ok(None);
+                    }
+                }
+                Ok(Some((
+                    obligation,
+                    texts.into_iter().map(|text| (text, None)).collect(),
+                )))
+            }
+            ExpKind::Lit(lit) => match &lit.kind {
+                LitKind::True => Ok(Some((MiniCons::True, Vec::new()))),
+                LitKind::False => Ok(Some((MiniCons::False, Vec::new()))),
+                _ => Ok(None),
+            },
+            _ => Ok(None),
+        }
+    }
+
+    /// Build the `atom_bool` assumption type for a `guard_mini` result.
+    /// Side-linked variables resolve through their views (substitutions
+    /// hit before rigid lookup); scope rigids resolve via the function
+    /// scope, which needs no substitution entry.
+    fn guard_fact(
         &mut self,
         exp: &Exp,
         scope: &Scope,
         span: Span,
     ) -> TypeResult<Option<Type>> {
-        use crate::nexp::{NConstraint as MiniCons, Nexp as Mini};
-        let ExpKind::App { func, args } = &exp.kind else {
+        let Some((obligation, links)) = self.guard_mini(exp, scope, span)? else {
             return Ok(None);
         };
-        if args.len() != 2 {
+        let context = self.context.clone();
+        if links.iter().any(|(_, link)| link.is_none()) && context.is_none() {
             return Ok(None);
         }
-        let ctor: fn(Box<Mini>, Box<Mini>) -> MiniCons = match self.name(func)? {
-            "<" => MiniCons::Lt,
-            "<=" => MiniCons::Le,
-            ">" => MiniCons::Gt,
-            ">=" => MiniCons::Ge,
-            "==" => MiniCons::Eq,
-            "!=" => MiniCons::Neq,
-            _ => return Ok(None),
-        };
-        let mut sides = Vec::with_capacity(2);
-        for arg in args {
-            let inferred = self.infer(arg, scope)?;
-            let value = self.resolve(&inferred)?;
-            let TypKind::App { .. } = &value.node().kind else {
-                return Ok(None);
-            };
-            if value.name() != Some("atom") {
-                return Ok(None);
-            }
-            // Declared (pre-opening) views carry the linkable variables;
-            // opened `__value` witnesses cannot link by design.
-            let declared = self
-                .inferred
-                .get(&(arg as *const Exp))
-                .map(|inferred| (*inferred.declared).clone())
-                .unwrap_or_else(|| value.clone());
-            let grounded = self.ground_scalar(
-                &Scalar {
-                    owner: declared.clone(),
-                    index: 0,
-                },
-                &[declared.clone()],
-                &mut Vec::new(),
-                0,
-            );
-            let Some(grounded) = grounded else {
-                return Ok(None);
-            };
-            sides.push((declared, grounded));
-        }
-        let [(left_typ, left_nexp), (right_typ, right_nexp)] = sides.as_slice() else {
-            unreachable!("two comparison operands")
-        };
-        let mut left_texts = Vec::new();
-        left_nexp.free_vars(&mut left_texts);
-        let mut right_texts = Vec::new();
-        right_nexp.free_vars(&mut right_texts);
-        let obligation = ctor(
-            Box::new(left_nexp.clone()),
-            Box::new(right_nexp.clone()),
-        );
-        let mut texts = Vec::new();
-        obligation.free_vars(&mut texts);
-        texts.sort();
-        texts.dedup();
         let mut git = SimpleInterner::new();
         let mut scalars = Vec::new();
-        for text in &texts {
-            let owner = if left_texts.contains(text) {
-                left_typ
-            } else if right_texts.contains(text) {
-                right_typ
-            } else {
-                return Ok(None);
-            };
-            scalars.push((
-                git.intern(text),
-                Scalar {
-                    owner: owner.clone(),
-                    index: 0,
-                },
-            ));
+        for (text, link) in &links {
+            if let Some(scalar) = link {
+                scalars.push((git.intern(text), scalar.clone()));
+            }
         }
         let constraint = crate::conv::constraint_to_ast(&obligation, &mut git);
         let atom_bool = git.intern("atom_bool");
@@ -1710,16 +1817,37 @@ impl Checker<'_> {
             },
             interner: Arc::new(git),
         });
+        let scope = context.unwrap_or(root.clone());
         Ok(Some(Type {
             root: root.clone(),
             path: Vec::new(),
-            scope: root,
+            scope,
             substitutions: Arc::new(Substitutions {
                 types: Vec::new(),
                 scalars,
             }),
             implicit_argument: false,
         }))
+    }
+    /// Assert with continuation scope (OCaml `check_exp` `E_assert` +
+    /// `assert_constraint`): the condition checks against `bool`, the
+    /// message against `string`; an extracted guard fact
+    /// (`atom_bool` conditions, comparisons, `&`/`|`, `E_constraint`,
+    /// literals via `guard_fact`) extends the scope for following
+    /// statements. No fact: scope unchanged (current behavior). The
+    /// result is always `unit`. Dead-code elimination on provably-false
+    /// guards is a rewrite, not checking (honest gap).
+    fn check_assert(
+        &mut self,
+        cond: &Exp,
+        msg: &Exp,
+        scope: &Arc<Scope>,
+    ) -> TypeResult<Arc<Scope>> {
+        let fact = self.condition(cond, scope)?;
+        let message = self.infer(msg, scope)?;
+        let string = self.builtin("string");
+        self.compatible(&string, &message, msg.span)?;
+        Ok(scope.branch(fact.as_ref(), false))
     }
     /// Vector-LHS target type (Lane 41 hook for `assignment_type`).
     ///
@@ -2277,6 +2405,137 @@ impl Checker<'_> {
                     let actual = self.literal(lit)?;
                     self.compatible(&typ, &actual, pat.span)?;
                 }
+                PatKind::Vector(items) => {
+                    // OCaml `bind_pat` `P_vector`: every element binds
+                    // against `bit` (non-bitvectors are the BVS TODO on
+                    // both sides); the width must match. Constant widths
+                    // decide syntactically, rigid lengths stay honest
+                    // `Unsupported` (solver equality is future work).
+                    let bit = self.builtin("bit");
+                    for sub in items.iter().rev() {
+                        work.push((sub, bit.clone()));
+                    }
+                    let total = items.len() as i128;
+                    let have = self
+                        .vector_len_nexp(&typ, pat.span)
+                        .ok()
+                        .as_ref()
+                        .and_then(crate::nexp::Nexp::as_const);
+                    let Some(have) = have else {
+                        return Err(unsupported(
+                            pat.span,
+                            "non-constant vector pattern width",
+                        ));
+                    };
+                    if have != total {
+                        return Err(arity(pat.span, have as usize, total as usize));
+                    }
+                }
+                PatKind::VectorConcat(items) => {
+                    // OCaml `bind_vector_concat_generic` (checking mode):
+                    // the scrutinee length must be constant; every
+                    // subpattern contributes a constant width (literals
+                    // via their type, vectors via arity); at most one
+                    // wildcard takes the remainder; the sum must match.
+                    let total = match self
+                        .vector_len_nexp(&typ, pat.span)
+                        .ok()
+                        .as_ref()
+                        .and_then(crate::nexp::Nexp::as_const)
+                    {
+                        Some(total) => total,
+                        None => {
+                            return Err(unsupported(
+                                pat.span,
+                                "non-constant vector concat pattern width",
+                            ));
+                        }
+                    };
+                    // Fresh constant slice types are self-contained (no
+                    // variables, no substitutions needed).
+                    let slice = |width: i128| {
+                        let mut interner = SimpleInterner::new();
+                        let name = Name::dummy(interner.intern("bits"));
+                        let len = Node::dummy(NExpKind::Constant(width.to_string()));
+                        Type::owned(
+                            Node::dummy(TypKind::App {
+                                name,
+                                args: vec![Node::dummy(TypArgKind::NExp(len))],
+                            }),
+                            Arc::new(interner),
+                        )
+                    };
+                    let bit = self.builtin("bit");
+                    let mut known: i128 = 0;
+                    let mut wildcards = 0u32;
+                    let mut pinned = Vec::with_capacity(items.len());
+                    for sub in items {
+                        match &sub.kind {
+                            PatKind::Wild => {
+                                wildcards += 1;
+                                pinned.push(None);
+                            }
+                            PatKind::Vector(inner) => {
+                                known += inner.len() as i128;
+                                pinned.push(Some((sub, inner.len() as i128)));
+                            }
+                            PatKind::Lit(lit) => {
+                                let actual = self.literal(lit)?;
+                                let actual = self.resolve(&actual)?;
+                                let width = self
+                                    .vector_len_nexp(&actual, sub.span)
+                                    .ok()
+                                    .as_ref()
+                                    .and_then(crate::nexp::Nexp::as_const);
+                                let Some(width) = width else {
+                                    return Err(unsupported(
+                                        sub.span,
+                                        "non-constant concat literal width",
+                                    ));
+                                };
+                                known += width;
+                                pinned.push(Some((sub, width)));
+                            }
+                            _ => {
+                                return Err(unsupported(
+                                    sub.span,
+                                    "vector concat subpattern needs elaboration",
+                                ));
+                            }
+                        }
+                    }
+                    if wildcards > 1 {
+                        return Err(unsupported(
+                            pat.span,
+                            "multiple unclear widths in vector concat pattern",
+                        ));
+                    }
+                    let rest = total - known;
+                    if rest < 0 {
+                        return Err(arity(pat.span, total as usize, known as usize));
+                    }
+                    if wildcards == 0 && rest != 0 {
+                        return Err(arity(pat.span, total as usize, known as usize));
+                    }
+                    // The wildcard (if any) takes the remainder `rest` and
+                    // binds nothing; literal/vector slices check against
+                    // their constant widths.
+                    for slot in pinned.into_iter().rev() {
+                        match slot {
+                            None => {}
+                            Some((sub, width)) => match &sub.kind {
+                                PatKind::Vector(inner) => {
+                                    for element in inner.iter().rev() {
+                                        work.push((element, bit.clone()));
+                                    }
+                                }
+                                _ => {
+                                    work.push((sub, slice(width)));
+                                }
+                            },
+                        }
+                    }
+                }
                 PatKind::App { func, args } => {
                     // Union-Konstruktor-Applikation (`Some(x)`, `Circle(n)`):
                     // Scheme über `values` holen (Union-Member werden dort
@@ -2466,7 +2725,7 @@ impl Checker<'_> {
                 // Comparison guards over atoms also assume their constraint
                 // (`m < 'n` gives `'m < 'n`); other conditions assume
                 // nothing, as before.
-                if let Some(fact) = self.comparison_fact(exp, scope, exp.span)? {
+                if let Some(fact) = self.guard_fact(exp, scope, exp.span)? {
                     return Ok(Some(fact));
                 }
                 Ok(Some(self.resolve(&typ)?))
@@ -2528,6 +2787,18 @@ impl Checker<'_> {
                         ExpKind::Field { record, .. } => {
                             work.push(Synthesis::Field(exp));
                             work.push(Synthesis::Enter(record.as_ref()));
+                            continue;
+                        }
+                        ExpKind::Constraint(_) => {
+                            let Some(fact) =
+                                self.guard_fact(exp, scope, exp.span)?
+                            else {
+                                return Err(unsupported(
+                                    exp.span,
+                                    "constraint expression needs elaboration",
+                                ));
+                            };
+                            results.push(self.value_type(exp, fact));
                             continue;
                         }
                         ExpKind::Sizeof(node) => self.sizeof_type(node, exp.span)?,
@@ -3271,16 +3542,31 @@ impl Checker<'_> {
                         let unit = self.builtin("unit");
                         self.compatible(&expected, &unit, exp.span)?;
                     }
-                    for (index, item) in items.iter().enumerate().rev() {
+                    // Asserts extend the scope for following statements
+                    // (OCaml `check_block` facts); anything else queues
+                    // unchanged. Asserts check eagerly here, so their
+                    // conditions elaborate once (memoized).
+                    let mut pending = Vec::with_capacity(items.len());
+                    let mut current = scope.clone();
+                    for (index, item) in items.iter().enumerate() {
                         let expected = if index + 1 == items.len() {
                             expected.clone()
                         } else {
                             self.builtin("unit")
                         };
+                        if let ExpKind::Assert { cond, msg } = &item.kind {
+                            let unit = self.builtin("unit");
+                            self.compatible(&expected, &unit, item.span)?;
+                            current = self.check_assert(cond, msg, &current)?;
+                        } else {
+                            pending.push((item, expected, current.clone()));
+                        }
+                    }
+                    for (item, expected, item_scope) in pending.into_iter().rev() {
                         tasks.push(Task {
                             exp: item,
                             expected,
-                            scope: scope.clone(),
+                            scope: item_scope,
                             returning: returning.clone(),
                         });
                     }
@@ -3598,6 +3884,53 @@ impl Checker<'_> {
                     scope,
                     returning,
                 }),
+                ExpKind::Throw(payload) => {
+                    // OCaml `check_exp` `E_throw`: the payload elaborates
+                    // against the `exception` union; the expression
+                    // diverges, so it checks against any expected type.
+                    // Without a declared `exception` union there is nothing
+                    // to check membership against (honest pass-through).
+                    let inferred = self.infer(payload, &scope)?;
+                    let base = self.resolve(&inferred)?;
+                    if self.program.variant("exception", self.position).is_some()
+                        && base.name() != Some("exception")
+                    {
+                        return Err(TypeError::mismatch(
+                            exp.span,
+                            "exception".to_owned(),
+                            base.label(),
+                        ));
+                    }
+                }
+                ExpKind::Assert { cond, msg } => {
+                    let unit = self.builtin("unit");
+                    self.compatible(&expected, &unit, exp.span)?;
+                    let _ = self.check_assert(cond, msg, &scope)?;
+                }
+                ExpKind::Constraint(_) => {
+                    // OCaml `infer_exp` `E_constraint`: well-formedness is
+                    // the rigid-scope check; the expression denotes
+                    // `atom_bool` of the constraint (usable as a fact
+                    // source via `guard_fact`).
+                    let Some(fact) = self.guard_fact(exp, &scope, exp.span)? else {
+                        return Err(unsupported(
+                            exp.span,
+                            "constraint expression needs elaboration",
+                        ));
+                    };
+                    let result = self.value_type(exp, fact);
+                    self.compatible(&expected, &result, exp.span)?;
+                }
+                ExpKind::Exit(argument) => {
+                    // OCaml `check_exp` `E_exit`: the argument checks
+                    // against `unit`; the expression diverges.
+                    tasks.push(Task {
+                        exp: argument,
+                        expected: self.builtin("unit"),
+                        scope,
+                        returning,
+                    });
+                }
                 ExpKind::Undef => {}
                 ExpKind::Sizeof(_) => {
                     let result = self.infer(exp, &scope)?;
