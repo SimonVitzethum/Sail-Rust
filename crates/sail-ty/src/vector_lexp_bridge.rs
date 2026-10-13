@@ -122,10 +122,10 @@ pub fn ast_of_mini_typ(mini: &MiniTyp, it: &mut impl Interner) -> Typ {
 /// `"Invalid vector assignment l-expression"` (kein fabrizierter Typ).
 pub fn vector_root_of_canonical(
     node: &Typ,
-    it: &impl Interner,
+    union: &mut crate::vector_lexp::Union<'_>,
     span: Span,
 ) -> TypeResult<VectorRoot> {
-    crate::vector_lexp::vector_root_of_typ(node, it, span)
+    crate::vector_lexp::vector_root_of_typ(node, union, span)
 }
 
 /// Reine Positionsabbildung [`AstOrder`] -> [`MiniOrder`] (kein Fallback).
@@ -260,7 +260,8 @@ mod tests {
     fn root_extraction_delegates_invalid_shape() {
         let mut it = SimpleInterner::new();
         let int = mk_int_typ(&mut it);
-        let err = vector_root_of_canonical(&int, &it, Span::DUMMY).unwrap_err();
+        let mut union = crate::vector_lexp::Union::over(vec![&it as &dyn sail_ast::Interner]);
+        let err = vector_root_of_canonical(&int, &mut union, Span::DUMMY).unwrap_err();
         assert!(
             matches!(err.kind, TypeErrorKind::Unsupported(ref msg) if msg == "Invalid vector assignment l-expression"),
             "unexpected {err:?}"

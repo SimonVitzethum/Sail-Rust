@@ -5,7 +5,7 @@ use sail_ty::{
     error::{Span, TypeErrorKind},
     lexp_bounds::{
         RootBinding, VectorRoot, check_assign, check_index_typ, check_root, check_slice_root_len,
-        check_vector_index, check_vector_slice, element_typ, index_obligation, slice_obligation,
+        check_vector_index, check_vector_slice, index_obligation, slice_obligation,
         HOOK_NOTE,
     },
     nexp::{MiniOrder, MiniTyp, NConstraint, Nexp},
@@ -16,10 +16,9 @@ fn solver() -> StubSolver {
     StubSolver::new()
 }
 
-fn vector_root(len: i128, elem: MiniTyp) -> VectorRoot {
+fn vector_root(len: i128) -> VectorRoot {
     VectorRoot::Vector {
         len: Nexp::Const(len),
-        elem,
     }
 }
 
@@ -47,10 +46,11 @@ fn index_obligation_shape_is_zero_le_index_and_index_lt_len() {
 
 #[test]
 fn const_index_in_bounds_proves_element_typ() {
-    let root = vector_root(8, MiniTyp::Int);
+    let root = vector_root(8);
     let got = check_vector_index(
         &solver(),
         &root,
+        &MiniTyp::Int,
         &Nexp::Const(3),
         &MiniTyp::Int,
         Span::DUMMY,
@@ -61,10 +61,11 @@ fn const_index_in_bounds_proves_element_typ() {
 
 #[test]
 fn const_index_out_of_bounds_is_constraint_not_proved() {
-    let root = vector_root(8, MiniTyp::Int);
+    let root = vector_root(8);
     let err = check_vector_index(
         &solver(),
         &root,
+        &MiniTyp::Int,
         &Nexp::Const(8),
         &MiniTyp::Int,
         Span::DUMMY,
@@ -82,10 +83,11 @@ fn symbolic_index_is_unknown_and_stays_sound() {
     let obligation = index_obligation(&Nexp::Var("i".into()), &Nexp::Const(8));
     assert_eq!(solver().prove(&obligation), ProveResult::Unknown);
     // ... und check_vector_index fabriziert daraus keinen Beweis.
-    let root = vector_root(8, MiniTyp::Int);
+    let root = vector_root(8);
     let err = check_vector_index(
         &solver(),
         &root,
+        &MiniTyp::Int,
         &Nexp::Var("i".into()),
         &MiniTyp::Int,
         Span::DUMMY,
@@ -103,19 +105,28 @@ fn bitvector_index_yields_bit() {
     let got = check_vector_index(
         &solver(),
         &root,
+        &MiniTyp::Bit,
         &Nexp::Const(0),
         &MiniTyp::Range(Box::new(Nexp::Const(0)), Box::new(Nexp::Const(7))),
         Span::DUMMY,
     )
     .unwrap();
     assert_eq!(got, MiniTyp::Bit);
-    assert_eq!(element_typ(&root), MiniTyp::Bit);
 }
 
 #[test]
 fn vector_index_yields_element_typ() {
-    let root = vector_root(2, MiniTyp::Bool);
-    assert_eq!(element_typ(&root), MiniTyp::Bool);
+    let root = vector_root(2);
+    let got = check_vector_index(
+        &solver(),
+        &root,
+        &MiniTyp::Bool,
+        &Nexp::Const(1),
+        &MiniTyp::Int,
+        Span::DUMMY,
+    )
+    .unwrap();
+    assert_eq!(got, MiniTyp::Bool);
 }
 
 #[test]
@@ -186,7 +197,7 @@ fn slice_bounds_are_order_dependent() {
 
 #[test]
 fn slice_on_vector_root_is_rejected() {
-    let root = vector_root(8, MiniTyp::Int);
+    let root = vector_root(8);
     let err = check_slice_root_len(&root, Span::DUMMY).unwrap_err();
     assert!(matches!(err.kind, TypeErrorKind::Mismatch { .. }));
     // End-to-end: Slice gegen Vektor-Wurzel scheitert vor jedem Beweis.
@@ -227,10 +238,11 @@ fn non_int_index_typ_is_rejected_before_any_proof() {
     // mit Mismatch, nicht erst am Bounds-Beweis.
     let err = check_index_typ(&MiniTyp::Bool, Span::DUMMY).unwrap_err();
     assert!(matches!(err.kind, TypeErrorKind::Mismatch { .. }));
-    let root = vector_root(8, MiniTyp::Int);
+    let root = vector_root(8);
     let err = check_vector_index(
         &solver(),
         &root,
+        &MiniTyp::Int,
         &Nexp::Const(3),
         &MiniTyp::Bool,
         Span::DUMMY,

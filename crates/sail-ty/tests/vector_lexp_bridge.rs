@@ -14,7 +14,7 @@ use sail_ty::{
     lexp_bounds::VectorRoot,
     nexp::{MiniTyp, Nexp},
     solver::StubSolver,
-    vector_lexp::{check_assign, infer_vector_elem},
+    vector_lexp::{check_assign, infer_vector_elem, Union},
     vector_lexp_bridge::{
         ast_of_mini_typ, index_nexp_from_exp, mini_typ_of_canonical, vector_root_of_canonical,
     },
@@ -67,12 +67,11 @@ fn full_index_pipeline_const_proves_and_lifts_element() {
     let mut it = SimpleInterner::new();
     let elem = mk_int_typ(&mut it);
     let root_typ = mk_vector_typ(&mut it, "8", elem);
-    let root = vector_root_of_canonical(&root_typ, &it, Span::DUMMY).unwrap();
+    let root = { let mut union = Union::over(vec![&it as &dyn Interner]); vector_root_of_canonical(&root_typ, &mut union, Span::DUMMY) }.unwrap();
     assert_eq!(
         root,
         VectorRoot::Vector {
             len: Nexp::Const(8),
-            elem: MiniTyp::Int,
         }
     );
 
@@ -87,6 +86,7 @@ fn full_index_pipeline_const_proves_and_lifts_element() {
     let elem = infer_vector_elem(
         &StubSolver::new(),
         &root,
+        &MiniTyp::Int,
         &index_nexp,
         &index_typ,
         Span::DUMMY,
@@ -104,11 +104,12 @@ fn full_index_pipeline_out_of_bounds_is_constraint_not_proved() {
     let mut it = SimpleInterner::new();
     let elem = mk_int_typ(&mut it);
     let root_typ = mk_vector_typ(&mut it, "8", elem);
-    let root = vector_root_of_canonical(&root_typ, &it, Span::DUMMY).unwrap();
+    let root = { let mut union = Union::over(vec![&it as &dyn Interner]); vector_root_of_canonical(&root_typ, &mut union, Span::DUMMY) }.unwrap();
     let index_nexp = index_nexp_from_exp(&mk_num_exp(&mut it, "8"), &it).unwrap();
     let err = infer_vector_elem(
         &StubSolver::new(),
         &root,
+        &MiniTyp::Int,
         &index_nexp,
         &MiniTyp::Int,
         Span::DUMMY,
@@ -121,10 +122,11 @@ fn full_index_pipeline_out_of_bounds_is_constraint_not_proved() {
 fn bitvector_index_yields_bit_and_lifts() {
     let mut it = SimpleInterner::new();
     let root_typ = mk_bitvector_typ(&mut it, "4");
-    let root = vector_root_of_canonical(&root_typ, &it, Span::DUMMY).unwrap();
+    let root = { let mut union = Union::over(vec![&it as &dyn Interner]); vector_root_of_canonical(&root_typ, &mut union, Span::DUMMY) }.unwrap();
     let elem = infer_vector_elem(
         &StubSolver::new(),
         &root,
+        &MiniTyp::Bit,
         &Nexp::Const(0),
         &MiniTyp::Int,
         Span::DUMMY,
@@ -161,7 +163,7 @@ fn non_index_expression_is_unsupported_never_guessed() {
 fn non_vector_root_is_invalid_assignment() {
     let mut it = SimpleInterner::new();
     let int = mk_int_typ(&mut it);
-    let err = vector_root_of_canonical(&int, &it, Span::DUMMY).unwrap_err();
+    let err = { let mut union = Union::over(vec![&it as &dyn Interner]); vector_root_of_canonical(&int, &mut union, Span::DUMMY) }.unwrap_err();
     assert!(
         matches!(err.kind, TypeErrorKind::Unsupported(ref msg) if msg == "Invalid vector assignment l-expression"),
         "unexpected {err:?}"
@@ -175,8 +177,8 @@ fn lexp_error_wins_over_rhs() {
         &StubSolver::new(),
         &VectorRoot::Vector {
             len: Nexp::Const(8),
-            elem: MiniTyp::Int,
         },
+        &MiniTyp::Int,
         &Nexp::Const(8),
         &MiniTyp::Int,
         Span::DUMMY,

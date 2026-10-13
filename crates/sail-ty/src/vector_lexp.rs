@@ -52,14 +52,14 @@ use crate::lexp_bounds::{
 };
 use crate::nexp::{MiniOrder, MiniTyp, Nexp};
 use crate::solver::Solver;
-use sail_ast::{Exp, Interner, LExp, LExpKind, Order as AstOrder, Typ, TypArgKind, TypKind};
+use sail_ast::{Exp, Interner, LExp, LExpKind, Order as AstOrder, SimpleInterner, Symbol, Typ, TypArgKind, TypKind};
 
 /// Ankername fuer die Main-Agent-Hook-Insertion in `canonical_body.rs`.
 pub const INFER_LEXP_ANCHOR: &str = "infer_lexp";
 
 /// Exakter Call fuer `LE_vector` am [`INFER_LEXP_ANCHOR`]-Anker.
 pub const HOOK_CALL_INDEX: &str =
-    "crate::vector_lexp::infer_vector_elem(solver, &root, &index, &index_typ, span)";
+    "crate::vector_lexp::infer_vector_elem(solver, &root, &elem, &index, &index_typ, span)";
 
 /// Exakter Call fuer `LE_vector_range` am [`INFER_LEXP_ANCHOR`]-Anker.
 pub const HOOK_CALL_SLICE: &str =
@@ -100,6 +100,53 @@ pub fn as_vector_range(lexp: &LExp) -> Option<(&LExp, &Exp, &Exp)> {
     }
 }
 
+
+/// Vereinte Namenssicht über mehrere Interner-Tabellen.
+///
+/// Symbole gelten nur in ihrer eigenen Tabelle; ein kanonischer Wurzeltyp
+/// kann Köpfe aus der Root-Tabelle und Binder aus Scope-/Checker-Tabellen
+/// mischen (rigide `with`-Binder leben nicht in der Root-Tabelle). Die
+/// Auflösung läuft lokal, dann Kette; frische Namen (Mini-Bau) landen lokal.
+/// Wie der restliche kanonische Pfad wird Identität über Textnamen
+/// verglichen (rigide Frische pro Scope trennt Binder gleichen Namens).
+pub struct Union<'a> {
+    local: SimpleInterner,
+    chain: Vec<&'a dyn Interner>,
+}
+
+impl<'a> Union<'a> {
+    /// Neue Sicht über `chain` (erste Tabelle gewinnt bei Konflikten).
+    pub fn over(chain: Vec<&'a dyn Interner>) -> Self {
+        Self {
+            local: SimpleInterner::new(),
+            chain,
+        }
+    }
+}
+
+impl Interner for Union<'_> {
+    fn intern(&mut self, text: &str) -> Symbol {
+        self.local.intern(text)
+    }
+    fn resolve(&self, symbol: Symbol) -> Option<&str> {
+        if let r @ Some(_) = self.local.resolve(symbol) {
+            return r;
+        }
+        for (i, it) in self.chain.iter().enumerate() {
+            if let r @ Some(text) = it.resolve(symbol) {
+                return r;
+            }
+        }
+        None
+    }
+    fn len(&self) -> usize {
+        self.local.len()
+    }
+    fn is_empty(&self) -> bool {
+        self.local.is_empty()
+    }
+}
+
 fn invalid_vector_assignment(span: Span) -> TypeError {
     TypeError {
         span,
@@ -116,35 +163,33 @@ fn invalid_vector_assignment(span: Span) -> TypeError {
 /// - `bitvector(len)`: `App` mit 1 Arg (`NExp`) -> [`VectorRoot::Bitvector`].
 /// - Sonst: `"Invalid vector assignment l-expression"` (kein Bounds-Beweis,
 ///   kein fabrizierter Typ).
-pub fn vector_root_of_typ(
-    typ: &Typ,
-    interner: &impl Interner,
-    span: Span,
-) -> TypeResult<VectorRoot> {
+pub fn vector_root_of_typ(typ: &Typ, union: &mut Union<'_>, span: Span) -> TypeResult<VectorRoot> {
+    root_in(typ, union, span)
+}
+
+fn root_in(typ: &Typ, interner: &mut impl Interner, span: Span) -> TypeResult<VectorRoot> {
     match &typ.kind {
         TypKind::App { name, args } => {
             let text = interner
                 .resolve(name.symbol)
                 .ok_or_else(|| invalid_vector_assignment(span))?;
             match (text, args.as_slice()) {
-                ("vector", [len_arg, elem_arg]) => {
+                ("vector", [len_arg, _elem_arg]) => {
                     let TypArgKind::NExp(len_node) = &len_arg.kind else {
                         return Err(invalid_vector_assignment(span));
                     };
-                    let TypArgKind::Typ(elem_node) = &elem_arg.kind else {
-                        return Err(invalid_vector_assignment(span));
-                    };
-                    let len = crate::conv::nexp_from_ast(len_node, interner)
+                    let len = crate::conv::nexp_from_ast(len_node, &mut *interner)
                         .ok_or_else(|| invalid_vector_assignment(span))?;
-                    let elem = crate::conv::typ_from_ast(elem_node, interner)
-                        .ok_or_else(|| invalid_vector_assignment(span))?;
-                    Ok(VectorRoot::Vector { len, elem })
+                    // Kein elem-Conv hier: die rohe Ansicht traegt die
+                    // unsubstituierte Variable; das Element liefert der
+                    // Aufrufer substituiert (siehe check_vector_index).
+                    Ok(VectorRoot::Vector { len })
                 }
                 ("bitvector", [len_arg]) => {
                     let TypArgKind::NExp(len_node) = &len_arg.kind else {
                         return Err(invalid_vector_assignment(span));
                     };
-                    let len = crate::conv::nexp_from_ast(len_node, interner)
+                    let len = crate::conv::nexp_from_ast(len_node, &mut *interner)
                         .ok_or_else(|| invalid_vector_assignment(span))?;
                     Ok(VectorRoot::Bitvector { len })
                 }
@@ -171,11 +216,12 @@ pub fn check_writable(
 pub fn infer_vector_elem<S: Solver>(
     solver: &S,
     root: &VectorRoot,
+    elem: &MiniTyp,
     index: &Nexp,
     index_typ: &MiniTyp,
     span: Span,
 ) -> TypeResult<MiniTyp> {
-    lexp_check_index(solver, root, index, index_typ, span)
+    lexp_check_index(solver, root, elem, index, index_typ, span)
 }
 
 /// Vollstaendige `LE_vector_range`-Pruefung: beide Index-Typen zuerst, dann
@@ -318,17 +364,16 @@ mod tests {
         let mut it = sail_ast::SimpleInterner::new();
         let elem = mk_int_typ(&mut it);
         let vec = mk_vector_typ(&mut it, "8", elem);
-        let root = vector_root_of_typ(&vec, &it, Span::DUMMY).unwrap();
+        let root = { let mut union = Union::over(vec![&it as &dyn sail_ast::Interner]); vector_root_of_typ(&vec, &mut union, Span::DUMMY) }.unwrap();
         match root {
-            VectorRoot::Vector { len, elem } => {
+            VectorRoot::Vector { len } => {
                 assert_eq!(len, Nexp::Const(8));
-                assert_eq!(elem, MiniTyp::Int);
             }
             other => panic!("expected Vector root, got {other:?}"),
         }
 
         let bv = mk_bitvector_typ(&mut it, "4");
-        let root = vector_root_of_typ(&bv, &it, Span::DUMMY).unwrap();
+        let root = { let mut union = Union::over(vec![&it as &dyn sail_ast::Interner]); vector_root_of_typ(&bv, &mut union, Span::DUMMY) }.unwrap();
         assert_eq!(root, VectorRoot::Bitvector { len: Nexp::Const(4) });
     }
 
@@ -336,7 +381,7 @@ mod tests {
     fn root_extraction_rejects_non_vector() {
         let mut it = sail_ast::SimpleInterner::new();
         let int = mk_int_typ(&mut it);
-        let err = vector_root_of_typ(&int, &it, Span::DUMMY).unwrap_err();
+        let err = { let mut union = Union::over(vec![&it as &dyn sail_ast::Interner]); vector_root_of_typ(&int, &mut union, Span::DUMMY) }.unwrap_err();
         assert!(
             matches!(err.kind, TypeErrorKind::Unsupported(ref msg) if msg == "Invalid vector assignment l-expression"),
             "unexpected {err:?}"
@@ -344,31 +389,25 @@ mod tests {
 
         // `bits(4)` ist kein beschreibbarer Vektor-Root (Slice braucht bitvector).
         let bits: Typ = crate::conv::typ_to_ast(&MiniTyp::Bits(Box::new(Nexp::Const(4))), &mut it);
-        let err = vector_root_of_typ(&bits, &it, Span::DUMMY).unwrap_err();
+        let err = { let mut union = Union::over(vec![&it as &dyn sail_ast::Interner]); vector_root_of_typ(&bits, &mut union, Span::DUMMY) }.unwrap_err();
         assert!(matches!(err.kind, TypeErrorKind::Unsupported(_)));
     }
 
     #[test]
     fn index_proves_and_yields_element_typ() {
-        let root = VectorRoot::Vector {
-            len: Nexp::Const(8),
-            elem: MiniTyp::Bool,
-        };
-        let got = infer_vector_elem(&solver(), &root, &Nexp::Const(3), &MiniTyp::Int, Span::DUMMY).unwrap();
+        let root = VectorRoot::Vector { len: Nexp::Const(8) };
+        let got = infer_vector_elem(&solver(), &root, &MiniTyp::Bool, &Nexp::Const(3), &MiniTyp::Int, Span::DUMMY).unwrap();
         assert_eq!(got, MiniTyp::Bool);
 
         let bv = VectorRoot::Bitvector { len: Nexp::Const(4) };
-        let got = infer_vector_elem(&solver(), &bv, &Nexp::Const(0), &MiniTyp::Int, Span::DUMMY).unwrap();
+        let got = infer_vector_elem(&solver(), &bv, &MiniTyp::Bit, &Nexp::Const(0), &MiniTyp::Int, Span::DUMMY).unwrap();
         assert_eq!(got, MiniTyp::Bit);
     }
 
     #[test]
     fn index_out_of_bounds_is_constraint_not_proved() {
-        let root = VectorRoot::Vector {
-            len: Nexp::Const(8),
-            elem: MiniTyp::Int,
-        };
-        let err = infer_vector_elem(&solver(), &root, &Nexp::Const(8), &MiniTyp::Int, Span::DUMMY).unwrap_err();
+        let root = VectorRoot::Vector { len: Nexp::Const(8) };
+        let err = infer_vector_elem(&solver(), &root, &MiniTyp::Int, &Nexp::Const(8), &MiniTyp::Int, Span::DUMMY).unwrap_err();
         assert!(matches!(err.kind, TypeErrorKind::ConstraintNotProved(_)));
     }
 
@@ -426,10 +465,7 @@ mod tests {
 
     #[test]
     fn slice_on_vector_root_is_mismatch() {
-        let root = VectorRoot::Vector {
-            len: Nexp::Const(8),
-            elem: MiniTyp::Int,
-        };
+        let root = VectorRoot::Vector { len: Nexp::Const(8) };
         let err = infer_vector_slice(
             &solver(),
             &root,
@@ -463,11 +499,8 @@ mod tests {
 
     #[test]
     fn non_int_index_rejected_before_proof() {
-        let root = VectorRoot::Vector {
-            len: Nexp::Const(8),
-            elem: MiniTyp::Int,
-        };
-        let err = infer_vector_elem(&solver(), &root, &Nexp::Const(0), &MiniTyp::Bool, Span::DUMMY).unwrap_err();
+        let root = VectorRoot::Vector { len: Nexp::Const(8) };
+        let err = infer_vector_elem(&solver(), &root, &MiniTyp::Int, &Nexp::Const(0), &MiniTyp::Bool, Span::DUMMY).unwrap_err();
         assert!(matches!(err.kind, TypeErrorKind::Mismatch { .. }));
     }
 

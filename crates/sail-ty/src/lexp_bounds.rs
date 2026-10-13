@@ -75,8 +75,10 @@ pub const HOOK_NOTE: &str =
 /// dem `Typ_app`-Match auf `"vector"` / `"bitvector"`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum VectorRoot {
-    /// `vector('len, 'elem)`: zwei Applikations-Argumente (Nexp + Typ).
-    Vector { len: Nexp, elem: MiniTyp },
+    /// `vector('len, 'elem)`: nur die Laenge lebt hier; das Element
+    /// liefert der Aufrufer substituiert (call-result Bindings, z.B.
+    /// `'a := bits(8)` — die rohe AST-Ansicht traegt noch die Variable).
+    Vector { len: Nexp },
     /// `bitvector('len)`: ein Applikations-Argument (Nexp).
     Bitvector { len: Nexp },
 }
@@ -198,15 +200,6 @@ pub fn slice_obligation(
     }
 }
 
-/// Element-Typ von `LE_vector`: `vector` -> Element, `bitvector` -> `bit`.
-#[must_use]
-pub fn element_typ(root: &VectorRoot) -> MiniTyp {
-    match root {
-        VectorRoot::Vector { elem, .. } => elem.clone(),
-        VectorRoot::Bitvector { .. } => MiniTyp::Bit,
-    }
-}
-
 /// Slice-Typ von `LE_vector_range`: `bitvector(slice_len)`.
 #[must_use]
 pub fn slice_typ(slice_len: Nexp) -> MiniTyp {
@@ -261,12 +254,15 @@ pub fn check_slice_root_len(root: &VectorRoot, span: Span) -> TypeResult<Nexp> {
 }
 
 /// Vollstaendige `LE_vector`-Pruefung: Index-Typ pruefen, Bounds beweisen,
-/// Element-Typ liefern. Die Reihenfolge ist load-bearing: Der Index-Typfehler
-/// kommt immer vor dem Bounds-Beweis, und beide kommen vor jeder RHS-Pruefung
-/// (siehe [`check_assign`]).
+/// substituierten Element-Typ liefern. Die Reihenfolge ist load-bearing: Der
+/// Index-Typfehler kommt immer vor dem Bounds-Beweis, und beide kommen vor
+/// jeder RHS-Pruefung (siehe [`check_assign`]). Das Element kommt vom
+/// Aufrufer substituiert (call-result Bindings); die rohe AST-Ansicht traegt
+/// noch die unsubstituierte Variable und wird hier nicht gelesen.
 pub fn check_vector_index<S: Solver>(
     solver: &S,
     root: &VectorRoot,
+    elem: &MiniTyp,
     index: &Nexp,
     index_typ: &MiniTyp,
     span: Span,
@@ -276,7 +272,7 @@ pub fn check_vector_index<S: Solver>(
         VectorRoot::Vector { len, .. } | VectorRoot::Bitvector { len } => len.clone(),
     };
     prove_bounds(solver, &index_obligation(index, &len), span, "vector index bounds")?;
-    Ok(element_typ(root))
+    Ok(elem.clone())
 }
 
 /// Vollstaendige `LE_vector_range`-Pruefung: beide Index-Typen pruefen,

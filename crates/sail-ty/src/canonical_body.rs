@@ -13,7 +13,7 @@ use std::{
     sync::Arc,
 };
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 enum Step {
     Argument(usize),
     Result,
@@ -117,6 +117,27 @@ impl Drop for Substitutions {
     }
 }
 static EMPTY_PROOF_VARS: BTreeMap<String, u64> = BTreeMap::new();
+/// Explizite Frisch→Real-Abbildung für Obligations mit mehreren
+/// Symboltabellen (B2: Index-Witness- gegen Funktions-Scope-Tabelle).
+/// Frische Goal-Symbole (eigene Tabelle, kollisionsfrei) mappen auf reale
+/// TypArgumente mit je eigenem Kontext; der Emitter folgt der Kette. Kein
+/// Raten: fehlende Abbildung ist ein Fehler, nie ein Beweis.
+struct GoalMap<'a> {
+    map: Vec<(Symbol, Argument<'a>)>,
+}
+impl<'a> Bindings for GoalMap<'a> {
+    fn resolve(&self, symbol: Symbol) -> Option<Argument<'a>> {
+        let hit = self
+            .map
+            .iter()
+            .find(|(bound, _)| *bound == symbol)
+            .map(|(_, argument)| *argument);
+        hit
+    }
+    fn rigid(&self, _name: &str) -> Option<(usize, Kind)> {
+        None
+    }
+}
 impl Bindings for Type {
     fn resolve(&self, symbol: Symbol) -> Option<Argument<'_>> {
         self.substitutions.get_scalar(symbol).map(Scalar::view)
@@ -1009,15 +1030,22 @@ impl Checker<'_> {
     /// geprüften Grenzen laut `Unsupported`.
     fn vector_target_type(&mut self, lexp: &LExp, scope: &Scope) -> TypeResult<Type> {
         use crate::lexp_bounds::{
-            check_index_typ, check_slice_root_len, element_typ, index_obligation, VectorRoot,
+            check_index_typ, check_slice_root_len, VectorRoot,
         };
         use crate::vector_lexp::{as_vector, as_vector_range};
         use crate::vector_lexp_bridge as bridge;
         if let Some((base, index)) = as_vector(lexp) {
             let base_typ = self.assignment_type(base, scope)?;
             let root = self.resolve(&base_typ)?;
+            for (b, s) in root.substitutions.scalars.iter() {
+            }
+            let mut union = crate::vector_lexp::Union::over(vec![
+                &*root.root.interner as &dyn sail_ast::Interner,
+                &*root.scope.interner as &dyn sail_ast::Interner,
+                &*self.it as &dyn sail_ast::Interner,
+            ]);
             let vector_root =
-                bridge::vector_root_of_canonical(root.node(), &*root.root.interner, lexp.span)?;
+                bridge::vector_root_of_canonical(root.node(), &mut union, lexp.span)?;
             let inferred = self.infer(index, scope)?;
             let index_typ = self.resolve(&inferred)?;
             let mini_index_typ = bridge::mini_typ_of_canonical(
@@ -1026,24 +1054,151 @@ impl Checker<'_> {
                 index.span,
             )?;
             check_index_typ(&mini_index_typ, index.span)?;
-            let index_nexp = bridge::index_nexp_from_exp(index, &*self.it)?;
-            let len = match &vector_root {
-                VectorRoot::Vector { len, .. } | VectorRoot::Bitvector { len } => len.clone(),
+            // Bounds-Beweis über GoalMap (B2): frische Goal-Variablen mappen
+            // auf reale TypArgumente mit je eigenem Kontext; der Emitter
+            // folgt den Ketten, Namen fallen nur bei echter Identität
+            // zusammen. Kein Raten: unauflösbare Seiten sind `Unsupported`,
+            // unbeweisbare Bounds `ConstraintNotProved`.
+            let len_typarg = match &root.node().kind {
+                TypKind::App { args, .. } => args.first().ok_or_else(|| {
+                    unsupported(lexp.span, "Invalid vector assignment l-expression")
+                })?,
+                _ => {
+                    return Err(unsupported(lexp.span, "Invalid vector assignment l-expression"));
+                }
             };
-            self.prove_vector_bounds(
-                &index_obligation(&index_nexp, &len),
-                lexp.span,
-                "vector index bounds",
-            )?;
+            let TypArgKind::NExp(_) = &len_typarg.kind else {
+                return Err(unsupported(lexp.span, "Invalid vector assignment l-expression"));
+            };
+            let (index_typarg, index_ctx) = match &index_typ.node().kind {
+                TypKind::App { args, .. } if args.len() == 1 => {
+                    let TypArgKind::NExp(_) = &args[0].kind else {
+                        return Err(unsupported(lexp.span, "index value not addressable"));
+                    };
+                    (&args[0], index_typ.proof_context())
+                }
+                _ => return Err(unsupported(lexp.span, "index value not addressable")),
+            };
+            // Len-Knoten leben in der Scope-Tabelle (nicht Root): eigener
+            // Kontext mit Scope-Interner, Bindings via GoalMap (s.u.).
+            // WICHTIG: starre Namen ('n) lösen über die self.context-Sicht
+            // (Funktions-Scheme = derselbe Arc wie in den Annahmen; Ptr-
+            // Gleichheit ist die Link-Bedingung des Emitters).
+            let context_view = self
+                .context
+                .as_ref()
+                .map(|s| Type::root(s.clone()))
+                .ok_or_else(|| unsupported(lexp.span, "vector bounds need function context"))?;
+            let len_ctx = Context {
+                interner: &root.scope.interner,
+                variables: &EMPTY_PROOF_VARS,
+                bindings: Some(&context_view),
+            };
+            use sail_solver::canonical::Bindings as _;
+            let mut git = SimpleInterner::new();
+            // TEMP B2: Upper-Kette aus foreach-Fact lesen.
+            let mut sc2 = Some(scope);
+            while let Some(s) = sc2 {
+                for (scalar, _neg) in &s.facts {
+                    if let TypArgKind::Bool(c) = &scalar.argument().kind {
+                        if let ConstraintKind::And(_, b) = &c.kind {
+                            if let ConstraintKind::Le(_, hi) = &b.kind {
+                                if let NExpKind::Var(hs) = hi.kind {
+                                    if let Some(bound) = scalar.owner.substitutions.get_scalar(hs) {
+                                        let owner = &bound.owner;
+                                    } else {
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                sc2 = s.parent.as_deref();
+            }
+            let mut sc = Some(scope);
+            while let Some(s) = sc {
+                for (scalar, neg) in &s.facts {
+                }
+                sc = s.parent.as_deref();
+            }
+            let gi = git.intern("__goal_index");
+            let gl = git.intern("__goal_len");
+            let mk_var = |s| Node::dummy(NExpKind::Var(s));
+            let goal = Node::dummy(ConstraintKind::And(
+                Box::new(Node::dummy(ConstraintKind::Ge(
+                    mk_var(gi),
+                    Node::dummy(NExpKind::Constant("0".to_owned())),
+                ))),
+                Box::new(Node::dummy(ConstraintKind::Lt(
+                    mk_var(gi),
+                    mk_var(gl),
+                ))),
+            ));
+            let goalmap = GoalMap {
+                map: vec![
+                    (
+                        gi,
+                        Argument {
+                            argument: index_typarg,
+                            context: index_ctx,
+                        },
+                    ),
+                    (
+                        gl,
+                        Argument {
+                            argument: len_typarg,
+                            context: len_ctx,
+                        },
+                    ),
+                ],
+            };
+            let view = View {
+                constraint: &goal,
+                context: Context {
+                    interner: &git,
+                    variables: &EMPTY_PROOF_VARS,
+                    bindings: Some(&goalmap),
+                },
+                negated: false,
+            };
+            let context = self.context.as_ref().map(|s| Type::root(s.clone()));
+            let query = CanonicalQuery::implication(&self.proof_assumptions(&context), view, None)
+                .map_err(|e| unsupported(lexp.span, e))?;
+            if !self.program.prove(query).is_valid() {
+                return Err(TypeError::constraint_not_proved(
+                    lexp.span,
+                    "vector index bounds",
+                ));
+            }
             let mut it = SimpleInterner::new();
-            let lifted = bridge::ast_of_mini_typ(&element_typ(&vector_root), &mut it);
+            // Das Element aus der substituierten Sicht lesen (call-result
+            // Bindings anwenden, z.B. `'a := bits(8)` aus `vector_init`):
+            // die rohe AST-Ansicht trägt noch die unsubstituierte Variable.
+            let elem_mini = match &vector_root {
+                VectorRoot::Bitvector { .. } => crate::nexp::MiniTyp::Bit,
+                VectorRoot::Vector { .. } => {
+                    let elem_view = root.child(Step::TypeArgument(1)).resolved();
+                    if let TypKind::App { name, args } = &elem_view.node().kind {
+                    }
+                    let mini = crate::conv::typ_from_ast(elem_view.node(), &*elem_view.root.interner);
+                    mini.ok_or_else(|| {
+                        unsupported(lexp.span, "Invalid vector assignment l-expression")
+                    })?
+                }
+            };
+            let lifted = bridge::ast_of_mini_typ(&elem_mini, &mut it);
             return Ok(Type::owned(lifted, Arc::new(it)));
         }
         if let Some((base, first, second)) = as_vector_range(lexp) {
             let base_typ = self.assignment_type(base, scope)?;
             let root = self.resolve(&base_typ)?;
+            let mut union = crate::vector_lexp::Union::over(vec![
+                &*root.root.interner as &dyn sail_ast::Interner,
+                &*root.scope.interner as &dyn sail_ast::Interner,
+                &*self.it as &dyn sail_ast::Interner,
+            ]);
             let vector_root =
-                bridge::vector_root_of_canonical(root.node(), &*root.root.interner, lexp.span)?;
+                bridge::vector_root_of_canonical(root.node(), &mut union, lexp.span)?;
             // Ein `vector`-Root ist hier ein Mismatch (OCaml:
             // "Cannot assign slice of non vector type"); erst danach
             // käme die ordnungsabhängige Obligation.
