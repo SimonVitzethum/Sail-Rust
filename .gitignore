@@ -2,3 +2,4 @@ worktrees/
 target/
 Cargo.lock
 logs/
+sail_smt_cache

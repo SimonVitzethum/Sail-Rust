@@ -68,6 +68,7 @@ const GREEN_FUNS: &[&str] = &[
     "byte_pair",
     "is_red",
     "describe",
+    "get_x",
 ];
 
 fn out_dir() -> std::path::PathBuf {
@@ -180,16 +181,17 @@ fn lane70_tiny_parse_declare_check() {
     ));
     std::fs::write(out.join("stage-typecheck.log"), &log).expect("log schreiben");
 
-    // Erwartung mit gemergten Armen: alle 7 Gruen-Funktionen checken
-    // (describe via Konstruktor-Pattern-Bindung `Circle(n)`/`Square(_)`).
-    // Rot bleibt nur get_x (E_field, Arm fehlt).
+    // Erwartung mit gemergten Armen: alle 8 Gruen-Funktionen checken
+    // (`describe` via Konstruktor-Patterns, `get_x` via Feldzugriff).
+    // Die Rot-Tabelle ist leer; `mk_point` (Struct-Literal) checkt, steht
+    // aber nicht in GREEN_FUNS (nur Scheme-Snapshot).
     let mut names = green_names.clone();
     names.sort_unstable();
     names.dedup();
     let mut expected: Vec<&str> = GREEN_FUNS.to_vec();
     expected.sort_unstable();
     assert_eq!(names, expected, "Gruen-Teilmenge unvollstaendig:\n{log}");
-    assert_eq!(red.len(), 1, "Rot-Tabelle unerwartet:\n{log}");
+    assert_eq!(red.len(), 0, "Rot-Tabelle unerwartet:\n{log}");
     for (position, message) in &red {
         assert!(
             message.contains("not yet implemented in the canonical checker")

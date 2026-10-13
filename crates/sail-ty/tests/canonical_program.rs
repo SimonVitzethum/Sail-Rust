@@ -756,6 +756,9 @@ fn declaration_kinds_and_source_order_are_checked() {
 
 #[test]
 fn unsupported_obligations_do_not_silently_accept_bodies() {
+    // `sizeof('n)` without a `__size` overload in scope stays honest
+    // `UnboundVar` (OCaml: `No possible overloading for __size`), never
+    // a guessed link.
     let defs = parse(&[
         "val f : forall 'n. unit -> int('n)",
         "function f() = sizeof('n)",
@@ -766,8 +769,20 @@ fn unsupported_obligations_do_not_silently_accept_bodies() {
             .check_definition(&defs[1].0, defs[1].1.clone(), 1)
             .unwrap_err()
             .kind,
-        TypeErrorKind::Unsupported(_)
+        TypeErrorKind::UnboundVar(_)
     ));
+    // With `__size` present the rigid size synthesizes `atom('n)`.
+    let defs = parse(&[
+        "type bits('n) = bitvector('n)",
+        "val bitvector_length : forall 'n. bits('n) -> int('n)",
+        "overload __size = {bitvector_length}",
+        "val f : forall 'n. unit -> int('n)",
+        "function f() = sizeof('n)",
+    ]);
+    let program = declare(&defs);
+    program
+        .check_definition(&defs[4].0, defs[4].1.clone(), 4)
+        .expect("sizeof of a rigid size should check with __size in scope");
 }
 
 #[test]

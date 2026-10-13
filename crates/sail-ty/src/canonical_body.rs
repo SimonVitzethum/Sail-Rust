@@ -272,7 +272,8 @@ impl Drop for Scope {
 impl Scope {
     fn branch(self: &Arc<Self>, condition: Option<&Type>, negated: bool) -> Arc<Self> {
         match condition.filter(|typ| typ.name() == Some("atom_bool")) {
-            Some(condition) => Arc::new(Self {
+            Some(condition) => {
+                Arc::new(Self {
                 locals: Vec::new(),
                 facts: vec![(
                     Scalar {
@@ -282,7 +283,8 @@ impl Scope {
                     negated,
                 )],
                 parent: Some(self.clone()),
-            }),
+                })
+            }
             None => self.clone(),
         }
     }
@@ -311,6 +313,27 @@ fn arity(span: Span, expected: usize, found: usize) -> TypeError {
 }
 fn mismatch(span: Span, expected: &Type, found: &Type) -> TypeError {
     TypeError::mismatch(span, expected.label(), found.label())
+}
+
+/// Whether an `atom_bool` condition carries its own assumption: a bare
+/// variable (fresh `__value` witnesses from opening plain `bool`
+/// results) links operand views only by arc identity, so comparison
+/// synthesis still runs to build the real constraint. Real constraints
+/// (`Lt`, `And`, …) need no duplicate.
+fn is_vacuous_fact(typ: &Type) -> bool {
+    let TypKind::App { args, .. } = &typ.node().kind else {
+        return false;
+    };
+    if typ.name() != Some("atom_bool") {
+        return false;
+    };
+    let Some(arg) = args.first() else {
+        return false;
+    };
+    matches!(
+        &arg.kind,
+        TypArgKind::Bool(c) if matches!(&c.kind, ConstraintKind::Var(_))
+    )
 }
 
 struct Checker<'a> {
@@ -1271,203 +1294,432 @@ impl Checker<'_> {
     /// stay honest `Unsupported`. Like OCaml (`Function append not
     /// found`), `@` needs an `append` overload in scope.
     fn append_result(&self, left_typ: &Type, right_typ: &Type, span: Span) -> TypeResult<Type> {
-        if self
-            .program
-            .overload_candidates("append", self.position)?
-            .is_none()
-        {
+        // Only the declaration counts; members may dangle
+        // (backend builtins like `__id`).
+        if !self.program.has_overload("append", self.position) {
             return Err(TypeError::unbound_var(span, "append".to_owned()));
         }
-                    let mut lunion = crate::vector_lexp::Union::over(vec![
-                        &*left_typ.root.interner as &dyn sail_ast::Interner,
-                        &*left_typ.scope.interner as &dyn sail_ast::Interner,
-                        &*self.it as &dyn sail_ast::Interner,
-                    ]);
-                    let mut runion = crate::vector_lexp::Union::over(vec![
-                        &*right_typ.root.interner as &dyn sail_ast::Interner,
-                        &*right_typ.scope.interner as &dyn sail_ast::Interner,
-                        &*self.it as &dyn sail_ast::Interner,
-                    ]);
-                    let left_root =
-                        crate::vector_lexp_bridge::vector_root_of_canonical(
-                            left_typ.node(),
-                            &mut lunion,
+        let mut lunion = crate::vector_lexp::Union::over(vec![
+            &*left_typ.root.interner as &dyn sail_ast::Interner,
+            &*left_typ.scope.interner as &dyn sail_ast::Interner,
+            &*self.it as &dyn sail_ast::Interner,
+        ]);
+        let mut runion = crate::vector_lexp::Union::over(vec![
+            &*right_typ.root.interner as &dyn sail_ast::Interner,
+            &*right_typ.scope.interner as &dyn sail_ast::Interner,
+            &*self.it as &dyn sail_ast::Interner,
+        ]);
+        let left_root =
+            crate::vector_lexp_bridge::vector_root_of_canonical(
+                left_typ.node(),
+                &mut lunion,
+                span,
+            )?;
+        let right_root =
+            crate::vector_lexp_bridge::vector_root_of_canonical(
+                right_typ.node(),
+                &mut runion,
+                span,
+            )?;
+        // NLL beendet beide Union-Ausleihen vor `&mut`-Gebrauch.
+        let len_left = self.vector_len_nexp(&left_typ, span)?;
+        let len_right = self.vector_len_nexp(&right_typ, span)?;
+        let elem_mini = match (&left_root, &right_root) {
+            (
+                crate::lexp_bounds::VectorRoot::Bitvector { .. },
+                crate::lexp_bounds::VectorRoot::Bitvector { .. },
+            ) => None,
+            (
+                crate::lexp_bounds::VectorRoot::Vector { .. },
+                crate::lexp_bounds::VectorRoot::Vector { .. },
+            ) => {
+                let elem = |typ: &Type| -> TypeResult<crate::nexp::MiniTyp> {
+                    let TypKind::App { args, .. } = &typ.node().kind
+                    else {
+                        return Err(unsupported(
                             span,
-                        )?;
-                    let right_root =
-                        crate::vector_lexp_bridge::vector_root_of_canonical(
-                            right_typ.node(),
-                            &mut runion,
-                            span,
-                        )?;
-                    // NLL beendet beide Union-Ausleihen vor `&mut`-Gebrauch.
-                    let len_left = self.vector_len_nexp(&left_typ, span)?;
-                    let len_right = self.vector_len_nexp(&right_typ, span)?;
-                    let elem_mini = match (&left_root, &right_root) {
-                        (
-                            crate::lexp_bounds::VectorRoot::Bitvector { .. },
-                            crate::lexp_bounds::VectorRoot::Bitvector { .. },
-                        ) => None,
-                        (
-                            crate::lexp_bounds::VectorRoot::Vector { .. },
-                            crate::lexp_bounds::VectorRoot::Vector { .. },
-                        ) => {
-                            let elem = |typ: &Type| -> TypeResult<crate::nexp::MiniTyp> {
-                                let TypKind::App { args, .. } = &typ.node().kind
-                                else {
-                                    return Err(unsupported(
-                                        span,
-                                        "append of non-vector type",
-                                    ));
-                                };
-                                let Some(arg) = args.get(1) else {
-                                    return Err(unsupported(
-                                        span,
-                                        "append of non-vector type",
-                                    ));
-                                };
-                                let TypArgKind::Typ(node) = &arg.kind else {
-                                    return Err(unsupported(
-                                        span,
-                                        "append of non-vector type",
-                                    ));
-                                };
-                                let mut union =
-                                    crate::vector_lexp::Union::over(vec![
-                                        &*typ.root.interner as &dyn sail_ast::Interner,
-                                        &*typ.scope.interner as &dyn sail_ast::Interner,
-                                        &*self.it as &dyn sail_ast::Interner,
-                                    ]);
-                                crate::vector_lexp_bridge::mini_typ_of_canonical(
-                                    node, &mut union, span,
-                                )
-                            };
-                            let elem_left = elem(&left_typ)?;
-                            let elem_right = elem(&right_typ)?;
-                            if elem_left != elem_right {
-                                return Err(mismatch(span, &left_typ, &right_typ));
-                            }
-                            Some(elem_left)
-                        }
-                        _ => {
-                            return Err(TypeError::mismatch(
-                                span,
-                                "bitvector".to_owned(),
-                                "vector".to_owned(),
-                            ));
-                        }
-                    };
-                    let sum = crate::nexp::Nexp::Add(
-                        Box::new(len_left.clone()),
-                        Box::new(len_right.clone()),
-                    );
-                    let sum = match sum.as_const() {
-                        Some(constant) => crate::nexp::Nexp::Const(constant),
-                        None => sum,
-                    };
-                    let mut git = SimpleInterner::new();
-                    fn mini_typ_vars(
-                        mini: &crate::nexp::MiniTyp,
-                        out: &mut Vec<String>,
-                    ) {
-                        use crate::nexp::MiniTyp as Mini;
-                        match mini {
-                            Mini::Int | Mini::Bool | Mini::Bit => {}
-                            Mini::Bits(n) => n.free_vars(out),
-                            Mini::Range(first, second) => {
-                                first.free_vars(out);
-                                second.free_vars(out);
-                            }
-                            Mini::Named { args, .. } => {
-                                for arg in args {
-                                    arg.free_vars(out);
-                                }
-                            }
-                            Mini::Fun(first, second) => {
-                                mini_typ_vars(first, out);
-                                mini_typ_vars(second, out);
-                            }
-                            Mini::Tuple(items) => {
-                                for item in items {
-                                    mini_typ_vars(item, out);
-                                }
-                            }
-                        }
-                    }
-                    let mut left_texts = Vec::new();
-                    len_left.free_vars(&mut left_texts);
-                    let mut right_texts = Vec::new();
-                    len_right.free_vars(&mut right_texts);
-                    // Element-Variablen (Vektor-Flavor) verlinken auf die
-                    // Element-Sicht (Argument 1) der Seite, die sie traegt.
-                    let mut left_elem_texts = Vec::new();
-                    let mut right_elem_texts = Vec::new();
-                    if let Some(mini) = &elem_mini {
-                        mini_typ_vars(mini, &mut left_elem_texts);
-                        // `elem_left == elem_right` ist oben geprueft;
-                        // beide Seiten tragen dieselben Namen.
-                        right_elem_texts.clone_from(&left_elem_texts);
-                    }
-                    let mut texts = Vec::new();
-                    sum.free_vars(&mut texts);
-                    texts.extend(left_elem_texts.iter().cloned());
-                    texts.sort();
-                    texts.dedup();
-                    let mut scalars = Vec::new();
-                    for text in &texts {
-                        let (owner, index) = if left_texts.contains(text) {
-                            (left_typ, 0)
-                        } else if right_texts.contains(text) {
-                            (right_typ, 0)
-                        } else if left_elem_texts.contains(text) {
-                            (left_typ, 1)
-                        } else if right_elem_texts.contains(text) {
-                            (right_typ, 1)
-                        } else {
-                            return Err(unsupported(
-                                span,
-                                format!("append variable {text} is unbound"),
-                            ));
-                        };
-                        scalars.push((
-                            git.intern(text),
-                            Scalar {
-                                owner: owner.clone(),
-                                index,
-                            },
+                            "append of non-vector type",
                         ));
+                    };
+                    let Some(arg) = args.get(1) else {
+                        return Err(unsupported(
+                            span,
+                            "append of non-vector type",
+                        ));
+                    };
+                    let TypArgKind::Typ(node) = &arg.kind else {
+                        return Err(unsupported(
+                            span,
+                            "append of non-vector type",
+                        ));
+                    };
+                    let mut union =
+                        crate::vector_lexp::Union::over(vec![
+                            &*typ.root.interner as &dyn sail_ast::Interner,
+                            &*typ.scope.interner as &dyn sail_ast::Interner,
+                            &*self.it as &dyn sail_ast::Interner,
+                        ]);
+                    crate::vector_lexp_bridge::mini_typ_of_canonical(
+                        node, &mut union, span,
+                    )
+                };
+                let elem_left = elem(&left_typ)?;
+                let elem_right = elem(&right_typ)?;
+                if elem_left != elem_right {
+                    return Err(mismatch(span, &left_typ, &right_typ));
+                }
+                Some(elem_left)
+            }
+            _ => {
+                return Err(TypeError::mismatch(
+                    span,
+                    "bitvector".to_owned(),
+                    "vector".to_owned(),
+                ));
+            }
+        };
+        let sum = crate::nexp::Nexp::Add(
+            Box::new(len_left.clone()),
+            Box::new(len_right.clone()),
+        );
+        let sum = match sum.as_const() {
+            Some(constant) => crate::nexp::Nexp::Const(constant),
+            None => sum,
+        };
+        let mut git = SimpleInterner::new();
+        fn mini_typ_vars(
+            mini: &crate::nexp::MiniTyp,
+            out: &mut Vec<String>,
+        ) {
+            use crate::nexp::MiniTyp as Mini;
+            match mini {
+                Mini::Int | Mini::Bool | Mini::Bit => {}
+                Mini::Bits(n) => n.free_vars(out),
+                Mini::Range(first, second) => {
+                    first.free_vars(out);
+                    second.free_vars(out);
+                }
+                Mini::Named { args, .. } => {
+                    for arg in args {
+                        arg.free_vars(out);
                     }
-                    let len_node = crate::conv::nexp_to_ast(&sum, &mut git);
-                    let head = if elem_mini.is_none() { "bits" } else { "vector" };
-                    let head_sym = git.intern(head);
-                    let mut result_args =
-                        vec![Node::dummy(TypArgKind::NExp(len_node))];
-                    if let Some(mini) = &elem_mini {
-                        let elem_node =
-                            crate::vector_lexp_bridge::ast_of_mini_typ(mini, &mut git);
-                        result_args.push(Node::dummy(TypArgKind::Typ(elem_node)));
+                }
+                Mini::Fun(first, second) => {
+                    mini_typ_vars(first, out);
+                    mini_typ_vars(second, out);
+                }
+                Mini::Tuple(items) => {
+                    for item in items {
+                        mini_typ_vars(item, out);
                     }
-                    let typ = Node::dummy(TypKind::App {
-                        name: Name::dummy(head_sym),
-                        args: result_args,
-                    });
-                    let root = Arc::new(Scheme {
-                        typschm: TypSchm {
-                            quant: vec![],
-                            typ,
-                        },
-                        interner: Arc::new(git),
-                    });
-                    Ok(Type {
-                        root: root.clone(),
-                        path: Vec::new(),
-                        scope: root,
-                        substitutions: Arc::new(Substitutions {
-                            types: Vec::new(),
-                            scalars,
-                        }),
-                        implicit_argument: false,
-                    })
+                }
+            }
+        }
+        let mut left_texts = Vec::new();
+        len_left.free_vars(&mut left_texts);
+        let mut right_texts = Vec::new();
+        len_right.free_vars(&mut right_texts);
+        // Element-Variablen (Vektor-Flavor) verlinken auf die
+        // Element-Sicht (Argument 1) der Seite, die sie traegt.
+        let mut left_elem_texts = Vec::new();
+        let mut right_elem_texts = Vec::new();
+        if let Some(mini) = &elem_mini {
+            mini_typ_vars(mini, &mut left_elem_texts);
+            // `elem_left == elem_right` ist oben geprueft;
+            // beide Seiten tragen dieselben Namen.
+            right_elem_texts.clone_from(&left_elem_texts);
+        }
+        let mut texts = Vec::new();
+        sum.free_vars(&mut texts);
+        texts.extend(left_elem_texts.iter().cloned());
+        texts.sort();
+        texts.dedup();
+        let mut scalars = Vec::new();
+        for text in &texts {
+            let (owner, index) = if left_texts.contains(text) {
+                (left_typ, 0)
+            } else if right_texts.contains(text) {
+                (right_typ, 0)
+            } else if left_elem_texts.contains(text) {
+                (left_typ, 1)
+            } else if right_elem_texts.contains(text) {
+                (right_typ, 1)
+            } else {
+                return Err(unsupported(
+                    span,
+                    format!("append variable {text} is unbound"),
+                ));
+            };
+            scalars.push((
+                git.intern(text),
+                Scalar {
+                    owner: owner.clone(),
+                    index,
+                },
+            ));
+        }
+        let len_node = crate::conv::nexp_to_ast(&sum, &mut git);
+        let head = if elem_mini.is_none() { "bits" } else { "vector" };
+        let head_sym = git.intern(head);
+        let mut result_args =
+            vec![Node::dummy(TypArgKind::NExp(len_node))];
+        if let Some(mini) = &elem_mini {
+            let elem_node =
+                crate::vector_lexp_bridge::ast_of_mini_typ(mini, &mut git);
+            result_args.push(Node::dummy(TypArgKind::Typ(elem_node)));
+        }
+        let typ = Node::dummy(TypKind::App {
+            name: Name::dummy(head_sym),
+            args: result_args,
+        });
+        let root = Arc::new(Scheme {
+            typschm: TypSchm {
+                quant: vec![],
+                typ,
+            },
+            interner: Arc::new(git),
+        });
+        Ok(Type {
+            root: root.clone(),
+            path: Vec::new(),
+            scope: root,
+            substitutions: Arc::new(Substitutions {
+                types: Vec::new(),
+                scalars,
+            }),
+            implicit_argument: false,
+        })
+    }
+    /// Rehome a source-level `NExp` into a fresh interner by text.
+    /// Source symbols live in the checker interner; copying numbers would
+    /// orphan them in a fresh table (B2b class). Texts round-trip exactly
+    /// (`Constant`/`Var`/arithmetik); anything else (`Id`, `If`,
+    /// applications) is `None` (honest `Unsupported`, never guessed).
+    fn rehome_nexp(&self, node: &NExp, git: &mut SimpleInterner) -> Option<NExp> {
+        let kind = match &node.kind {
+            NExpKind::Constant(text) => NExpKind::Constant(text.clone()),
+            NExpKind::Var(symbol) => {
+                NExpKind::Var(git.intern(self.it.resolve(*symbol)?))
+            }
+            NExpKind::Sum(first, second) => NExpKind::Sum(
+                Box::new(self.rehome_nexp(first, git)?),
+                Box::new(self.rehome_nexp(second, git)?),
+            ),
+            NExpKind::Minus(first, second) => NExpKind::Minus(
+                Box::new(self.rehome_nexp(first, git)?),
+                Box::new(self.rehome_nexp(second, git)?),
+            ),
+            NExpKind::Times(first, second) => NExpKind::Times(
+                Box::new(self.rehome_nexp(first, git)?),
+                Box::new(self.rehome_nexp(second, git)?),
+            ),
+            NExpKind::Neg(inner) => {
+                NExpKind::Neg(Box::new(self.rehome_nexp(inner, git)?))
+            }
+            NExpKind::Exp(inner) => {
+                NExpKind::Exp(Box::new(self.rehome_nexp(inner, git)?))
+            }
+            _ => return None,
+        };
+        Some(Node::dummy(kind))
+    }
+
+    /// `E_sizeof` (OCaml `infer_exp`): a type-level variable in expression
+    /// position denotes its numeric value. Synthesizes `atom('n)` with the
+    /// rehomed node and the function scheme as binder scope, so the rigid
+    /// links to assumption-side names (same scope-`Arc`). Names outside
+    /// the function quantifiers stay honest `Unsupported` (no orphan
+    /// views). Like OCaml (`No possible overloading for __size`), a
+    /// `__size` overload must be in scope (the prelude provides it);
+    /// compound shapes stay `Unsupported` (OCaml rewrites those via
+    /// `add_atom`/`sub_atom`/… calls, which is elaboration, not checking).
+    fn sizeof_type(&self, node: &NExp, span: Span) -> TypeResult<Type> {
+        let NExpKind::Var(_) = &node.kind else {
+            return Err(unsupported(
+                span,
+                "sizeof of compound size expression needs elaboration",
+            ));
+        };
+        if !self.program.has_overload("__size", self.position) {
+            return Err(TypeError::unbound_var(span, "__size".to_owned()));
+        };
+        let mut git = SimpleInterner::new();
+        let rehomed = self
+            .rehome_nexp(node, &mut git)
+            .ok_or_else(|| unsupported(span, "dependent size expression typing"))?;
+        let context = self
+            .context
+            .clone()
+            .ok_or_else(|| unsupported(span, "size expression outside function context"))?;
+        // Fail closed upfront: every variable must be rigid in the
+        // function scope, otherwise the emitter would later report an
+        // unbound rigid proof variable.
+        fn collect(node: &NExp, out: &mut Vec<Symbol>) {
+            match &node.kind {
+                NExpKind::Var(symbol) => out.push(*symbol),
+                NExpKind::Constant(_) => {}
+                NExpKind::Sum(first, second)
+                | NExpKind::Minus(first, second)
+                | NExpKind::Times(first, second) => {
+                    collect(first, out);
+                    collect(second, out);
+                }
+                NExpKind::Neg(inner) | NExpKind::Exp(inner) => collect(inner, out),
+                _ => {}
+            }
+        }
+        let view = Type::root(context.clone());
+        let mut vars = Vec::new();
+        collect(&rehomed, &mut vars);
+        for symbol in vars {
+            let text = git
+                .resolve(symbol)
+                .ok_or_else(|| unsupported(span, "dependent size expression typing"))?;
+            if (&view as &dyn Bindings).rigid(text).is_none() {
+                return Err(unsupported(
+                    span,
+                    format!("size variable {text} is unbound"),
+                ));
+            }
+        }
+        let atom = git.intern("atom");
+        let typ = Node::dummy(TypKind::App {
+            name: Name::dummy(atom),
+            args: vec![Node::dummy(TypArgKind::NExp(rehomed))],
+        });
+        Ok(Type {
+            root: Arc::new(Scheme {
+                typschm: TypSchm {
+                    quant: vec![],
+                    typ,
+                },
+                interner: Arc::new(git),
+            }),
+            path: Vec::new(),
+            scope: context,
+            substitutions: Arc::new(Substitutions::default()),
+            implicit_argument: false,
+        })
+    }
+    /// Comparison guard fact for `condition` (OCaml `E_if` assumptions):
+    /// `m < 'n` with atom operands contributes `Lt('m, 'n)` over the
+    /// operands' *declared* type variables, so branch bodies can discharge
+    /// callee constraints (`truncate` needs `'m <= 'n`). Operands ground
+    /// through the full substitution chain; every variable links to a
+    /// declared-side view (same-table precise). Anything unshaped
+    /// (non-`atom` heads, ungroundable sides, unlinked variables) yields
+    /// `None`: the condition still checks, it just assumes nothing —
+    /// current behavior, never a guess. Only the six numeric comparisons;
+    /// `bool`/custom operators contribute nothing.
+    fn comparison_fact(
+        &mut self,
+        exp: &Exp,
+        scope: &Scope,
+        span: Span,
+    ) -> TypeResult<Option<Type>> {
+        use crate::nexp::{NConstraint as MiniCons, Nexp as Mini};
+        let ExpKind::App { func, args } = &exp.kind else {
+            return Ok(None);
+        };
+        if args.len() != 2 {
+            return Ok(None);
+        }
+        let ctor: fn(Box<Mini>, Box<Mini>) -> MiniCons = match self.name(func)? {
+            "<" => MiniCons::Lt,
+            "<=" => MiniCons::Le,
+            ">" => MiniCons::Gt,
+            ">=" => MiniCons::Ge,
+            "==" => MiniCons::Eq,
+            "!=" => MiniCons::Neq,
+            _ => return Ok(None),
+        };
+        let mut sides = Vec::with_capacity(2);
+        for arg in args {
+            let inferred = self.infer(arg, scope)?;
+            let value = self.resolve(&inferred)?;
+            let TypKind::App { .. } = &value.node().kind else {
+                return Ok(None);
+            };
+            if value.name() != Some("atom") {
+                return Ok(None);
+            }
+            // Declared (pre-opening) views carry the linkable variables;
+            // opened `__value` witnesses cannot link by design.
+            let declared = self
+                .inferred
+                .get(&(arg as *const Exp))
+                .map(|inferred| (*inferred.declared).clone())
+                .unwrap_or_else(|| value.clone());
+            let grounded = self.ground_scalar(
+                &Scalar {
+                    owner: declared.clone(),
+                    index: 0,
+                },
+                &[declared.clone()],
+                &mut Vec::new(),
+                0,
+            );
+            let Some(grounded) = grounded else {
+                return Ok(None);
+            };
+            sides.push((declared, grounded));
+        }
+        let [(left_typ, left_nexp), (right_typ, right_nexp)] = sides.as_slice() else {
+            unreachable!("two comparison operands")
+        };
+        let mut left_texts = Vec::new();
+        left_nexp.free_vars(&mut left_texts);
+        let mut right_texts = Vec::new();
+        right_nexp.free_vars(&mut right_texts);
+        let obligation = ctor(
+            Box::new(left_nexp.clone()),
+            Box::new(right_nexp.clone()),
+        );
+        let mut texts = Vec::new();
+        obligation.free_vars(&mut texts);
+        texts.sort();
+        texts.dedup();
+        let mut git = SimpleInterner::new();
+        let mut scalars = Vec::new();
+        for text in &texts {
+            let owner = if left_texts.contains(text) {
+                left_typ
+            } else if right_texts.contains(text) {
+                right_typ
+            } else {
+                return Ok(None);
+            };
+            scalars.push((
+                git.intern(text),
+                Scalar {
+                    owner: owner.clone(),
+                    index: 0,
+                },
+            ));
+        }
+        let constraint = crate::conv::constraint_to_ast(&obligation, &mut git);
+        let atom_bool = git.intern("atom_bool");
+        let typ = Node::dummy(TypKind::App {
+            name: Name::dummy(atom_bool),
+            args: vec![Node::dummy(TypArgKind::Bool(Box::new(constraint)))],
+        });
+        let root = Arc::new(Scheme {
+            typschm: TypSchm {
+                quant: vec![],
+                typ,
+            },
+            interner: Arc::new(git),
+        });
+        Ok(Some(Type {
+            root: root.clone(),
+            path: Vec::new(),
+            scope: root,
+            substitutions: Arc::new(Substitutions {
+                types: Vec::new(),
+                scalars,
+            }),
+            implicit_argument: false,
+        }))
     }
     /// Vector-LHS target type (Lane 41 hook for `assignment_type`).
     ///
@@ -1850,6 +2102,36 @@ impl Checker<'_> {
         Ok(instantiated.child(Step::Result))
     }
 
+    /// Field read `record.field` (OCaml `infer_exp` `E_field`): infer the
+    /// base, resolve to a declared record, unify the accessor telescope
+    /// against the base via the existing `struct_field_type`. Unknown
+    /// records are hard `QuantError`, unknown fields `UnboundVar`;
+    /// generic (constrained) accessors prove through `instantiate`.
+    fn field_type(
+        &mut self,
+        record: &Exp,
+        field: &Name,
+        scope: &Scope,
+        span: Span,
+    ) -> TypeResult<Type> {
+        let inferred = self.infer(record, scope)?;
+        let base = self.resolve(&inferred)?;
+        let record_name = base
+            .name()
+            .map(str::to_owned)
+            .filter(|name| self.program.record(name, self.position).is_some());
+        let Some(record_name) = record_name else {
+            return Err(TypeError {
+                span,
+                kind: TypeErrorKind::QuantError(format!(
+                    "The type {} is not a record",
+                    base.label()
+                )),
+            });
+        };
+        let field_name = self.name(field)?;
+        self.struct_field_type(&record_name, field_name, &base, field.span)
+    }
     fn compatible(&self, expected: &Type, found: &Type, span: Span) -> TypeResult<()> {
         let mut pairs = vec![(expected.clone(), found.clone())];
         while let Some((expected, found)) = pairs.pop() {
@@ -2171,6 +2453,22 @@ impl Checker<'_> {
             Ok(typ) => {
                 let boolean = self.builtin("bool");
                 self.compatible(&boolean, &typ, exp.span)?;
+                // Refined conditions (`bool(..)`, e.g. builtin `lt_int`)
+                // already carry their constraint: `branch` assumes it
+                // directly, no synthesized duplicate. Opened plain-`bool`
+                // witnesses fall through to comparison synthesis, which
+                // builds the real constraint from the operands; if there
+                // is none, the opened type itself is assumed (its witness
+                // links operand views by arc identity).
+                if typ.name() == Some("atom_bool") && !is_vacuous_fact(&typ) {
+                    return Ok(Some(self.resolve(&typ)?));
+                }
+                // Comparison guards over atoms also assume their constraint
+                // (`m < 'n` gives `'m < 'n`); other conditions assume
+                // nothing, as before.
+                if let Some(fact) = self.comparison_fact(exp, scope, exp.span)? {
+                    return Ok(Some(fact));
+                }
                 Ok(Some(self.resolve(&typ)?))
             }
             // Some expressions can be checked against bool before they can be
@@ -2190,6 +2488,7 @@ impl Checker<'_> {
             // LANE-45: infer the base first, then check each update field.
             StructUpdate(&'a Exp, usize),
             VectorAppend(&'a Exp),
+            Field(&'a Exp),
         }
         let mut work = vec![Synthesis::Enter(exp)];
         let mut results = Vec::new();
@@ -2226,6 +2525,12 @@ impl Checker<'_> {
                             work.push(Synthesis::Enter(left.as_ref()));
                             continue;
                         }
+                        ExpKind::Field { record, .. } => {
+                            work.push(Synthesis::Field(exp));
+                            work.push(Synthesis::Enter(record.as_ref()));
+                            continue;
+                        }
+                        ExpKind::Sizeof(node) => self.sizeof_type(node, exp.span)?,
                         ExpKind::Struct { name, fields } => {
                             // OCaml `infer_exp` E_struct ~L3774:
                             // `SN_anon` never infers (`StructNameMustMatch`).
@@ -2345,6 +2650,15 @@ impl Checker<'_> {
                     let result = self.append_result(&left_typ, &right_typ, exp.span)?;
                     let result = self.value_type(exp, result);
                     results.push(result);
+                }
+                Synthesis::Field(exp) => {
+                    let _base = results.pop().expect("inferred field base");
+                    let ExpKind::Field { record, field } = &exp.kind else {
+                        unreachable!("field synthesis shape")
+                    };
+                    let declared = self.field_type(record, field, scope, exp.span)?;
+                    let declared = self.resolve(&declared)?;
+                    results.push(self.value_type(exp, declared));
                 }
                 Synthesis::Tuple(exp, count) => {
                     let elements = results.split_off(results.len() - count);
@@ -3090,6 +3404,11 @@ impl Checker<'_> {
                         returning: returning.clone(),
                     });
                 }
+                ExpKind::Field { record, field } => {
+                    let field_typ = self.field_type(record, field, &scope, exp.span)?;
+                    let result = self.value_type(exp, field_typ);
+                    self.compatible(&expected, &result, exp.span)?;
+                }
                 ExpKind::Let { pat, bind, body } => {
                     let bound = self.infer(bind, &scope)?;
                     let mut child = Scope {
@@ -3281,7 +3600,8 @@ impl Checker<'_> {
                 }),
                 ExpKind::Undef => {}
                 ExpKind::Sizeof(_) => {
-                    return Err(unsupported(exp.span, "dependent size expression typing"))
+                    let result = self.infer(exp, &scope)?;
+                    self.compatible(&expected, &result, exp.span)?;
                 }
                 ExpKind::List(items) if expected.name() == Some("list") => {
                     let TypKind::App { args, .. } = &expected.node().kind else {

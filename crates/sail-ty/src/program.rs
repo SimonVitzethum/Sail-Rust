@@ -1386,6 +1386,12 @@ impl Program {
             .and_then(|history| at(history, position))
             .map(Vec::as_slice)
     }
+    /// Whether an overload declaration is visible (members may dangle,
+    /// e.g. backend builtins like `__id`; OCaml tolerates those too and
+    /// only errors when no overload exists at all).
+    pub(crate) fn has_overload(&self, name: &str, position: usize) -> bool {
+        self.overload(name, position).is_some()
+    }
     pub(crate) fn overload_candidates(
         &self,
         name: &str,

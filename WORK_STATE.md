@@ -41,6 +41,13 @@
   `reverse_endianness` checken).
 - Infra: `/tmp` von 6,4G auf 356M aufgeräumt (alte Lane-Verzeichnisse;
   tmpfs belegte direkt RAM); avail zurück bei ~17GiB.
+  `sail_smt_cache` (memo-Ablage) steht in `.gitignore`.
+- Erledigt (`E_sizeof`/`E_field`): `'n` synthetisiert `atom('n)` mit
+  Funktions-Scope-Linking (`__size`-Deklarations-Gate wie OCaml);
+  Vergleichs-Guards steuern Constraints über deklarierte Operand-Sichten
+  bei (`m < 'n` ⇒ `'m < 'n`, `extzv`-Muster beidseitig grün);
+  `record.field` via Accessor-Teleskop (`field_access.rs`, Tiny-`get_x`
+  grün, Rot-Tabelle leer).
 
 # Arbeitsstand und Fortsetzung — 2026-10-12 abends (Main-Agent, committet)
 
