@@ -3256,6 +3256,226 @@ impl Checker<'_> {
                         });
                     }
                 }
+                ExpKind::VectorAppend(left, right) => {
+                    // `@` (OCaml `E_vector_append`): beide Seiten
+                    // inferieren zum selben Vektor-Flavor; das Ergebnis
+                    // konkateniert die gegroundeten Laengen (`bits(n) ++
+                    // bits(m) = bits(n + m)`). Laengen folgen der vollen
+                    // Substitutions-Kette (`vector_len_nexp`); die
+                    // Ergebnis-Wurzel traegt die summierte Form, jede
+                    // Variable verlinkt auf eine Seiten-Sicht (same-table
+                    // praezise, nie geraten). Flavor-Mismatch ist harter
+                    // `Mismatch`; formlose Operanden ehrlich `Unsupported`.
+                    // Wie OCaml (`Function append not found`) braucht `@`
+                    // eine `append`-Ueberladung im Scope (Prelude stellt
+                    // sie); ohne sie ehrlich ungebunden.
+                    if self
+                        .program
+                        .overload_candidates("append", self.position)?
+                        .is_none()
+                    {
+                        return Err(TypeError::unbound_var(
+                            exp.span,
+                            "append".to_owned(),
+                        ));
+                    }
+                    let inferred_left = self.infer(left, &scope)?;
+                    let inferred_right = self.infer(right, &scope)?;
+                    let left_typ = self.resolve(&inferred_left)?;
+                    let right_typ = self.resolve(&inferred_right)?;
+                    let mut lunion = crate::vector_lexp::Union::over(vec![
+                        &*left_typ.root.interner as &dyn sail_ast::Interner,
+                        &*left_typ.scope.interner as &dyn sail_ast::Interner,
+                        &*self.it as &dyn sail_ast::Interner,
+                    ]);
+                    let mut runion = crate::vector_lexp::Union::over(vec![
+                        &*right_typ.root.interner as &dyn sail_ast::Interner,
+                        &*right_typ.scope.interner as &dyn sail_ast::Interner,
+                        &*self.it as &dyn sail_ast::Interner,
+                    ]);
+                    let left_root =
+                        crate::vector_lexp_bridge::vector_root_of_canonical(
+                            left_typ.node(),
+                            &mut lunion,
+                            left.span,
+                        )?;
+                    let right_root =
+                        crate::vector_lexp_bridge::vector_root_of_canonical(
+                            right_typ.node(),
+                            &mut runion,
+                            right.span,
+                        )?;
+                    // NLL beendet beide Union-Ausleihen vor `&mut`-Gebrauch.
+                    let len_left = self.vector_len_nexp(&left_typ, exp.span)?;
+                    let len_right = self.vector_len_nexp(&right_typ, exp.span)?;
+                    let elem_mini = match (&left_root, &right_root) {
+                        (
+                            crate::lexp_bounds::VectorRoot::Bitvector { .. },
+                            crate::lexp_bounds::VectorRoot::Bitvector { .. },
+                        ) => None,
+                        (
+                            crate::lexp_bounds::VectorRoot::Vector { .. },
+                            crate::lexp_bounds::VectorRoot::Vector { .. },
+                        ) => {
+                            let elem = |typ: &Type| -> TypeResult<crate::nexp::MiniTyp> {
+                                let TypKind::App { args, .. } = &typ.node().kind
+                                else {
+                                    return Err(unsupported(
+                                        exp.span,
+                                        "append of non-vector type",
+                                    ));
+                                };
+                                let Some(arg) = args.get(1) else {
+                                    return Err(unsupported(
+                                        exp.span,
+                                        "append of non-vector type",
+                                    ));
+                                };
+                                let TypArgKind::Typ(node) = &arg.kind else {
+                                    return Err(unsupported(
+                                        exp.span,
+                                        "append of non-vector type",
+                                    ));
+                                };
+                                let mut union =
+                                    crate::vector_lexp::Union::over(vec![
+                                        &*typ.root.interner as &dyn sail_ast::Interner,
+                                        &*typ.scope.interner as &dyn sail_ast::Interner,
+                                        &*self.it as &dyn sail_ast::Interner,
+                                    ]);
+                                crate::vector_lexp_bridge::mini_typ_of_canonical(
+                                    node, &mut union, exp.span,
+                                )
+                            };
+                            let elem_left = elem(&left_typ)?;
+                            let elem_right = elem(&right_typ)?;
+                            if elem_left != elem_right {
+                                return Err(mismatch(exp.span, &left_typ, &right_typ));
+                            }
+                            Some(elem_left)
+                        }
+                        _ => {
+                            return Err(TypeError::mismatch(
+                                exp.span,
+                                "bitvector".to_owned(),
+                                "vector".to_owned(),
+                            ));
+                        }
+                    };
+                    let sum = crate::nexp::Nexp::Add(
+                        Box::new(len_left.clone()),
+                        Box::new(len_right.clone()),
+                    );
+                    let sum = match sum.as_const() {
+                        Some(constant) => crate::nexp::Nexp::Const(constant),
+                        None => sum,
+                    };
+                    let mut git = SimpleInterner::new();
+                    fn mini_typ_vars(
+                        mini: &crate::nexp::MiniTyp,
+                        out: &mut Vec<String>,
+                    ) {
+                        use crate::nexp::MiniTyp as Mini;
+                        match mini {
+                            Mini::Int | Mini::Bool | Mini::Bit => {}
+                            Mini::Bits(n) => n.free_vars(out),
+                            Mini::Range(first, second) => {
+                                first.free_vars(out);
+                                second.free_vars(out);
+                            }
+                            Mini::Named { args, .. } => {
+                                for arg in args {
+                                    arg.free_vars(out);
+                                }
+                            }
+                            Mini::Fun(first, second) => {
+                                mini_typ_vars(first, out);
+                                mini_typ_vars(second, out);
+                            }
+                            Mini::Tuple(items) => {
+                                for item in items {
+                                    mini_typ_vars(item, out);
+                                }
+                            }
+                        }
+                    }
+                    let mut left_texts = Vec::new();
+                    len_left.free_vars(&mut left_texts);
+                    let mut right_texts = Vec::new();
+                    len_right.free_vars(&mut right_texts);
+                    // Element-Variablen (Vektor-Flavor) verlinken auf die
+                    // Element-Sicht (Argument 1) der Seite, die sie traegt.
+                    let mut left_elem_texts = Vec::new();
+                    let mut right_elem_texts = Vec::new();
+                    if let Some(mini) = &elem_mini {
+                        mini_typ_vars(mini, &mut left_elem_texts);
+                        // `elem_left == elem_right` ist oben geprueft;
+                        // beide Seiten tragen dieselben Namen.
+                        right_elem_texts.clone_from(&left_elem_texts);
+                    }
+                    let mut texts = Vec::new();
+                    sum.free_vars(&mut texts);
+                    texts.extend(left_elem_texts.iter().cloned());
+                    texts.sort();
+                    texts.dedup();
+                    let mut scalars = Vec::new();
+                    for text in &texts {
+                        let (owner, index) = if left_texts.contains(text) {
+                            (&left_typ, 0)
+                        } else if right_texts.contains(text) {
+                            (&right_typ, 0)
+                        } else if left_elem_texts.contains(text) {
+                            (&left_typ, 1)
+                        } else if right_elem_texts.contains(text) {
+                            (&right_typ, 1)
+                        } else {
+                            return Err(unsupported(
+                                exp.span,
+                                format!("append variable {text} is unbound"),
+                            ));
+                        };
+                        scalars.push((
+                            git.intern(text),
+                            Scalar {
+                                owner: owner.clone(),
+                                index,
+                            },
+                        ));
+                    }
+                    let len_node = crate::conv::nexp_to_ast(&sum, &mut git);
+                    let head = if elem_mini.is_none() { "bits" } else { "vector" };
+                    let head_sym = git.intern(head);
+                    let mut result_args =
+                        vec![Node::dummy(TypArgKind::NExp(len_node))];
+                    if let Some(mini) = &elem_mini {
+                        let elem_node =
+                            crate::vector_lexp_bridge::ast_of_mini_typ(mini, &mut git);
+                        result_args.push(Node::dummy(TypArgKind::Typ(elem_node)));
+                    }
+                    let typ = Node::dummy(TypKind::App {
+                        name: Name::dummy(head_sym),
+                        args: result_args,
+                    });
+                    let root = Arc::new(Scheme {
+                        typschm: TypSchm {
+                            quant: vec![],
+                            typ,
+                        },
+                        interner: Arc::new(git),
+                    });
+                    let result = Type {
+                        root: root.clone(),
+                        path: Vec::new(),
+                        scope: root,
+                        substitutions: Arc::new(Substitutions {
+                            types: Vec::new(),
+                            scalars,
+                        }),
+                        implicit_argument: false,
+                    };
+                    let result = self.value_type(exp, result);
+                    self.compatible(&expected, &result, exp.span)?;
+                }
                 _ => {
                     return Err(unsupported(
                         exp.span,

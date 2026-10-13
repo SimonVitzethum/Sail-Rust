@@ -28,6 +28,13 @@
   (`Some(_)`/`None()`) und Tiny-`describe` (`Circle(n)`/`Square(_)`)
   checken; OCaml-Referenz stimmt zu (`sail -just_check` RC 0).
   Rot-Tabelle `lane70_tiny`: nur noch `get_x` (E_field).
+- Erledigt (`@`/Append): `ExpKind::VectorAppend`-Arm in `run()`: beide
+  Seiten inferieren zum selben Flavor, Ergebnis summiert gegroundete
+  Längen (`bits(n)++bits(m)=bits(n+m)`); Ergebnis-Wurzel mit
+  Seiten-Sicht-Links (same-table-präzise); Flavor-Mismatch hart,
+  ohne `append`-Überladung ehrlich `UnboundVar` (wie OCaml).
+  `reverse_endianness`-Muster als Fixture + OCaml-paritätisch verifiziert;
+  4 Regressionstests (`vector_append.rs`) grün.
 
 # Arbeitsstand und Fortsetzung — 2026-10-12 abends (Main-Agent, committet)
 
