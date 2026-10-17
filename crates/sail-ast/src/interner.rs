@@ -3,7 +3,7 @@
 //! Later lanes may swap in `lasso` behind the same [`Interner`] trait.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Interned string handle. `Copy + Send + Sync`.
@@ -52,8 +52,22 @@ pub trait Interner: Send + Sync {
 /// unchanged.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SimpleInterner {
+    #[serde(serialize_with = "serialize_map_in_order")]
     map: HashMap<Arc<str>, Symbol>,
     vec: Vec<Arc<str>>,
+}
+
+// Keep the existing JSON representation while making content hashes
+// independent of HashMap seeds, deserialization and worker scheduling.
+fn serialize_map_in_order<S: serde::Serializer>(
+    map: &HashMap<Arc<str>, Symbol>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let ordered: BTreeMap<&str, Symbol> = map
+        .iter()
+        .map(|(text, symbol)| (text.as_ref(), *symbol))
+        .collect();
+    ordered.serialize(serializer)
 }
 
 impl SimpleInterner {
@@ -95,6 +109,20 @@ impl Interner for SimpleInterner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serialized_symbols_are_stable_across_independent_hash_seeds() {
+        let mut interner = SimpleInterner::new();
+        for index in 0..64 {
+            interner.intern(&format!("symbol_{index}"));
+        }
+        let encoded = serde_json::to_vec(&interner).unwrap();
+        for _ in 0..8 {
+            let decoded: SimpleInterner = serde_json::from_slice(&encoded).unwrap();
+            assert_eq!(decoded, interner);
+            assert_eq!(serde_json::to_vec(&decoded).unwrap(), encoded);
+        }
+    }
 
     #[test]
     fn same_string_same_symbol() {
