@@ -3,6 +3,9 @@
 # Check substantially more AST data than the memory limit, including bodies.
 set -euo pipefail
 TASK_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TASK_TMP="$TASK_ROOT/target/tmp"
+mkdir -p "$TASK_TMP"
+export TMPDIR="$TASK_TMP"
 mkdir -p "$TASK_ROOT/target/typecheck-ooc-gate"
 OUT="$(mktemp -d "$TASK_ROOT/target/typecheck-ooc-gate/run.XXXXXXXX")"
 MEMORY="${SAIL_TYPECHECK_MEMORY:-128M}"
@@ -15,12 +18,13 @@ with open(sys.argv[1], 'w') as output:
         output.write(f'val function_{index} : int -> int\n')
         output.write(f'function function_{index}(x) = {{ {block} }}\n')
 PY
-systemd-run --user --wait --pipe --collect \
+systemd-run --user --wait --pipe --collect --setenv="TMPDIR=$TASK_TMP" \
     -p MemoryMax=4G -p MemorySwapMax=0 -p "WorkingDirectory=$TASK_ROOT" \
     "$(command -v cargo)" build --profile ci -j 2 -p sail-cli
 STATUS=0
-systemd-run --user --wait --pipe --collect \
+systemd-run --user --wait --pipe --collect --setenv="TMPDIR=$TASK_TMP" \
     --setenv="SAIL_RS_THREADS=$WORKERS" \
+    --setenv="SAIL_RS_SPOOL_DIR=${SAIL_RS_SPOOL_DIR:-$TASK_ROOT/target/spool}" \
     -p "MemoryMax=$MEMORY" -p MemorySwapMax=0 -p RuntimeMaxSec=180 \
     -p "WorkingDirectory=$TASK_ROOT" \
     "$TASK_ROOT/target/ci/sail-rs" --no-core --lean -dprofile "$OUT/model.sail" \
