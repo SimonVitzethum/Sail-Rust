@@ -203,7 +203,17 @@ impl Copier<'_, '_> {
         let kind = match &t.kind {
             TypKind::Unknown => TypKind::Unknown,
             TypKind::Id(name) => TypKind::Id(self.name(name)),
-            TypKind::Var(symbol) => TypKind::Var(self.symbol(*symbol)),
+            TypKind::Var(symbol) => {
+                let text = self.from.resolve(*symbol).unwrap_or_default();
+                if let Some(TypArg {
+                    kind: TypArgKind::Typ(arg),
+                    ..
+                }) = self.subst.get(text)
+                {
+                    return arg.clone();
+                }
+                TypKind::Var(self.symbol(*symbol))
+            }
             TypKind::Fn { args, ret } => TypKind::Fn {
                 args: args.iter().map(|a| self.typ(a)).collect(),
                 ret: Box::new(self.typ(ret)),
@@ -460,4 +470,175 @@ pub fn expand_type_def(
         }
     }
     Some((expanded, Arc::new(to)))
+}
+
+/// Substitute outcome parameters in a scheme (OCaml `typquant_subst` and
+/// `typ_subst`). Each argument arrives with its own interner; instantiated
+/// binders disappear from the quantifier, constraints stay substituted.
+pub fn instantiate_scheme(
+    typschm: &TypSchm,
+    interner: &Arc<SimpleInterner>,
+    args: &[(String, TypArg, Arc<SimpleInterner>)],
+) -> (TypSchm, Arc<SimpleInterner>) {
+    let mut to = (**interner).clone();
+    let no_synonyms = |_: &str| None;
+    let mut subst = HashMap::new();
+    for (name, arg, arg_interner) in args {
+        let copied = Copier {
+            from: arg_interner,
+            to: &mut to,
+            subst: HashMap::new(),
+            lookup: &no_synonyms,
+        }
+        .arg(arg);
+        subst.insert(name.clone(), copied);
+    }
+    let mut copier = Copier {
+        from: interner,
+        to: &mut to,
+        subst,
+        lookup: &no_synonyms,
+    };
+    let quant = typschm
+        .quant
+        .iter()
+        .filter_map(|item| match item {
+            QuantItem::Id(binder) => {
+                let name = copier.from.resolve(binder.kid).unwrap_or_default();
+                if copier.subst.contains_key(name) {
+                    None
+                } else {
+                    Some(copier.quant(item))
+                }
+            }
+            QuantItem::Constraint(_) => Some(copier.quant(item)),
+        })
+        .collect();
+    let typ = copier.typ(&typschm.typ);
+    (TypSchm { quant, typ }, Arc::new(to))
+}
+
+/// Substitute outcome parameters in a constraint copied into `to`.
+pub fn instantiate_constraint(
+    constraint: &Constraint,
+    from: &SimpleInterner,
+    to: &mut SimpleInterner,
+    args: &[(String, TypArg, Arc<SimpleInterner>)],
+) -> Constraint {
+    let no_synonyms = |_: &str| None;
+    let mut subst = HashMap::new();
+    for (name, arg, arg_interner) in args {
+        let copied = Copier {
+            from: arg_interner,
+            to: &mut *to,
+            subst: HashMap::new(),
+            lookup: &no_synonyms,
+        }
+        .arg(arg);
+        subst.insert(name.clone(), copied);
+    }
+    Copier {
+        from,
+        to,
+        subst,
+        lookup: &no_synonyms,
+    }
+    .constraint(constraint)
+}
+
+/// Compact rendering used to compare instantiation arguments across interners.
+pub fn render_arg(arg: &TypArg, interner: &Arc<SimpleInterner>) -> String {
+    let mut to = SimpleInterner::new();
+    let no_synonyms = |_: &str| None;
+    let copied = Copier {
+        from: interner,
+        to: &mut to,
+        subst: HashMap::new(),
+        lookup: &no_synonyms,
+    }
+    .arg(arg);
+    // Symbols are assigned in first-use order, so equal arguments produce
+    // equal structure; resolve them back to text for the rendering.
+    fn go(a: &TypArg, it: &SimpleInterner, out: &mut String) {
+        match &a.kind {
+            TypArgKind::NExp(n) => nexp(n, it, out),
+            TypArgKind::Bool(c) => constraint(c, it, out),
+            TypArgKind::Typ(t) => typ(t, it, out),
+        }
+    }
+    fn nexp(n: &NExp, it: &SimpleInterner, out: &mut String) {
+        match &n.kind {
+            NExpKind::Id(name) => out.push_str(it.resolve(name.symbol).unwrap_or("?")),
+            NExpKind::Var(s) => out.push_str(it.resolve(*s).unwrap_or("?")),
+            NExpKind::Constant(c) => out.push_str(c),
+            NExpKind::App { func, args } => {
+                out.push_str(it.resolve(func.symbol).unwrap_or("?"));
+                out.push('(');
+                for a in args {
+                    nexp(a, it, out);
+                    out.push(',');
+                }
+                out.push(')');
+            }
+            NExpKind::If { .. } => out.push_str("if"),
+            NExpKind::Times(a, b) => bin("*", a, b, it, out),
+            NExpKind::Sum(a, b) => bin("+", a, b, it, out),
+            NExpKind::Minus(a, b) => bin("-", a, b, it, out),
+            NExpKind::Exp(a) => {
+                out.push_str("2^(");
+                nexp(a, it, out);
+                out.push(')');
+            }
+            NExpKind::Neg(a) => {
+                out.push_str("-(");
+                nexp(a, it, out);
+                out.push(')');
+            }
+        }
+    }
+    fn bin(op: &str, a: &NExp, b: &NExp, it: &SimpleInterner, out: &mut String) {
+        out.push('(');
+        nexp(a, it, out);
+        out.push_str(op);
+        nexp(b, it, out);
+        out.push(')');
+    }
+    fn constraint(_c: &Constraint, _it: &SimpleInterner, out: &mut String) {
+        out.push_str("<constraint>");
+    }
+    fn typ(t: &Typ, it: &SimpleInterner, out: &mut String) {
+        match &t.kind {
+            TypKind::Id(n) => out.push_str(it.resolve(n.symbol).unwrap_or("?")),
+            TypKind::Var(s) => out.push_str(it.resolve(*s).unwrap_or("?")),
+            TypKind::App { name, args } => {
+                out.push_str(it.resolve(name.symbol).unwrap_or("?"));
+                out.push('(');
+                for a in args {
+                    go(a, it, out);
+                    out.push(',');
+                }
+                out.push(')');
+            }
+            TypKind::Tuple(items) => {
+                out.push('(');
+                for i in items {
+                    typ(i, it, out);
+                    out.push(',');
+                }
+                out.push(')');
+            }
+            TypKind::Fn { args, ret } => {
+                for a in args {
+                    typ(a, it, out);
+                    out.push(',');
+                }
+                out.push_str("->");
+                typ(ret, it, out);
+            }
+            _ => out.push_str("<type>"),
+        }
+    }
+    let mut out = String::new();
+    go(&copied, &to, &mut out);
+    out
 }

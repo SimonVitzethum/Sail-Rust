@@ -167,7 +167,14 @@ pub fn run(frontend: &FrontendProgram) -> Result<Checked, CliError> {
         let content = id(&descriptor)?;
         let (def, interner) = load_definition(&frontend.warm, &content)?;
         let bytes = blob_bytes(frontend, &content)?;
-        let result = program.declare(&def, Arc::new(interner), position);
+        let interner = Arc::new(interner);
+        let result = if matches!(def.kind, sail_ast::DefKind::Let { .. }) {
+            program
+                .infer_let(&def, interner.clone(), position)
+                .and_then(|inferred| program.declare_with(&def, interner, position, &inferred))
+        } else {
+            program.declare(&def, interner, position)
+        };
         drop_definition(def);
         result.map_err(|e| type_error(frontend, "declaration", e))?;
         ooc.streamed += 1;

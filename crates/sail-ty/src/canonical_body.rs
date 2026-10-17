@@ -365,6 +365,9 @@ struct Checker<'a> {
     /// one. They are not rigid function quantifiers: proofs substitute the
     /// witness of the bound value.
     tyvars: Vec<(Symbol, Scalar)>,
+    /// Rigid witnesses met while grounding lengths to Mini numerics, under
+    /// unique names, so obligations can link them back to their binders.
+    witness_links: std::cell::RefCell<Vec<(String, Scalar)>>,
     /// Set while a condition is used only positively (assertions).
     weak_facts: std::cell::Cell<bool>,
     /// Name of the call being resolved, for diagnostics only (expression
@@ -427,13 +430,9 @@ impl crate::scattered_elab::ScatteredView for ProgramScattered<'_> {
     }
 }
 
-pub(crate) fn check(
-    program: &Program,
-    def: &Def,
-    it: Arc<SimpleInterner>,
-    position: usize,
-) -> TypeResult<usize> {
-    let mut checker = Checker {
+impl<'a> Checker<'a> {
+    fn new(program: &'a Program, it: Arc<SimpleInterner>, position: usize) -> Self {
+        Checker {
         program,
         it,
         position,
@@ -446,10 +445,60 @@ pub(crate) fn check(
         calls: HashMap::new(),
         proof_scope: Arc::default(),
         tyvars: Vec::new(),
+        witness_links: std::cell::RefCell::new(Vec::new()),
         weak_facts: std::cell::Cell::new(false),
         call_hint: std::cell::RefCell::new(String::new()),
         synth_depth: 0,
+    }
+    }
+}
+
+/// Types of the names bound by an unannotated global `let`, inferred from its
+/// initializer (OCaml `check_letdef`). Only types that do not depend on call
+/// substitutions snapshot exactly; numeric ones fall back to `int`.
+pub(crate) fn infer_global_let(
+    program: &Program,
+    def: &Def,
+    it: Arc<SimpleInterner>,
+    position: usize,
+) -> TypeResult<Vec<(String, Arc<Scheme>)>> {
+    let DefKind::Let { pat, exp } = &def.kind else {
+        return Ok(Vec::new());
     };
+    // Annotated bindings are declared with their annotation already.
+    if matches!(pat.kind, PatKind::Typ { .. }) {
+        return Ok(Vec::new());
+    }
+    let mut checker = Checker::new(program, it, position);
+    let scope = Arc::new(Scope::default());
+    let typ = checker.infer(exp, &scope)?;
+    let mut locals = Scope::default();
+    checker.pattern(pat, typ, false, &mut locals)?;
+    let mut bound = Vec::new();
+    for (name, (typ, _)) in locals.locals.clone() {
+        let typ = checker.closed_snapshot(&typ, def.span)?;
+        let node = typ.node().clone();
+        bound.push((
+            name,
+            Arc::new(Scheme {
+                typschm: TypSchm {
+                    quant: Vec::new(),
+                    typ: node,
+                },
+                interner: typ.root.interner.clone(),
+            }),
+        ));
+    }
+    Ok(bound)
+}
+
+pub(crate) fn check(
+    program: &Program,
+    def: &Def,
+    it: Arc<SimpleInterner>,
+    position: usize,
+) -> TypeResult<usize> {
+    let mut checker = Checker::new(program, it, position);
     match &def.kind {
         DefKind::Fundef { rec, funcls, .. } => {
             program.check_function_header(def, &checker.it, position)?;
@@ -466,6 +515,15 @@ pub(crate) fn check(
         // scattered tables instead of the blanket `Unsupported`. Headers,
         // enum members and ends carry no body work; mapping/union clauses
         // keep a precise `Unsupported` until their elaboration lands.
+        // Block openings were validated by `declare_scattered` (their own
+        // declaration is visible at this position, so re-running the
+        // open-block rule here would reject every header).
+        DefKind::Scattered(
+            ScatteredDef::Function { .. }
+            | ScatteredDef::Mapping { .. }
+            | ScatteredDef::Variant { .. }
+            | ScatteredDef::Enum(_),
+        ) => {}
         DefKind::Scattered(scat) => {
             use crate::scattered_elab::BodyPlan;
             let view = ProgramScattered { program, position };
@@ -562,7 +620,10 @@ pub(crate) fn check(
             }
         }
         DefKind::Impl(_) => return Err(unsupported(def.span, "implementation outside an outcome")),
-        DefKind::Mapdef { .. } | DefKind::Instantiation { .. } | DefKind::InternalMutrec(_) => {
+        // Validated when the instantiation is declared (parameters, outcome
+        // constraints, required functions); nothing is left to check here.
+        DefKind::Instantiation { .. } => {}
+        DefKind::Mapdef { .. } | DefKind::InternalMutrec(_) => {
             return Err(unsupported(
                 def.span,
                 "mapping, scattered, outcome or measure definition",
@@ -1089,6 +1150,66 @@ impl Checker<'_> {
             .cloned()
             .map(Type::root)
             .ok_or_else(|| TypeError::unbound_var(name.span, name_text.to_owned()))
+    }
+    /// OCaml `infer_funapp'`: `f()` calls a function whose formals are all
+    /// `implicit(..)` without explicit arguments.
+    fn effective_args<'a>(candidates: &[Type], args: &'a [Exp]) -> &'a [Exp] {
+        let [only] = args else {
+            return args;
+        };
+        let ExpKind::Lit(lit) = &only.kind else {
+            return args;
+        };
+        if !matches!(lit.kind, LitKind::Unit) || candidates.is_empty() {
+            return args;
+        }
+        let implicit_only = candidates.iter().all(|callee| match &callee.node().kind {
+            TypKind::Fn { args: formals, .. } => {
+                !formals.is_empty()
+                    && formals.iter().all(|formal| Self::is_implicit_formal(callee, formal))
+            }
+            _ => false,
+        });
+        if implicit_only {
+            &args[..0]
+        } else {
+            args
+        }
+    }
+    /// A type without free call substitutions, for storing in the frozen
+    /// declaration tables: numeric widths and lengths are grounded to
+    /// constants; refinements that stay symbolic widen or fail honestly.
+    fn closed_snapshot(&mut self, typ: &Type, span: Span) -> TypeResult<Type> {
+        let typ = self.resolve(typ)?;
+        let plain = typ.substitutions.scalars.is_empty() && typ.substitutions.types.is_empty();
+        match (&typ.node().kind, typ.name()) {
+            (TypKind::Tuple(items), _) => {
+                let mut parts = Vec::with_capacity(items.len());
+                for index in 0..items.len() {
+                    parts.push(self.closed_snapshot(&typ.child(Step::Tuple(index)), span)?);
+                }
+                Ok(self.tuple_type(parts))
+            }
+            (_, Some("atom")) if !plain => Ok(self.builtin("int")),
+            (_, Some("atom_bool")) if !plain => Ok(self.builtin("bool")),
+            (TypKind::App { .. }, Some("bitvector" | "bits")) if !plain => {
+                let len = self
+                    .vector_len_nexp(&typ, span)
+                    .ok()
+                    .as_ref()
+                    .and_then(crate::nexp::Nexp::as_const)
+                    .ok_or_else(|| unsupported(span, "global binding has a symbolic vector length"))?;
+                Ok(self.refined(
+                    "bitvector",
+                    TypArgKind::NExp(Node::dummy(NExpKind::Constant(len.to_string()))),
+                ))
+            }
+            _ if plain => Ok(typ),
+            _ => Err(unsupported(
+                span,
+                "global binding has a type that depends on call substitutions",
+            )),
+        }
     }
     fn set_call_hint(&self, name: &Name) {
         if let Ok(text) = self.name(name) {
@@ -1660,13 +1781,22 @@ impl Checker<'_> {
         // Phase 2: frische Knoten für Fallback-Variablen bauen.
         enum Slot {
             Local,
+            Witness(Scalar),
             Fresh(usize),
         }
         let mut fresh_args: Vec<sail_ast::TypArg> = Vec::new();
         let mut slots = Vec::new();
         for (text, sym) in vars.iter().zip(syms.iter()) {
+            let witness = self
+                .witness_links
+                .borrow()
+                .iter()
+                .find(|(name, _)| name == text)
+                .map(|(_, scalar)| scalar.clone());
             if scope.get(text).is_some() {
                 slots.push((text, sym, Slot::Local));
+            } else if let Some(scalar) = witness {
+                slots.push((text, sym, Slot::Witness(scalar)));
             } else {
                 if context_view.is_none() {
                     return Err(unsupported(
@@ -1708,6 +1838,7 @@ impl Checker<'_> {
                     };
                     (node, typ.proof_context())
                 }
+                Slot::Witness(scalar) => (scalar.argument(), scalar.owner.proof_context()),
                 Slot::Fresh(idx) => {
                     // Funktions-Scope: frischer Knoten, Text-Rigid über die
                     // Funktions-Sicht (derselbe Arc wie in den Annahmen).
@@ -1851,6 +1982,45 @@ impl Checker<'_> {
         }
     }
 
+    /// Rigid variable of an opened witness (not a function quantifier): a
+    /// uniquely named Mini variable linked back to its binder.
+    fn witness_link(&self, owner: &Type, symbol: Symbol) -> Option<crate::nexp::Nexp> {
+        let name = owner.root.interner.resolve(symbol)?;
+        if (owner as &dyn Bindings).rigid(name).is_none() {
+            return None;
+        }
+        if self
+            .context
+            .as_ref()
+            .is_some_and(|context| Arc::ptr_eq(context, &owner.scope))
+        {
+            return None;
+        }
+        let mut it = SimpleInterner::new();
+        let variable = it.intern(name);
+        let atom = Name::dummy(it.intern("atom"));
+        let typ = Node::dummy(TypKind::App {
+            name: atom,
+            args: vec![Node::dummy(TypArgKind::NExp(Node::dummy(NExpKind::Var(variable))))],
+        });
+        let synthetic = Type {
+            root: Arc::new(Scheme {
+                typschm: TypSchm {
+                    quant: Vec::new(),
+                    typ,
+                },
+                interner: Arc::new(it),
+            }),
+            path: Vec::new(),
+            scope: owner.scope.clone(),
+            substitutions: Arc::default(),
+            implicit_argument: false,
+        };
+        let mut links = self.witness_links.borrow_mut();
+        let unique = format!("{name}#{}", links.len());
+        links.push((unique.clone(), Scalar { owner: synthetic, index: 0 }));
+        Some(crate::nexp::Nexp::Var(unique))
+    }
     /// Resolve a rigid remainder to Mini text (home tables first, then the
     /// checker interner). `None` when unresolvable (fail-closed).
     fn rigid_text(
@@ -1892,6 +2062,7 @@ impl Checker<'_> {
                 node: NExp,
                 owner: Type,
                 owners: Vec<Type>,
+                chain: Vec<(usize, Symbol)>,
             },
             Combine {
                 op: u8,
@@ -1901,6 +2072,7 @@ impl Checker<'_> {
             node,
             owner,
             owners,
+            chain: visited.clone(),
         }];
         let mut values: Vec<Option<Mini>> = Vec::new();
         let mut steps = 0u32;
@@ -1919,6 +2091,7 @@ impl Checker<'_> {
                     mut node,
                     mut owner,
                     mut owners,
+                    mut chain,
                 } => {
                     // Follow phase: resolve variables through same-table
                     // bindings (cycle-guarded); ends at a rigid variable,
@@ -1933,17 +2106,19 @@ impl Checker<'_> {
                                     owners.insert(0, owner.clone());
                                 }
                                 let key = (Arc::as_ptr(&owner.substitutions) as usize, symbol);
-                                if visited.contains(&key) {
-                                    break Terminal::Value(Self::rigid_text(
-                                        &owners, &self.it, symbol,
-                                    ));
+                                if chain.contains(&key) {
+                                    break Terminal::Value(
+                                        self.witness_link(&owner, symbol)
+                                            .or_else(|| Self::rigid_text(&owners, &self.it, symbol)),
+                                    );
                                 }
                                 let Some(bound) = Self::find_binding(symbol, &owner) else {
-                                    break Terminal::Value(Self::rigid_text(
-                                        &owners, &self.it, symbol,
-                                    ));
+                                    break Terminal::Value(
+                                        self.witness_link(&owner, symbol)
+                                            .or_else(|| Self::rigid_text(&owners, &self.it, symbol)),
+                                    );
                                 };
-                                visited.push(key);
+                                chain.push(key);
                                 match &bound.argument().kind {
                                     TypArgKind::NExp(next) => {
                                         node = next.clone();
@@ -1973,11 +2148,49 @@ impl Checker<'_> {
                                     node: (*second).clone(),
                                     owner: owner.clone(),
                                     owners: owners.clone(),
+                                    chain: chain.clone(),
                                 });
                                 stack.push(Task::Build {
                                     node: (*first).clone(),
                                     owner,
                                     owners,
+                                    chain,
+                                });
+                                break Terminal::Combined;
+                            }
+                            NExpKind::App { ref func, ref args }
+                                if args.len() == 2
+                                    && matches!(
+                                        owner.root.interner.resolve(func.symbol),
+                                        Some("div" | "mod")
+                                    ) =>
+                            {
+                                let op = if owner.root.interner.resolve(func.symbol) == Some("div") { 5 } else { 6 };
+                                let (first, second) = (args[0].clone(), args[1].clone());
+                                stack.push(Task::Combine { op });
+                                stack.push(Task::Build {
+                                    node: second,
+                                    owner: owner.clone(),
+                                    owners: owners.clone(),
+                                    chain: chain.clone(),
+                                });
+                                stack.push(Task::Build {
+                                    node: first,
+                                    owner,
+                                    owners,
+                                    chain,
+                                });
+                                break Terminal::Combined;
+                            }
+                            NExpKind::App { ref func, ref args }
+                                if args.len() == 1 && owner.root.interner.resolve(func.symbol) == Some("abs") =>
+                            {
+                                stack.push(Task::Combine { op: 7 });
+                                stack.push(Task::Build {
+                                    node: args[0].clone(),
+                                    owner,
+                                    owners,
+                                    chain,
                                 });
                                 break Terminal::Combined;
                             }
@@ -1992,6 +2205,7 @@ impl Checker<'_> {
                                     node: (*inner).clone(),
                                     owner,
                                     owners,
+                                    chain,
                                 });
                                 break Terminal::Combined;
                             }
@@ -2004,13 +2218,15 @@ impl Checker<'_> {
                 }
                 Task::Combine { op } => {
                     // Binary ops pop right, then left (left was pushed last).
-                    let result = if op <= 2 {
+                    let result = if op <= 2 || op == 5 || op == 6 {
                         match (values.pop(), values.pop()) {
                             (Some(right), Some(left)) => {
                                 let (right, left) = (right?, left?);
                                 Some(match op {
                                     0 => Mini::Add(Box::new(left), Box::new(right)),
                                     1 => Mini::Sub(Box::new(left), Box::new(right)),
+                                    5 => Mini::Div(Box::new(left), Box::new(right)),
+                                    6 => Mini::Mod(Box::new(left), Box::new(right)),
                                     _ => Mini::Mul(Box::new(left), Box::new(right)),
                                 })
                             }
@@ -2018,10 +2234,10 @@ impl Checker<'_> {
                         }
                     } else {
                         match values.pop() {
-                            Some(Some(child)) => Some(if op == 3 {
-                                Mini::Neg(Box::new(child))
-                            } else {
-                                Mini::Exp(Box::new(child))
+                            Some(Some(child)) => Some(match op {
+                                3 => Mini::Neg(Box::new(child)),
+                                7 => Mini::Abs(Box::new(child)),
+                                _ => Mini::Exp(Box::new(child)),
                             }),
                             _ => None,
                         }
@@ -3291,11 +3507,11 @@ impl Checker<'_> {
             // Bounds als Mini-Obligation; Variablen-Linking über
             // `prove_vector_bounds` (Scope-Locals, sonst Funktionssicht).
             // Frische Union: die obige Ausleihe ist durch NLL beendet.
-            let mut union2 = crate::vector_lexp::Union::over(vec![
-                &*root.root.interner as &dyn sail_ast::Interner,
-                &*root.scope.interner as &dyn sail_ast::Interner,
-                &*self.it as &dyn sail_ast::Interner,
-            ]);
+            // Index expression symbols belong to the checked definition's
+            // interner alone; other tables would reuse the same numbers for
+            // different names.
+            let mut union2 =
+                crate::vector_lexp::Union::over(vec![&*self.it as &dyn sail_ast::Interner]);
             // Syntactic indices map directly; any other expression is bound
             // through the numeric witness of its inferred type.
             let witness_scope;
@@ -3528,25 +3744,51 @@ impl Checker<'_> {
                         LExpKind::VectorConcat(parts) => {
                             // OCaml `infer_lexp` LE_vector_concat: every part is
                             // a bitvector target; the target is as wide as all
-                            // parts together (constant widths only here).
-                            let mut total = 0i128;
-                            for part in parts {
+                            // parts together. Lengths link as whole scalars.
+                            let mut it = SimpleInterner::new();
+                            let mut scalars = Vec::new();
+                            let mut sum: Option<NExp> = None;
+                            for (index, part) in parts.iter().enumerate() {
                                 let typ = self.assignment_type(part, scope)?;
                                 let typ = self.resolve(&typ)?;
-                                let width = self
-                                    .vector_len_nexp(&typ, part.span)
-                                    .ok()
-                                    .as_ref()
-                                    .and_then(crate::nexp::Nexp::as_const)
-                                    .ok_or_else(|| {
-                                        unsupported(part.span, "non-constant vector concat target width")
-                                    })?;
-                                total += width;
+                                let TypKind::App { name, args } = &typ.node().kind else {
+                                    return Err(unsupported(part.span, "vector concat target is not a bitvector"));
+                                };
+                                let is_bitvector = typ
+                                    .root
+                                    .interner
+                                    .resolve(name.symbol)
+                                    .is_some_and(|n| n == "bitvector" || n == "bits");
+                                if !is_bitvector
+                                    || !matches!(args.first().map(|a| &a.kind), Some(TypArgKind::NExp(_)))
+                                {
+                                    return Err(unsupported(part.span, "vector concat target is not a bitvector"));
+                                }
+                                let symbol = it.intern(&format!("__part{index}"));
+                                scalars.push((symbol, Scalar { owner: typ, index: 0 }.resolved()));
+                                let var = Node::dummy(NExpKind::Var(symbol));
+                                sum = Some(match sum {
+                                    None => var,
+                                    Some(total) => {
+                                        Node::dummy(NExpKind::Sum(Box::new(total), Box::new(var)))
+                                    }
+                                });
                             }
-                            let joined = self.refined(
-                                "bitvector",
-                                TypArgKind::NExp(Node::dummy(NExpKind::Constant(total.to_string()))),
-                            );
+                            let head = Name::dummy(it.intern("bits"));
+                            let typ = Node::dummy(TypKind::App {
+                                name: head,
+                                args: vec![Node::dummy(TypArgKind::NExp(
+                                    sum.ok_or_else(|| unsupported(lexp.span, "empty vector concat target"))?,
+                                ))],
+                            });
+                            let mut joined = Type::root(Arc::new(Scheme {
+                                typschm: TypSchm { quant: Vec::new(), typ },
+                                interner: Arc::new(it),
+                            }));
+                            joined.substitutions = Arc::new(Substitutions {
+                                types: Vec::new(),
+                                scalars,
+                            });
                             results.push(joined);
                         }
                         LExpKind::Deref(inner) => {
@@ -4454,6 +4696,7 @@ impl Checker<'_> {
                                 continue;
                             }
                             let candidates = self.call_candidates(func, &scope, args.len())?;
+                            let args: &[Exp] = Self::effective_args(&candidates, args);
                             // Shallow calls share sibling-guided inference
                             // for both single callees and overload sets.
                             // Deep chains use the iterative worklist to
@@ -4472,6 +4715,28 @@ impl Checker<'_> {
                             }
                             self.synth_depth += 1;
                             let actual = self.infer_app_actuals(args, &scope, exp.span);
+                            let actual = match actual {
+                                Err(error)
+                                    if candidates.len() == 1
+                                        && matches!(error.kind, TypeErrorKind::Unsupported(_)) =>
+                                {
+                                    // Arguments that cannot synthesize are
+                                    // deferred; the checking pass of this call
+                                    // verifies them against the formals.
+                                    let deferred = Type::owned(
+                                        Node::dummy(TypKind::Unknown),
+                                        self.it.clone(),
+                                    );
+                                    Ok(args
+                                        .iter()
+                                        .map(|arg| {
+                                            self.infer(arg, &scope)
+                                                .unwrap_or_else(|_| deferred.clone())
+                                        })
+                                        .collect())
+                                }
+                                other => other,
+                            };
                             self.synth_depth -= 1;
                             let actual = actual?;
                             self.set_call_hint(func);
@@ -5104,7 +5369,7 @@ impl Checker<'_> {
                         continue;
                     }
                     let TypKind::App { args: found, .. } = &actual.node().kind else {
-                        return Err(unsupported(span, "synonym expansion during instantiation"));
+                        return Err(unsupported(span, format!("synonym expansion during instantiation (formal {}, actual {}, result_context {})", formal.label(), actual.label(), result_context)));
                     };
                     if formal.name() != actual.name() {
                         return Err(mismatch(span, &formal, &actual));
@@ -5379,6 +5644,7 @@ impl Checker<'_> {
                         continue;
                     }
                     let mut candidates = self.call_candidates(func, &scope, args.len())?;
+                    let args: &[Exp] = Self::effective_args(&candidates, args);
                     let callee = if let Some(callee) = self.calls.get(&(exp as *const Exp)) {
                         callee.clone()
                     } else if candidates.len() != 1 || !candidates[0].root.typschm.quant.is_empty()

@@ -276,6 +276,9 @@ pub struct Program {
     instantiations: Vec<Binding<(String, Span)>>,
     constraints: Vec<Binding<(Arc<Constraint>, Arc<SimpleInterner>)>>,
     constraint_synonyms: BTreeMap<String, Vec<Binding<Synonym>>>,
+    /// Outcome parameters fixed by earlier instantiations (OCaml
+    /// `Env.get_outcome_instantiation`), keyed by parameter name.
+    instantiated: BTreeMap<String, Vec<Binding<(TypArg, Arc<SimpleInterner>)>>>,
     solvers: SolverPool<SmtLibSolver>,
     default_order: Option<(Order, usize)>,
 }
@@ -301,6 +304,7 @@ impl Default for Program {
             instantiations: Vec::new(),
             constraints: Vec::new(),
             constraint_synonyms: BTreeMap::new(),
+            instantiated: BTreeMap::new(),
             solvers: SolverPool::with_default_cache(SmtLibSolver::new),
             default_order: None,
         }
@@ -372,6 +376,16 @@ impl Program {
     pub fn new() -> Self {
         Self::default()
     }
+    /// Infer the types of an unannotated global `let` against the
+    /// declarations visible at `position`.
+    pub fn infer_let(
+        &self,
+        def: &Def,
+        it: Arc<SimpleInterner>,
+        position: usize,
+    ) -> TypeResult<Vec<(String, Arc<Scheme>)>> {
+        crate::canonical_body::infer_global_let(self, def, it, position)
+    }
     pub(crate) fn prove(&self, query: CanonicalQuery) -> sail_solver::SolverVerdict {
         let dump = std::env::var_os("SAIL_RS_DUMP_SMT").is_some();
         let script = dump.then(|| format!("{query:?}"));
@@ -422,6 +436,17 @@ impl Program {
         def: &Def,
         it: Arc<SimpleInterner>,
         position: usize,
+    ) -> TypeResult<()> {
+        self.declare_with(def, it, position, &[])
+    }
+    /// Like [`Self::declare`], with inferred schemes for the unannotated
+    /// names of a global `let`.
+    pub fn declare_with(
+        &mut self,
+        def: &Def,
+        it: Arc<SimpleInterner>,
+        position: usize,
+        inferred: &[(String, Arc<Scheme>)],
     ) -> TypeResult<()> {
         match &def.kind {
             DefKind::Type(typ) => {
@@ -827,7 +852,19 @@ impl Program {
                 }
                 self.global_lets.extend(names);
                 for (name, typ) in bindings {
-                    let Some(typ) = typ else { continue };
+                    let Some(typ) = typ else {
+                        if let Some((_, scheme)) = inferred.iter().find(|(bound, _)| *bound == name) {
+                            self.values.entry(name).or_default().push(Binding {
+                                position: visible_from,
+                                value: Value {
+                                    inline: false,
+                                    enumeration_member: false,
+                                    scheme: scheme.clone(),
+                                },
+                            });
+                        }
+                        continue;
+                    };
                     self.values.entry(name).or_default().push(Binding {
                         position: visible_from,
                         value: Value {
@@ -1089,14 +1126,163 @@ impl Program {
                 });
                 Ok(())
             }
-            DefKind::Instantiation { name, .. } => {
+            DefKind::Instantiation { name, substs } => {
                 let name_text = text(it.as_ref(), name.symbol, name.span)?.to_owned();
-                if self.outcome(&name_text, position).is_none() {
+                let Some(outcome) = self.outcome(&name_text, position) else {
                     return Err(failure(
                         name.span,
                         format!("instantiation of unknown outcome '{name_text}'"),
                     ));
+                };
+                let (params, typschm, outcome_it) =
+                    (outcome.params.clone(), outcome.typschm.clone(), outcome.interner.clone());
+                let binders: Vec<(String, KOpt)> = params
+                    .iter()
+                    .filter_map(|item| match item {
+                        QuantItem::Id(binder) => {
+                            Some((text(outcome_it.as_ref(), binder.kid, name.span).ok()?.to_owned(), *binder))
+                        }
+                        QuantItem::Constraint(_) => None,
+                    })
+                    .collect();
+                // Arguments fixed so far, then the new ones of this command.
+                let mut args: Vec<(String, TypArg, Arc<SimpleInterner>)> = Vec::new();
+                for (param, _) in &binders {
+                    if let Some(previous) = self
+                        .instantiated
+                        .get(param)
+                        .and_then(|history| at(history, position))
+                    {
+                        args.push((param.clone(), previous.0.clone(), previous.1.clone()));
+                    }
                 }
+                let mut fresh: Vec<(String, TypArg)> = Vec::new();
+                let mut functions: Vec<(String, String, Span)> = Vec::new();
+                for subst in substs {
+                    match subst {
+                        Subst::Typ { kid, arg } => {
+                            let param = text(it.as_ref(), *kid, def.span)?.to_owned();
+                            let Some((_, binder)) = binders.iter().find(|(p, _)| *p == param) else {
+                                return Err(failure(
+                                    def.span,
+                                    format!("'{param}' is not a parameter of outcome '{name_text}'"),
+                                ));
+                            };
+                            match (&arg.kind, binder.kind) {
+                                (TypArgKind::Typ(typ), Kind::Type) => {
+                                    self.check_annotation(typ, &it, position, None)?;
+                                }
+                                (TypArgKind::NExp(_), Kind::Int) | (TypArgKind::Bool(_), Kind::Bool) => {}
+                                _ => {
+                                    return Err(failure(
+                                        def.span,
+                                        format!("argument for '{param}' has the wrong kind"),
+                                    ));
+                                }
+                            }
+                            if let Some((_, previous, previous_it)) =
+                                args.iter().find(|(p, _, _)| *p == param)
+                            {
+                                if constraint_synonym::render_arg(previous, previous_it)
+                                    != constraint_synonym::render_arg(arg, &it)
+                                {
+                                    return Err(failure(
+                                        def.span,
+                                        format!("cannot instantiate '{param}': already instantiated differently"),
+                                    ));
+                                }
+                            } else {
+                                fresh.push((param.clone(), arg.clone()));
+                                args.push((param, arg.clone(), it.clone()));
+                            }
+                        }
+                        Subst::Id { from, to } => {
+                            functions.push((
+                                text(it.as_ref(), from.symbol, from.span)?.to_owned(),
+                                text(it.as_ref(), to.symbol, to.span)?.to_owned(),
+                                to.span,
+                            ));
+                        }
+                    }
+                }
+                for (param, _) in &binders {
+                    if !args.iter().any(|(p, _, _)| p == param) {
+                        return Err(failure(
+                            def.span,
+                            format!("type variable '{param}' must be instantiated"),
+                        ));
+                    }
+                }
+                // Every outcome constraint must hold for the arguments.
+                for item in &params {
+                    let QuantItem::Constraint(constraint) = item else {
+                        continue;
+                    };
+                    let mut closed_it = SimpleInterner::new();
+                    let closed = constraint_synonym::instantiate_constraint(
+                        constraint,
+                        &outcome_it,
+                        &mut closed_it,
+                        &args,
+                    );
+                    let empty = BTreeMap::new();
+                    let query = CanonicalQuery::implication(
+                        &[],
+                        View {
+                            negated: false,
+                            constraint: &closed,
+                            context: Context {
+                                interner: &closed_it,
+                                variables: &empty,
+                                bindings: None,
+                            },
+                        },
+                        None,
+                    )
+                    .map_err(|e| failure(def.span, format!("outcome constraint: {e}")))?;
+                    if !self.prove(query).is_valid() {
+                        return Err(TypeError::constraint_not_proved(
+                            def.span,
+                            "outcome constraint",
+                        ));
+                    }
+                }
+                // Every outcome-local function needs an implementation.
+                let required: Vec<String> = self
+                    .outcome_vals
+                    .range((name_text.clone(), String::new())..)
+                    .take_while(|((outcome_name, _), _)| *outcome_name == name_text)
+                    .filter(|(_, history)| at(history, position).is_some())
+                    .map(|((_, val), _)| val.clone())
+                    .collect();
+                for val in &required {
+                    if !functions.iter().any(|(from, _, _)| from == val) {
+                        return Err(failure(
+                            def.span,
+                            format!("function '{val}' must be instantiated for '{name_text}'"),
+                        ));
+                    }
+                }
+                for (_, to, span) in &functions {
+                    if self.value(to, position).is_none() && self.register(to, position).is_none() {
+                        return Err(TypeError::unbound_var(*span, to.clone()));
+                    }
+                }
+                let (scheme, scheme_it) = constraint_synonym::instantiate_scheme(&typschm, &outcome_it, &args);
+                for (param, arg) in fresh {
+                    self.instantiated.entry(param).or_default().push(Binding {
+                        position,
+                        value: (arg, it.clone()),
+                    });
+                }
+                self.values.entry(name_text.clone()).or_default().push(Binding {
+                    position,
+                    value: Value {
+                        inline: false,
+                        enumeration_member: false,
+                        scheme: Arc::new(Scheme { typschm: scheme, interner: scheme_it }),
+                    },
+                });
                 self.instantiations.push(Binding {
                     position,
                     value: (name_text, def.span),

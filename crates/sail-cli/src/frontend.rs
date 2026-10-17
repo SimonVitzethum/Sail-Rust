@@ -520,6 +520,12 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
                     | DefKind::Outcome { .. }
                     | DefKind::Overload { .. }
                     | DefKind::Default(_)
+                    | DefKind::Scattered(_)
+                    | DefKind::Impl(_)
+                    | DefKind::Measure { .. }
+                    | DefKind::LoopMeasures { .. }
+                    | DefKind::Instantiation { .. }
+                    | DefKind::Mapdef { .. }
                     | DefKind::Fundef {
                         annot: sail_ast::TAnnotOpt::Some { .. },
                         ..

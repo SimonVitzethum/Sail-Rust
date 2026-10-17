@@ -126,7 +126,9 @@ impl Emitter {
             script.push_str(
                 "(assert (forall ((x Int)) (! (=> (>= x 0) (> (sail_pow2 x) 0)) :pattern ((sail_pow2 x)))))\n",
             );
-            let mut seen = std::collections::BTreeSet::new();
+            // Ground values for small exponents let the solver reduce a
+            // symbolic exponent that is pinned to a few constants.
+            let mut seen: std::collections::BTreeSet<usize> = (0..=128).collect();
             let mut rest = self.output.as_str();
             while let Some(at) = rest.find("(sail_pow2 ") {
                 rest = &rest[at + "(sail_pow2 ".len()..];
