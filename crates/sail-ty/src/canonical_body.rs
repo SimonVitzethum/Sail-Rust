@@ -514,7 +514,11 @@ pub(crate) fn check(
         }
         DefKind::Let { pat, exp } => {
             let scope = Arc::new(Scope::default());
-            let typ = checker.infer(exp, &scope)?;
+            let typ = if let PatKind::Typ { typ, .. } = &pat.kind {
+                checker.annotation(typ)?
+            } else {
+                checker.infer(exp, &scope)?
+            };
             let mut locals = Scope::default();
             checker.pattern(pat, typ.clone(), false, &mut locals)?;
             checker.run(vec![Task {
@@ -4826,12 +4830,20 @@ impl Checker<'_> {
                         }
                     }
                 }
-                ExpKind::Return(child) => tasks.push(Task {
-                    exp: child,
-                    expected: returning.clone(),
-                    scope,
-                    returning,
-                }),
+                ExpKind::Return(child) => {
+                    if self.context.is_none() {
+                        return Err(TypeError {
+                            span: exp.span,
+                            kind: TypeErrorKind::QuantError("return outside a function".into()),
+                        });
+                    }
+                    tasks.push(Task {
+                        exp: child,
+                        expected: returning.clone(),
+                        scope,
+                        returning,
+                    });
+                }
                 ExpKind::Throw(payload) => {
                     // OCaml `check_exp` `E_throw`: the payload elaborates
                     // against the `exception` union; the expression
