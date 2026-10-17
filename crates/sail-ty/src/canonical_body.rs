@@ -272,8 +272,7 @@ impl Drop for Scope {
 impl Scope {
     fn branch(self: &Arc<Self>, condition: Option<&Type>, negated: bool) -> Arc<Self> {
         match condition.filter(|typ| typ.name() == Some("atom_bool")) {
-            Some(condition) => {
-                Arc::new(Self {
+            Some(condition) => Arc::new(Self {
                 locals: Vec::new(),
                 facts: vec![(
                     Scalar {
@@ -283,8 +282,7 @@ impl Scope {
                     negated,
                 )],
                 parent: Some(self.clone()),
-                })
-            }
+            }),
             None => self.clone(),
         }
     }
@@ -336,6 +334,10 @@ fn is_vacuous_fact(typ: &Type) -> bool {
     )
 }
 
+/// Limit direct sibling-guided synthesis; deeper call chains use the
+/// iterative worklist. Small-stack stress tests cover the fallback.
+const SYNTH_DIRECT_LIMIT: u32 = 16;
+
 struct Checker<'a> {
     program: &'a Program,
     it: Arc<SimpleInterner>,
@@ -358,6 +360,8 @@ struct Checker<'a> {
     inferred: HashMap<*const Exp, InferredValue>,
     calls: HashMap<*const Exp, Type>,
     proof_scope: Arc<Scope>,
+    /// Direct-synthesis nesting depth (see `SYNTH_DIRECT_LIMIT`).
+    synth_depth: u32,
 }
 #[derive(Clone)]
 struct ForeachTemplate {
@@ -396,17 +400,20 @@ impl crate::scattered_elab::ScatteredView for ProgramScattered<'_> {
             .is_some_and(|decl| !decl.closed)
     }
     fn clause_count(&self, ns: crate::scattered_elab::Namespace, name: &str) -> usize {
-        self.program.scattered_clause_count(ns.into(), name, self.position)
+        self.program
+            .scattered_clause_count(ns.into(), name, self.position)
     }
     fn closed_at(&self, name: &str, position: usize) -> Option<crate::scattered_elab::Namespace> {
         // `scattered_closed_at` returns `program::ScatteredNamespace`; map
         // back variant-for-variant (same four variants, same order).
-        self.program.scattered_closed_at(name, position).map(|ns| match ns {
-            ScatteredNamespace::Function => crate::scattered_elab::Namespace::Function,
-            ScatteredNamespace::Mapping => crate::scattered_elab::Namespace::Mapping,
-            ScatteredNamespace::Variant => crate::scattered_elab::Namespace::Variant,
-            ScatteredNamespace::Enum => crate::scattered_elab::Namespace::Enum,
-        })
+        self.program
+            .scattered_closed_at(name, position)
+            .map(|ns| match ns {
+                ScatteredNamespace::Function => crate::scattered_elab::Namespace::Function,
+                ScatteredNamespace::Mapping => crate::scattered_elab::Namespace::Mapping,
+                ScatteredNamespace::Variant => crate::scattered_elab::Namespace::Variant,
+                ScatteredNamespace::Enum => crate::scattered_elab::Namespace::Enum,
+            })
     }
 }
 
@@ -428,6 +435,7 @@ pub(crate) fn check(
         inferred: HashMap::new(),
         calls: HashMap::new(),
         proof_scope: Arc::default(),
+        synth_depth: 0,
     };
     match &def.kind {
         DefKind::Fundef { rec, funcls, .. } => {
@@ -446,7 +454,7 @@ pub(crate) fn check(
         // enum members and ends carry no body work; mapping/union clauses
         // keep a precise `Unsupported` until their elaboration lands.
         DefKind::Scattered(scat) => {
-            use crate::scattered_elab::{BodyPlan, ScatteredView};
+            use crate::scattered_elab::BodyPlan;
             let view = ProgramScattered { program, position };
             match crate::scattered_elab::elaborate(def, &checker.it, &view, position)? {
                 BodyPlan::AcceptHeader { .. }
@@ -484,7 +492,12 @@ pub(crate) fn check(
         }
         DefKind::LoopMeasures { name, measures } => {
             let count = crate::measure_check::check_loop_measures_target(
-                program, name, &checker.it, measures, position, def.span,
+                program,
+                name,
+                &checker.it,
+                measures,
+                position,
+                def.span,
             )?;
             debug_assert_eq!(count, measures.len());
             checker.loop_measures(measures)?;
@@ -630,6 +643,9 @@ impl Checker<'_> {
         if let Some(typ) = self.inferred.get(&(exp as *const Exp)) {
             return typ.value.clone();
         }
+        // Existential results open once here (memoized: stable binder
+        // identities for every later use of this expression).
+        let declared = self.open_existential(&declared);
         let shared: Arc<Type> = Arc::new(declared);
         let typ = self.open_value(&shared);
         self.inferred.insert(
@@ -708,9 +724,10 @@ impl Checker<'_> {
             return Ok(());
         }
         let scope = self.context.as_ref().map(|s| Type::root(s.clone()));
-        let query =
-            CanonicalQuery::equality(&self.proof_assumptions(&scope), left.view(), right.view())
-                .map_err(|e| unsupported(span, e))?;
+        let mut assumptions = self.proof_assumptions(&scope);
+        assumptions.extend(self.marker_assumptions(&[&left.owner, &right.owner]));
+        let query = CanonicalQuery::equality(&assumptions, left.view(), right.view())
+            .map_err(|e| unsupported(span, e))?;
         if !self.program.prove(query).is_valid() {
             return Err(TypeError::constraint_not_proved(
                 span,
@@ -766,8 +783,9 @@ impl Checker<'_> {
         // zugehoerigen Overload normalisieren, bevor die Legacy-`#`-Suche laeuft.
         if let Some(res) = crate::vector_prims::resolve_app(name_text, arg_count) {
             if scope.get(res.overload).is_none() {
-                if let Some(candidates) =
-                    self.program.overload_candidates(res.overload, self.position)?
+                if let Some(candidates) = self
+                    .program
+                    .overload_candidates(res.overload, self.position)?
                 {
                     return Ok(candidates.into_iter().map(Type::root).collect());
                 }
@@ -882,12 +900,8 @@ impl Checker<'_> {
             let siblings: Vec<Type> = actual.iter().filter_map(|typ| typ.clone()).collect();
             let mut recovered = None;
             for sibling in &siblings {
-                match self.select_call(
-                    inner_candidates.clone(),
-                    &inner_actual,
-                    Some(sibling),
-                    span,
-                ) {
+                match self.select_call(inner_candidates.clone(), &inner_actual, Some(sibling), span)
+                {
                     Ok(callee) => {
                         // Like the `App` arm: the operand denotes the
                         // result, not the callee scheme.
@@ -934,14 +948,15 @@ impl Checker<'_> {
                     self.instantiate(callee, actual, expected, span)?
                 };
                 for (actual_index, typ) in actual.iter().enumerate() {
-                    self.compatible(
-                        &callee.child(Step::Argument(explicit[actual_index])),
-                        typ,
-                        span,
-                    )?;
+                    // Actual values may be opened, but a formal existential
+                    // is an obligation whose predicate must remain intact.
+                    let formal = callee.child(Step::Argument(explicit[actual_index]));
+                    let found = self.open_existential(typ);
+                    self.compatible(&formal, &found, span)?;
                 }
                 if let Some(expected) = expected {
-                    self.compatible(expected, &callee.child(Step::Result), span)?;
+                    let result = self.open_existential(&callee.child(Step::Result));
+                    self.compatible(expected, &result, span)?;
                 }
                 Ok(callee)
             })();
@@ -1168,9 +1183,9 @@ impl Checker<'_> {
                         format!("index variable {text} is unbound"),
                     ));
                 }
-                fresh_args.push(Node::dummy(TypArgKind::NExp(Node::dummy(
-                    NExpKind::Var(*sym),
-                ))));
+                fresh_args.push(Node::dummy(TypArgKind::NExp(Node::dummy(NExpKind::Var(
+                    *sym,
+                )))));
                 let idx = fresh_args.len() - 1;
                 slots.push((text, sym, Slot::Fresh(idx)));
             }
@@ -1266,7 +1281,7 @@ impl Checker<'_> {
             owner: root.clone(),
             index: 0,
         };
-        self.ground_scalar(&top, &[root.clone()], &mut Vec::new(), 0)
+        self.ground_scalar(&top, &[root.clone()], &mut Vec::new())
             .ok_or_else(|| unsupported(span, "Invalid vector assignment l-expression"))
     }
 
@@ -1284,23 +1299,20 @@ impl Checker<'_> {
     /// to a Mini-`Nexp`, grounding variables bound (transitively) to
     /// constants. Unbound variables stay rigid and link later via
     /// scope/function views (`prove_vector_bounds`). Cycle-guarded
-    /// (`visited` over substitution-`Arc` + symbol) and fuel-capped;
-    /// `None` is honest `Unsupported`, never a guess.
+    /// (`visited` over substitution-`Arc` + symbol) and step-capped;
+    /// `None` is honest `Unsupported`, never a guess. The top chain is
+    /// an explicit loop; node lowering goes through `ground_node`.
     fn ground_scalar(
         &self,
         scalar: &Scalar,
         extra: &[Type],
         visited: &mut Vec<(usize, Symbol)>,
-        depth: usize,
     ) -> Option<crate::nexp::Nexp> {
-        if depth > 64 {
-            return None;
-        }
         let mut owners: Vec<Type> = Vec::with_capacity(extra.len() + 1);
         owners.push(scalar.owner.clone());
         owners.extend(extra.iter().cloned());
         let mut current = scalar.clone();
-        let mut fuel = 64;
+        let mut fuel = 64u32;
         loop {
             if fuel == 0 {
                 return None;
@@ -1335,82 +1347,192 @@ impl Checker<'_> {
         }
         match &current.argument().kind {
             TypArgKind::NExp(node) => {
-                self.ground_nexp(node, &current.owner, &owners, visited, depth + 1)
+                self.ground_node(node.clone(), current.owner.clone(), owners, visited)
             }
             _ => None,
         }
     }
 
-    /// Lower an AST-`NExp` to Mini, grounding bound variables recursively.
-    /// Supported: constants, variables, `+`/`-`/`*`, unary `-`, `2 ^`.
-    /// Anything else (`if`, numeric applications, `Id`) is `None`
-    /// (honest `Unsupported`, never guessed).
-    fn ground_nexp(
+    /// Resolve a rigid remainder to Mini text (home tables first, then the
+    /// checker interner). `None` when unresolvable (fail-closed).
+    fn rigid_text(
+        owners: &[Type],
+        it: &SimpleInterner,
+        symbol: Symbol,
+    ) -> Option<crate::nexp::Nexp> {
+        let mut chain: Vec<&dyn sail_ast::Interner> = Vec::with_capacity(2 * owners.len() + 1);
+        for table in owners {
+            chain.push(&*table.root.interner as &dyn sail_ast::Interner);
+            chain.push(&*table.scope.interner as &dyn sail_ast::Interner);
+        }
+        chain.push(it as &dyn sail_ast::Interner);
+        let union = crate::vector_lexp::Union::over(chain);
+        union
+            .resolve(symbol)
+            .map(|text| crate::nexp::Nexp::Var(text.to_owned()))
+    }
+
+    /// Iterative Mini lowering over owned nodes (no recursion): an
+    /// explicit stack processes followed chains (inside `Build`), node
+    /// shapes (`Build`) and combinations (`Combine`); results flow
+    /// through a value stack that stays balanced (every task pushes
+    /// exactly one value). Variable chains follow same-table bindings
+    /// with the shared `visited` cycle guard; unbound variables resolve
+    /// to rigid text; total steps are capped (fail-closed). Behavior
+    /// matches the former mutually-recursive pair exactly.
+    fn ground_node(
         &self,
-        node: &NExp,
-        owner: &Type,
-        extra: &[Type],
+        node: NExp,
+        owner: Type,
+        owners: Vec<Type>,
         visited: &mut Vec<(usize, Symbol)>,
-        depth: usize,
     ) -> Option<crate::nexp::Nexp> {
         use crate::nexp::Nexp as Mini;
-        if depth > 64 {
-            return None;
+        // Combine ops: 0 = Add, 1 = Sub, 2 = Mul, 3 = Neg, 4 = Exp.
+        enum Task {
+            Build {
+                node: NExp,
+                owner: Type,
+                owners: Vec<Type>,
+            },
+            Combine {
+                op: u8,
+            },
         }
-        match &node.kind {
-            NExpKind::Constant(text) => text.parse::<i128>().ok().map(Mini::Const),
-            NExpKind::Var(symbol) => {
-                let mut owners: Vec<Type> = Vec::with_capacity(extra.len() + 1);
-                owners.push(owner.clone());
-                owners.extend(extra.iter().cloned());
-                let key = (Arc::as_ptr(&owner.substitutions) as usize, *symbol);
-                if !visited.contains(&key) {
-                    if let Some(bound) = Self::find_binding(*symbol, owner) {
-                        visited.push(key);
-                        return self.ground_scalar(&bound, &owners, visited, depth + 1);
+        let mut stack = vec![Task::Build {
+            node,
+            owner,
+            owners,
+        }];
+        let mut values: Vec<Option<Mini>> = Vec::new();
+        let mut steps = 0u32;
+        // A completed task always leaves exactly one value behind.
+        enum Terminal {
+            Combined,
+            Value(Option<Mini>),
+        }
+        while let Some(task) = stack.pop() {
+            steps += 1;
+            if steps > 10_000 {
+                return None;
+            }
+            match task {
+                Task::Build {
+                    mut node,
+                    mut owner,
+                    mut owners,
+                } => {
+                    // Follow phase: resolve variables through same-table
+                    // bindings (cycle-guarded); ends at a rigid variable,
+                    // a constant, a compound shape (pushed below), or an
+                    // unsupported shape.
+                    let terminal: Terminal = loop {
+                        match node.kind {
+                            NExpKind::Var(symbol) => {
+                                if !owners.iter().any(|known| {
+                                    Arc::ptr_eq(&known.substitutions, &owner.substitutions)
+                                }) {
+                                    owners.insert(0, owner.clone());
+                                }
+                                let key = (Arc::as_ptr(&owner.substitutions) as usize, symbol);
+                                if visited.contains(&key) {
+                                    break Terminal::Value(Self::rigid_text(
+                                        &owners, &self.it, symbol,
+                                    ));
+                                }
+                                let Some(bound) = Self::find_binding(symbol, &owner) else {
+                                    break Terminal::Value(Self::rigid_text(
+                                        &owners, &self.it, symbol,
+                                    ));
+                                };
+                                visited.push(key);
+                                match &bound.argument().kind {
+                                    TypArgKind::NExp(next) => {
+                                        node = next.clone();
+                                        owner = bound.owner.clone();
+                                        continue;
+                                    }
+                                    _ => break Terminal::Value(None),
+                                }
+                            }
+                            NExpKind::Constant(ref text) => {
+                                break Terminal::Value(text.parse::<i128>().ok().map(Mini::Const));
+                            }
+                            NExpKind::Sum(..) | NExpKind::Minus(..) | NExpKind::Times(..) => {
+                                let op = match node.kind {
+                                    NExpKind::Sum(..) => 0,
+                                    NExpKind::Minus(..) => 1,
+                                    _ => 2,
+                                };
+                                let (first, second) = match node.kind {
+                                    NExpKind::Sum(first, second)
+                                    | NExpKind::Minus(first, second)
+                                    | NExpKind::Times(first, second) => (first, second),
+                                    _ => unreachable!("ground combine shape"),
+                                };
+                                stack.push(Task::Combine { op });
+                                stack.push(Task::Build {
+                                    node: (*second).clone(),
+                                    owner: owner.clone(),
+                                    owners: owners.clone(),
+                                });
+                                stack.push(Task::Build {
+                                    node: (*first).clone(),
+                                    owner,
+                                    owners,
+                                });
+                                break Terminal::Combined;
+                            }
+                            NExpKind::Neg(..) | NExpKind::Exp(..) => {
+                                let (op, inner) = match node.kind {
+                                    NExpKind::Neg(inner) => (3, inner),
+                                    NExpKind::Exp(inner) => (4, inner),
+                                    _ => unreachable!("ground combine shape"),
+                                };
+                                stack.push(Task::Combine { op });
+                                stack.push(Task::Build {
+                                    node: (*inner).clone(),
+                                    owner,
+                                    owners,
+                                });
+                                break Terminal::Combined;
+                            }
+                            _ => break Terminal::Value(None),
+                        }
+                    };
+                    if let Terminal::Value(value) = terminal {
+                        values.push(value);
                     }
                 }
-                // Rigid remainder: home tables first, then outer tables.
-                let mut chain: Vec<&dyn sail_ast::Interner> =
-                    Vec::with_capacity(2 * owners.len() + 1);
-                for table in &owners {
-                    chain.push(&*table.root.interner as &dyn sail_ast::Interner);
-                    chain.push(&*table.scope.interner as &dyn sail_ast::Interner);
+                Task::Combine { op } => {
+                    // Binary ops pop right, then left (left was pushed last).
+                    let result = if op <= 2 {
+                        match (values.pop(), values.pop()) {
+                            (Some(right), Some(left)) => {
+                                let (right, left) = (right?, left?);
+                                Some(match op {
+                                    0 => Mini::Add(Box::new(left), Box::new(right)),
+                                    1 => Mini::Sub(Box::new(left), Box::new(right)),
+                                    _ => Mini::Mul(Box::new(left), Box::new(right)),
+                                })
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        match values.pop() {
+                            Some(Some(child)) => Some(if op == 3 {
+                                Mini::Neg(Box::new(child))
+                            } else {
+                                Mini::Exp(Box::new(child))
+                            }),
+                            _ => None,
+                        }
+                    };
+                    values.push(result);
                 }
-                chain.push(&*self.it as &dyn sail_ast::Interner);
-                let union = crate::vector_lexp::Union::over(chain);
-                union
-                    .resolve(*symbol)
-                    .map(|text| Mini::Var(text.to_owned()))
             }
-            NExpKind::Sum(first, second) => Some(Mini::Add(
-                Box::new(self.ground_nexp(first, owner, extra, visited, depth + 1)?),
-                Box::new(self.ground_nexp(second, owner, extra, visited, depth + 1)?),
-            )),
-            NExpKind::Minus(first, second) => Some(Mini::Sub(
-                Box::new(self.ground_nexp(first, owner, extra, visited, depth + 1)?),
-                Box::new(self.ground_nexp(second, owner, extra, visited, depth + 1)?),
-            )),
-            NExpKind::Times(first, second) => Some(Mini::Mul(
-                Box::new(self.ground_nexp(first, owner, extra, visited, depth + 1)?),
-                Box::new(self.ground_nexp(second, owner, extra, visited, depth + 1)?),
-            )),
-            NExpKind::Neg(inner) => Some(Mini::Neg(Box::new(self.ground_nexp(
-                inner,
-                owner,
-                extra,
-                visited,
-                depth + 1,
-            )?))),
-            NExpKind::Exp(inner) => Some(Mini::Exp(Box::new(self.ground_nexp(
-                inner,
-                owner,
-                extra,
-                visited,
-                depth + 1,
-            )?))),
-            _ => None,
         }
+        values.pop().flatten()
     }
     /// Appended vector type for `@` (OCaml `E_vector_append`), shared by
     /// checking (`run`) and synthesis (`synthesize`).
@@ -1439,18 +1561,16 @@ impl Checker<'_> {
             &*right_typ.scope.interner as &dyn sail_ast::Interner,
             &*self.it as &dyn sail_ast::Interner,
         ]);
-        let left_root =
-            crate::vector_lexp_bridge::vector_root_of_canonical(
-                left_typ.node(),
-                &mut lunion,
-                span,
-            )?;
-        let right_root =
-            crate::vector_lexp_bridge::vector_root_of_canonical(
-                right_typ.node(),
-                &mut runion,
-                span,
-            )?;
+        let left_root = crate::vector_lexp_bridge::vector_root_of_canonical(
+            left_typ.node(),
+            &mut lunion,
+            span,
+        )?;
+        let right_root = crate::vector_lexp_bridge::vector_root_of_canonical(
+            right_typ.node(),
+            &mut runion,
+            span,
+        )?;
         // NLL beendet beide Union-Ausleihen vor `&mut`-Gebrauch.
         let len_left = self.vector_len_nexp(&left_typ, span)?;
         let len_right = self.vector_len_nexp(&right_typ, span)?;
@@ -1464,34 +1584,21 @@ impl Checker<'_> {
                 crate::lexp_bounds::VectorRoot::Vector { .. },
             ) => {
                 let elem = |typ: &Type| -> TypeResult<crate::nexp::MiniTyp> {
-                    let TypKind::App { args, .. } = &typ.node().kind
-                    else {
-                        return Err(unsupported(
-                            span,
-                            "append of non-vector type",
-                        ));
+                    let TypKind::App { args, .. } = &typ.node().kind else {
+                        return Err(unsupported(span, "append of non-vector type"));
                     };
                     let Some(arg) = args.get(1) else {
-                        return Err(unsupported(
-                            span,
-                            "append of non-vector type",
-                        ));
+                        return Err(unsupported(span, "append of non-vector type"));
                     };
                     let TypArgKind::Typ(node) = &arg.kind else {
-                        return Err(unsupported(
-                            span,
-                            "append of non-vector type",
-                        ));
+                        return Err(unsupported(span, "append of non-vector type"));
                     };
-                    let mut union =
-                        crate::vector_lexp::Union::over(vec![
-                            &*typ.root.interner as &dyn sail_ast::Interner,
-                            &*typ.scope.interner as &dyn sail_ast::Interner,
-                            &*self.it as &dyn sail_ast::Interner,
-                        ]);
-                    crate::vector_lexp_bridge::mini_typ_of_canonical(
-                        node, &mut union, span,
-                    )
+                    let mut union = crate::vector_lexp::Union::over(vec![
+                        &*typ.root.interner as &dyn sail_ast::Interner,
+                        &*typ.scope.interner as &dyn sail_ast::Interner,
+                        &*self.it as &dyn sail_ast::Interner,
+                    ]);
+                    crate::vector_lexp_bridge::mini_typ_of_canonical(node, &mut union, span)
                 };
                 let elem_left = elem(&left_typ)?;
                 let elem_right = elem(&right_typ)?;
@@ -1508,39 +1615,37 @@ impl Checker<'_> {
                 ));
             }
         };
-        let sum = crate::nexp::Nexp::Add(
-            Box::new(len_left.clone()),
-            Box::new(len_right.clone()),
-        );
+        let sum = crate::nexp::Nexp::Add(Box::new(len_left.clone()), Box::new(len_right.clone()));
         let sum = match sum.as_const() {
             Some(constant) => crate::nexp::Nexp::Const(constant),
             None => sum,
         };
         let mut git = SimpleInterner::new();
-        fn mini_typ_vars(
-            mini: &crate::nexp::MiniTyp,
-            out: &mut Vec<String>,
-        ) {
+        fn mini_typ_vars(mini: &crate::nexp::MiniTyp, out: &mut Vec<String>) {
             use crate::nexp::MiniTyp as Mini;
-            match mini {
-                Mini::Int | Mini::Bool | Mini::Bit => {}
-                Mini::Bits(n) => n.free_vars(out),
-                Mini::Range(first, second) => {
-                    first.free_vars(out);
-                    second.free_vars(out);
-                }
-                Mini::Named { args, .. } => {
-                    for arg in args {
-                        arg.free_vars(out);
+            // Iterative pre-order walk (no recursion).
+            let mut todo = vec![mini];
+            while let Some(current) = todo.pop() {
+                match current {
+                    Mini::Int | Mini::Bool | Mini::Bit => {}
+                    Mini::Bits(n) => n.free_vars(out),
+                    Mini::Range(first, second) => {
+                        first.free_vars(out);
+                        second.free_vars(out);
                     }
-                }
-                Mini::Fun(first, second) => {
-                    mini_typ_vars(first, out);
-                    mini_typ_vars(second, out);
-                }
-                Mini::Tuple(items) => {
-                    for item in items {
-                        mini_typ_vars(item, out);
+                    Mini::Named { args, .. } => {
+                        for arg in args {
+                            arg.free_vars(out);
+                        }
+                    }
+                    Mini::Fun(first, second) => {
+                        todo.push(first);
+                        todo.push(second);
+                    }
+                    Mini::Tuple(items) => {
+                        for item in items {
+                            todo.push(item);
+                        }
                     }
                 }
             }
@@ -1589,13 +1694,15 @@ impl Checker<'_> {
             ));
         }
         let len_node = crate::conv::nexp_to_ast(&sum, &mut git);
-        let head = if elem_mini.is_none() { "bits" } else { "vector" };
+        let head = if elem_mini.is_none() {
+            "bits"
+        } else {
+            "vector"
+        };
         let head_sym = git.intern(head);
-        let mut result_args =
-            vec![Node::dummy(TypArgKind::NExp(len_node))];
+        let mut result_args = vec![Node::dummy(TypArgKind::NExp(len_node))];
         if let Some(mini) = &elem_mini {
-            let elem_node =
-                crate::vector_lexp_bridge::ast_of_mini_typ(mini, &mut git);
+            let elem_node = crate::vector_lexp_bridge::ast_of_mini_typ(mini, &mut git);
             result_args.push(Node::dummy(TypArgKind::Typ(elem_node)));
         }
         let typ = Node::dummy(TypKind::App {
@@ -1603,10 +1710,7 @@ impl Checker<'_> {
             args: result_args,
         });
         let root = Arc::new(Scheme {
-            typschm: TypSchm {
-                quant: vec![],
-                typ,
-            },
+            typschm: TypSchm { quant: vec![], typ },
             interner: Arc::new(git),
         });
         Ok(Type {
@@ -1626,32 +1730,65 @@ impl Checker<'_> {
     /// (`Constant`/`Var`/arithmetik); anything else (`Id`, `If`,
     /// applications) is `None` (honest `Unsupported`, never guessed).
     fn rehome_nexp(&self, node: &NExp, git: &mut SimpleInterner) -> Option<NExp> {
-        let kind = match &node.kind {
-            NExpKind::Constant(text) => NExpKind::Constant(text.clone()),
-            NExpKind::Var(symbol) => {
-                NExpKind::Var(git.intern(self.it.resolve(*symbol)?))
+        // Iterative post-order rebuild (no recursion): children first via
+        // an explicit stack, assembled bottom-up keyed by node identity
+        // (ASTs are trees, so every node is visited exactly once).
+        enum Task<'a> {
+            Visit(&'a NExp),
+            Build(&'a NExp),
+        }
+        let mut stack = vec![Task::Visit(node)];
+        let mut built: HashMap<*const NExp, NExp> = HashMap::new();
+        while let Some(task) = stack.pop() {
+            match task {
+                Task::Visit(current) => {
+                    if built.contains_key(&(current as *const NExp)) {
+                        continue;
+                    }
+                    stack.push(Task::Build(current));
+                    match &current.kind {
+                        NExpKind::Sum(first, second)
+                        | NExpKind::Minus(first, second)
+                        | NExpKind::Times(first, second) => {
+                            stack.push(Task::Visit(first));
+                            stack.push(Task::Visit(second));
+                        }
+                        NExpKind::Neg(inner) | NExpKind::Exp(inner) => {
+                            stack.push(Task::Visit(inner));
+                        }
+                        _ => {}
+                    }
+                }
+                Task::Build(current) => {
+                    let child = |built: &HashMap<*const NExp, NExp>, node: &NExp| {
+                        built.get(&(node as *const NExp)).cloned()
+                    };
+                    let kind = match &current.kind {
+                        NExpKind::Constant(text) => NExpKind::Constant(text.clone()),
+                        NExpKind::Var(symbol) => {
+                            NExpKind::Var(git.intern(self.it.resolve(*symbol)?))
+                        }
+                        NExpKind::Sum(first, second) => NExpKind::Sum(
+                            Box::new(child(&built, first)?),
+                            Box::new(child(&built, second)?),
+                        ),
+                        NExpKind::Minus(first, second) => NExpKind::Minus(
+                            Box::new(child(&built, first)?),
+                            Box::new(child(&built, second)?),
+                        ),
+                        NExpKind::Times(first, second) => NExpKind::Times(
+                            Box::new(child(&built, first)?),
+                            Box::new(child(&built, second)?),
+                        ),
+                        NExpKind::Neg(inner) => NExpKind::Neg(Box::new(child(&built, inner)?)),
+                        NExpKind::Exp(inner) => NExpKind::Exp(Box::new(child(&built, inner)?)),
+                        _ => return None,
+                    };
+                    built.insert(current as *const NExp, Node::dummy(kind));
+                }
             }
-            NExpKind::Sum(first, second) => NExpKind::Sum(
-                Box::new(self.rehome_nexp(first, git)?),
-                Box::new(self.rehome_nexp(second, git)?),
-            ),
-            NExpKind::Minus(first, second) => NExpKind::Minus(
-                Box::new(self.rehome_nexp(first, git)?),
-                Box::new(self.rehome_nexp(second, git)?),
-            ),
-            NExpKind::Times(first, second) => NExpKind::Times(
-                Box::new(self.rehome_nexp(first, git)?),
-                Box::new(self.rehome_nexp(second, git)?),
-            ),
-            NExpKind::Neg(inner) => {
-                NExpKind::Neg(Box::new(self.rehome_nexp(inner, git)?))
-            }
-            NExpKind::Exp(inner) => {
-                NExpKind::Exp(Box::new(self.rehome_nexp(inner, git)?))
-            }
-            _ => return None,
-        };
-        Some(Node::dummy(kind))
+        }
+        built.remove(&(node as *const NExp))
     }
 
     /// `E_sizeof` (OCaml `infer_exp`): a type-level variable in expression
@@ -1683,24 +1820,24 @@ impl Checker<'_> {
             .ok_or_else(|| unsupported(span, "size expression outside function context"))?;
         // Fail closed upfront: every variable must be rigid in the
         // function scope, otherwise the emitter would later report an
-        // unbound rigid proof variable.
-        fn collect(node: &NExp, out: &mut Vec<Symbol>) {
-            match &node.kind {
-                NExpKind::Var(symbol) => out.push(*symbol),
+        // unbound rigid proof variable. Collector is an explicit stack.
+        let view = Type::root(context.clone());
+        let mut vars = Vec::new();
+        let mut todo: Vec<&NExp> = vec![&rehomed];
+        while let Some(current) = todo.pop() {
+            match &current.kind {
+                NExpKind::Var(symbol) => vars.push(*symbol),
                 NExpKind::Constant(_) => {}
                 NExpKind::Sum(first, second)
                 | NExpKind::Minus(first, second)
                 | NExpKind::Times(first, second) => {
-                    collect(first, out);
-                    collect(second, out);
+                    todo.push(first);
+                    todo.push(second);
                 }
-                NExpKind::Neg(inner) | NExpKind::Exp(inner) => collect(inner, out),
+                NExpKind::Neg(inner) | NExpKind::Exp(inner) => todo.push(inner),
                 _ => {}
             }
         }
-        let view = Type::root(context.clone());
-        let mut vars = Vec::new();
-        collect(&rehomed, &mut vars);
         for symbol in vars {
             let text = git
                 .resolve(symbol)
@@ -1719,10 +1856,7 @@ impl Checker<'_> {
         });
         Ok(Type {
             root: Arc::new(Scheme {
-                typschm: TypSchm {
-                    quant: vec![],
-                    typ,
-                },
+                typschm: TypSchm { quant: vec![], typ },
                 interner: Arc::new(git),
             }),
             path: Vec::new(),
@@ -1732,6 +1866,126 @@ impl Checker<'_> {
         })
     }
     /// Guard assumption synthesis for conditions (OCaml `E_if`
+    /// assumptions and `assert_constraint`): numeric comparisons over
+    /// atoms contribute their constraint over the operands' *declared*
+    /// type variables (`m < 'n` gives `'m < 'n`), so branch bodies can
+    /// discharge callee constraints (`truncate` needs `'m <= 'n`);
+    /// conjunctions/disjunctions combine iteratively (same text from
+    /// different binder scopes stays `None`); `E_constraint` contributes
+    /// its rigid-checked constraint; literals contribute `True`/`False`.
+    /// Anything unshaped yields `None`: the condition still checks, it
+    /// just assumes nothing — current behavior, never a guess. Only
+    /// numeric comparisons and `&`/`|` over them; `bool` operators and
+    /// custom forms contribute nothing. Boolean nesting uses an explicit
+    /// stack (no recursion); leaves go through `guard_leaf`.
+    ///
+    /// Links map each variable text to a declared-side scalar view
+    /// (`Some`, same-table precise) or to a function-scope rigid
+    /// (`None`, resolved via the fact scope).
+    fn guard_mini(
+        &mut self,
+        exp: &Exp,
+        scope: &Scope,
+        span: Span,
+    ) -> TypeResult<Option<(crate::nexp::NConstraint, Vec<(String, Option<Scalar>)>)>> {
+        use crate::nexp::NConstraint as MiniCons;
+        use std::collections::HashMap;
+        type Links = Vec<(String, Option<Scalar>)>;
+        type Outcome = Option<(MiniCons, Links)>;
+        enum Task<'a> {
+            Visit(&'a Exp),
+            Combine {
+                and: bool,
+                left: *const Exp,
+                right: *const Exp,
+                self_ptr: *const Exp,
+            },
+        }
+        // Same text from different binder scopes must not conflate:
+        // fail closed instead of proving about the wrong rigid.
+        fn provenance(link: &Option<Scalar>, context: &Option<Arc<Scheme>>) -> Option<usize> {
+            match link {
+                Some(scalar) => Some(Arc::as_ptr(&scalar.owner.scope) as usize),
+                None => context.as_ref().map(|s| Arc::as_ptr(s) as usize),
+            }
+        }
+        let mut stack = vec![Task::Visit(exp)];
+        let mut done: HashMap<*const Exp, Outcome> = HashMap::new();
+        while let Some(task) = stack.pop() {
+            match task {
+                Task::Visit(current) => {
+                    let key = current as *const Exp;
+                    if done.contains_key(&key) {
+                        continue;
+                    }
+                    if let ExpKind::App { func, args } = &current.kind {
+                        if args.len() == 2 {
+                            let op = self.name(func)?;
+                            if matches!(op, "&" | "|" | "and_bool" | "or_bool") {
+                                stack.push(Task::Combine {
+                                    and: matches!(op, "&" | "and_bool"),
+                                    left: &args[0] as *const Exp,
+                                    right: &args[1] as *const Exp,
+                                    self_ptr: key,
+                                });
+                                stack.push(Task::Visit(&args[1]));
+                                stack.push(Task::Visit(&args[0]));
+                                continue;
+                            }
+                        }
+                    }
+                    let outcome = self.guard_leaf(current, scope, span)?;
+                    done.insert(key, outcome);
+                }
+                Task::Combine {
+                    and,
+                    left,
+                    right,
+                    self_ptr,
+                } => {
+                    let outcome = match (done.remove(&left), done.remove(&right)) {
+                        (
+                            Some(Some((left_mini, left_links))),
+                            Some(Some((right_mini, right_links))),
+                        ) => {
+                            let mut links = left_links;
+                            let mut conflict = false;
+                            for (text, link) in right_links {
+                                if let Some(existing) =
+                                    links.iter().find(|(bound, _)| bound == &text)
+                                {
+                                    if provenance(&existing.1, &self.context)
+                                        != provenance(&link, &self.context)
+                                    {
+                                        conflict = true;
+                                        break;
+                                    }
+                                } else {
+                                    links.push((text, link));
+                                }
+                            }
+                            if conflict {
+                                None
+                            } else {
+                                let combined = if and {
+                                    MiniCons::And(Box::new(left_mini), Box::new(right_mini))
+                                } else {
+                                    MiniCons::Or(Box::new(left_mini), Box::new(right_mini))
+                                };
+                                Some((combined, links))
+                            }
+                        }
+                        _ => None,
+                    };
+                    done.insert(self_ptr, outcome);
+                }
+            }
+        }
+        Ok(done.remove(&(exp as *const Exp)).flatten())
+    }
+
+    /// Leaf facts for `guard_mini` (no boolean nesting, handled by the
+    /// driver below): numeric
     /// assumptions and `assert_constraint`): numeric comparisons over
     /// atoms contribute their constraint over the operands' *declared*
     /// type variables (`m < 'n` gives `'m < 'n`), so branch bodies can
@@ -1746,61 +2000,16 @@ impl Checker<'_> {
     /// Links map each variable text to a declared-side scalar view
     /// (`Some`, same-table precise) or to a function-scope rigid
     /// (`None`, resolved via the fact scope).
-    fn guard_mini(
+    fn guard_leaf(
         &mut self,
         exp: &Exp,
         scope: &Scope,
-        span: Span,
-    ) -> TypeResult<Option<(crate::nexp::NConstraint, Vec<(String, Option<Scalar>)>)>>
-    {
+        _span: Span,
+    ) -> TypeResult<Option<(crate::nexp::NConstraint, Vec<(String, Option<Scalar>)>)>> {
         use crate::nexp::{NConstraint as MiniCons, Nexp as Mini};
         match &exp.kind {
             ExpKind::App { func, args } if args.len() == 2 => {
                 let op = self.name(func)?;
-                if matches!(op, "&" | "|" | "and_bool" | "or_bool") {
-                    let ctor: fn(Box<MiniCons>, Box<MiniCons>) -> MiniCons =
-                        match op {
-                            "&" | "and_bool" => MiniCons::And,
-                            _ => MiniCons::Or,
-                        };
-                    let Some((left, left_links)) =
-                        self.guard_mini(&args[0], scope, span)?
-                    else {
-                        return Ok(None);
-                    };
-                    let Some((right, right_links)) =
-                        self.guard_mini(&args[1], scope, span)?
-                    else {
-                        return Ok(None);
-                    };
-                    // Same text from different binder scopes must not
-                    // conflate: fail closed instead of proving about the
-                    // wrong rigid.
-                    fn provenance(
-                        link: &Option<Scalar>,
-                        context: &Option<Arc<Scheme>>,
-                    ) -> Option<usize> {
-                        match link {
-                            Some(scalar) => {
-                                Some(Arc::as_ptr(&scalar.owner.scope) as usize)
-                            }
-                            None => context.as_ref().map(|s| Arc::as_ptr(s) as usize),
-                        }
-                    }
-                    let mut links = left_links;
-                    for (text, link) in right_links {
-                        if let Some(existing) = links.iter().find(|(bound, _)| bound == &text) {
-                            if provenance(&existing.1, &self.context)
-                                != provenance(&link, &self.context)
-                            {
-                                return Ok(None);
-                            }
-                        } else {
-                            links.push((text, link));
-                        }
-                    }
-                    return Ok(Some((ctor(Box::new(left), Box::new(right)), links)));
-                }
                 let ctor: fn(Box<Mini>, Box<Mini>) -> MiniCons = match op {
                     "<" => MiniCons::Lt,
                     "<=" => MiniCons::Le,
@@ -1835,25 +2044,20 @@ impl Checker<'_> {
                         },
                         &[declared.clone()],
                         &mut Vec::new(),
-                        0,
                     );
                     let Some(grounded) = grounded else {
                         return Ok(None);
                     };
                     sides.push((declared, grounded));
                 }
-                let [(left_typ, left_nexp), (right_typ, right_nexp)] = sides.as_slice()
-                else {
+                let [(left_typ, left_nexp), (right_typ, right_nexp)] = sides.as_slice() else {
                     unreachable!("two comparison operands")
                 };
                 let mut left_texts = Vec::new();
                 left_nexp.free_vars(&mut left_texts);
                 let mut right_texts = Vec::new();
                 right_nexp.free_vars(&mut right_texts);
-                let obligation = ctor(
-                    Box::new(left_nexp.clone()),
-                    Box::new(right_nexp.clone()),
-                );
+                let obligation = ctor(Box::new(left_nexp.clone()), Box::new(right_nexp.clone()));
                 let mut texts = Vec::new();
                 obligation.free_vars(&mut texts);
                 texts.sort();
@@ -1880,9 +2084,7 @@ impl Checker<'_> {
             ExpKind::Constraint(node) => {
                 // Source constraint over rigid scope variables (like
                 // `sizeof`); anything else stays `Unsupported`-free `None`.
-                let Some(obligation) =
-                    crate::conv::constraint_from_ast(node, &*self.it)
-                else {
+                let Some(obligation) = crate::conv::constraint_from_ast(node, &*self.it) else {
                     return Ok(None);
                 };
                 let Some(context) = self.context.clone() else {
@@ -1914,12 +2116,7 @@ impl Checker<'_> {
     /// Side-linked variables resolve through their views (substitutions
     /// hit before rigid lookup); scope rigids resolve via the function
     /// scope, which needs no substitution entry.
-    fn guard_fact(
-        &mut self,
-        exp: &Exp,
-        scope: &Scope,
-        span: Span,
-    ) -> TypeResult<Option<Type>> {
+    fn guard_fact(&mut self, exp: &Exp, scope: &Scope, span: Span) -> TypeResult<Option<Type>> {
         let Some((obligation, links)) = self.guard_mini(exp, scope, span)? else {
             return Ok(None);
         };
@@ -1941,10 +2138,7 @@ impl Checker<'_> {
             args: vec![Node::dummy(TypArgKind::Bool(Box::new(constraint)))],
         });
         let root = Arc::new(Scheme {
-            typschm: TypSchm {
-                quant: vec![],
-                typ,
-            },
+            typschm: TypSchm { quant: vec![], typ },
             interner: Arc::new(git),
         });
         let scope = context.unwrap_or(root.clone());
@@ -1979,6 +2173,487 @@ impl Checker<'_> {
         self.compatible(&string, &message, msg.span)?;
         Ok(scope.branch(fact.as_ref(), false))
     }
+    /// Open existential heads (OCaml existential elimination): each
+    /// opening rebinds the binders in a fresh scope, so identical texts
+    /// never alias across openings (fresh scope `Arc` = fresh rigid
+    /// identity). Dropped constraints are kept as scope-quant markers
+    /// for `instantiate` to harvest as assumptions (linear conjuncts
+    /// only; `2 ^`-style nonlinear parts stay out — honest gap).
+    /// Binder-only inner types (every builtin shape) link fully; outer
+    /// variables inside keep original views through preserved
+    /// substitutions, truly unbound ones fail honestly downstream.
+    /// Fuel-capped; anything left over returns unchanged (never guessed).
+    fn open_existential(&self, typ: &Type) -> Type {
+        let mut opened = typ.clone();
+        let mut markers = Vec::new();
+        for _ in 0..8 {
+            let TypKind::Exist {
+                binders,
+                constraint,
+                typ: inner,
+            } = &opened.node().kind
+            else {
+                break;
+            };
+            markers.push((**constraint).clone());
+            let shadowed = |symbol: &Symbol| binders.iter().any(|binder| binder.kid == *symbol);
+            let substitutions = Arc::new(Substitutions {
+                types: opened
+                    .substitutions
+                    .types
+                    .iter()
+                    .filter(|(symbol, _)| !shadowed(symbol))
+                    .cloned()
+                    .collect(),
+                scalars: opened
+                    .substitutions
+                    .scalars
+                    .iter()
+                    .filter(|(symbol, _)| !shadowed(symbol))
+                    .cloned()
+                    .collect(),
+            });
+            let scope = Arc::new(Scheme {
+                typschm: TypSchm {
+                    quant: binders
+                        .iter()
+                        .map(|binder| QuantItem::Id(binder.clone()))
+                        .collect(),
+                    typ: Node::dummy(TypKind::Unknown),
+                },
+                interner: opened.root.interner.clone(),
+            });
+            opened = Type {
+                root: Arc::new(Scheme {
+                    typschm: TypSchm {
+                        quant: Vec::new(),
+                        typ: (**inner).clone(),
+                    },
+                    interner: opened.root.interner.clone(),
+                }),
+                path: Vec::new(),
+                scope,
+                substitutions,
+                implicit_argument: opened.implicit_argument,
+            };
+        }
+        if !markers.is_empty() {
+            let scope = opened.scope.clone();
+            let mut quant = scope.typschm.quant.clone();
+            quant.extend(markers.into_iter().map(QuantItem::Constraint));
+            opened = Type {
+                root: opened.root.clone(),
+                path: opened.path.clone(),
+                scope: Arc::new(Scheme {
+                    typschm: TypSchm {
+                        quant,
+                        typ: Node::dummy(TypKind::Unknown),
+                    },
+                    interner: scope.interner.clone(),
+                }),
+                substitutions: opened.substitutions.clone(),
+                implicit_argument: opened.implicit_argument,
+            };
+        }
+        opened
+    }
+    /// Check a value against an existential type (subsumption): bind the
+    /// binders from the found type and prove the constraint, reusing
+    /// `instantiate_relaxed` with a 0-argument callee. Outer variables
+    /// (non-binders) pre-link to function-scope wrapper views, so rigid
+    /// assumptions (e.g. `'l` in `0 <= 'm < 2 ^ 'l`) resolve; truly
+    /// unbound ones fail honestly downstream. Shadowing inside nested
+    /// existentials is respected by symbol.
+    fn check_existential(&self, expected: &Type, found: &Type, span: Span) -> TypeResult<()> {
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum OuterKind {
+            Int,
+            Bool,
+        }
+        /// Iterative outer-variable collector with shadowing
+        /// discipline (no recursion): an explicit stack walks types,
+        /// nexps and constraints; nested `Exist` binders extend the
+        /// binder stack eagerly with a truncation marker behind their
+        /// children (LIFO restores the outer scope exactly).
+        enum CollectTask<'a> {
+            Typ(&'a Typ),
+            NExp(&'a NExp),
+            Constraint(&'a Constraint),
+            PopScope(usize),
+        }
+        fn collect_push(
+            symbol: Symbol,
+            kind: OuterKind,
+            binders: &[Symbol],
+            out: &mut Vec<(Symbol, OuterKind)>,
+        ) {
+            if !binders.contains(&symbol) && !out.iter().any(|(bound, _)| bound == &symbol) {
+                out.push((symbol, kind));
+            }
+        }
+        fn collect_all(
+            typ: &Typ,
+            constraint: &Constraint,
+            binders: &mut Vec<Symbol>,
+            out: &mut Vec<(Symbol, OuterKind)>,
+        ) {
+            let mut stack = vec![CollectTask::Constraint(constraint), CollectTask::Typ(typ)];
+            while let Some(task) = stack.pop() {
+                match task {
+                    CollectTask::Typ(node) => match &node.kind {
+                        TypKind::Var(_) | TypKind::Id(_) | TypKind::Unknown => {}
+                        TypKind::App { args, .. } => {
+                            for arg in args {
+                                match &arg.kind {
+                                    TypArgKind::NExp(nexp) => {
+                                        stack.push(CollectTask::NExp(nexp));
+                                    }
+                                    TypArgKind::Typ(inner) => {
+                                        stack.push(CollectTask::Typ(inner));
+                                    }
+                                    TypArgKind::Bool(inner) => {
+                                        stack.push(CollectTask::Constraint(inner));
+                                    }
+                                }
+                            }
+                        }
+                        TypKind::Tuple(items) => {
+                            for item in items {
+                                stack.push(CollectTask::Typ(item));
+                            }
+                        }
+                        TypKind::Fn { args, ret } => {
+                            stack.push(CollectTask::Typ(ret));
+                            for arg in args {
+                                stack.push(CollectTask::Typ(arg));
+                            }
+                        }
+                        TypKind::Bidir { lhs, rhs } => {
+                            stack.push(CollectTask::Typ(lhs));
+                            stack.push(CollectTask::Typ(rhs));
+                        }
+                        TypKind::Exist {
+                            binders: inner,
+                            constraint,
+                            typ,
+                        } => {
+                            let base = binders.len();
+                            binders.extend(inner.iter().map(|binder| binder.kid));
+                            stack.push(CollectTask::PopScope(base));
+                            stack.push(CollectTask::Typ(typ));
+                            stack.push(CollectTask::Constraint(constraint));
+                        }
+                    },
+                    CollectTask::NExp(node) => match &node.kind {
+                        NExpKind::Var(symbol) => {
+                            collect_push(*symbol, OuterKind::Int, binders, out);
+                        }
+                        NExpKind::Constant(_) | NExpKind::Id(_) => {}
+                        NExpKind::Sum(first, second)
+                        | NExpKind::Minus(first, second)
+                        | NExpKind::Times(first, second) => {
+                            stack.push(CollectTask::NExp(first));
+                            stack.push(CollectTask::NExp(second));
+                        }
+                        NExpKind::Neg(inner) | NExpKind::Exp(inner) => {
+                            stack.push(CollectTask::NExp(inner));
+                        }
+                        NExpKind::If {
+                            cond,
+                            then_branch,
+                            else_branch,
+                        } => {
+                            stack.push(CollectTask::NExp(then_branch));
+                            stack.push(CollectTask::NExp(else_branch));
+                            stack.push(CollectTask::Constraint(cond));
+                        }
+                        NExpKind::App { args, .. } => {
+                            for arg in args {
+                                stack.push(CollectTask::NExp(arg));
+                            }
+                        }
+                    },
+                    CollectTask::Constraint(node) => match &node.kind {
+                        ConstraintKind::True | ConstraintKind::False | ConstraintKind::Id(_) => {}
+                        ConstraintKind::Var(symbol) => {
+                            collect_push(*symbol, OuterKind::Bool, binders, out);
+                        }
+                        ConstraintKind::Equal(first, second)
+                        | ConstraintKind::NotEqual(first, second) => {
+                            for arg in [first, second] {
+                                match &arg.kind {
+                                    TypArgKind::NExp(nexp) => {
+                                        stack.push(CollectTask::NExp(nexp));
+                                    }
+                                    TypArgKind::Typ(inner) => {
+                                        stack.push(CollectTask::Typ(inner));
+                                    }
+                                    TypArgKind::Bool(inner) => {
+                                        stack.push(CollectTask::Constraint(inner));
+                                    }
+                                }
+                            }
+                        }
+                        ConstraintKind::Ge(first, second)
+                        | ConstraintKind::Gt(first, second)
+                        | ConstraintKind::Le(first, second)
+                        | ConstraintKind::Lt(first, second) => {
+                            stack.push(CollectTask::NExp(first));
+                            stack.push(CollectTask::NExp(second));
+                        }
+                        ConstraintKind::Set { nexp, .. } => {
+                            stack.push(CollectTask::NExp(nexp));
+                        }
+                        ConstraintKind::And(first, second) | ConstraintKind::Or(first, second) => {
+                            stack.push(CollectTask::Constraint(first));
+                            stack.push(CollectTask::Constraint(second));
+                        }
+                        ConstraintKind::Not(inner) => {
+                            stack.push(CollectTask::Constraint(inner));
+                        }
+                        ConstraintKind::App { args, .. } => {
+                            for arg in args {
+                                match &arg.kind {
+                                    TypArgKind::NExp(nexp) => {
+                                        stack.push(CollectTask::NExp(nexp));
+                                    }
+                                    TypArgKind::Typ(inner) => {
+                                        stack.push(CollectTask::Typ(inner));
+                                    }
+                                    TypArgKind::Bool(inner) => {
+                                        stack.push(CollectTask::Constraint(inner));
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    CollectTask::PopScope(base) => {
+                        binders.truncate(base);
+                    }
+                }
+            }
+        }
+        let TypKind::Exist {
+            binders,
+            constraint,
+            typ: inner,
+        } = &expected.node().kind
+        else {
+            unreachable!("existential check shape");
+        };
+        let table = expected.root.interner.clone();
+        let mut stack: Vec<Symbol> = binders.iter().map(|binder| binder.kid).collect();
+        let mut outers = Vec::new();
+        collect_all(inner, constraint, &mut stack, &mut outers);
+        // Wrapper views route outer variables to the function scope;
+        // wrapper heads never emit (only the argument is followed).
+        let head = match &inner.kind {
+            TypKind::App { name, .. } => name.clone(),
+            _ => Name::dummy(Symbol::DUMMY),
+        };
+        let mut scalars = Vec::new();
+        if let Some(context) = self.context.clone() {
+            for (symbol, kind) in outers {
+                let var = match kind {
+                    OuterKind::Int => TypArgKind::NExp(Node::dummy(NExpKind::Var(symbol))),
+                    OuterKind::Bool => {
+                        TypArgKind::Bool(Box::new(Node::dummy(ConstraintKind::Var(symbol))))
+                    }
+                };
+                let owner = Type {
+                    root: Arc::new(Scheme {
+                        typschm: TypSchm {
+                            quant: Vec::new(),
+                            typ: Node::dummy(TypKind::App {
+                                name: head.clone(),
+                                args: vec![Node::dummy(var)],
+                            }),
+                        },
+                        interner: table.clone(),
+                    }),
+                    path: Vec::new(),
+                    scope: context.clone(),
+                    substitutions: Arc::new(Substitutions::default()),
+                    implicit_argument: false,
+                };
+                scalars.push((symbol, Scalar { owner, index: 0 }));
+            }
+        }
+        // Found side opens (weakening, sound): evidence carries no
+        // obligations. Formal side stays untouched (identity checks).
+        let found = self.open_existential(found);
+        let fake = Type::root(Arc::new(Scheme {
+            typschm: TypSchm {
+                quant: binders
+                    .iter()
+                    .map(|binder| QuantItem::Id(binder.clone()))
+                    .chain(std::iter::once(QuantItem::Constraint(
+                        (**constraint).clone(),
+                    )))
+                    .collect(),
+                typ: Node::dummy(TypKind::Fn {
+                    args: Vec::new(),
+                    ret: Box::new((**inner).clone()),
+                }),
+            },
+            interner: table,
+        }));
+        let mut fake = fake;
+        fake.substitutions = Arc::new(Substitutions {
+            types: Vec::new(),
+            scalars,
+        });
+        self.instantiate_relaxed(fake, &[], Some(&found), span)?;
+        Ok(())
+    }
+    /// Harvest existential-marker constraints from operand scopes
+    /// (planted by `open_existential`): dropped callee bounds re-enter
+    /// proofs as assumptions with the opening's identities. Marker
+    /// scopes carry a dummy `Unknown` type (never a real scheme), so
+    /// ordinary scheme constraints are never double-added. Nonlinear
+    /// conjuncts (`2 ^`, applications) are skipped (honest gap, the
+    /// emitter would reject them); linear ones prove directly.
+    fn marker_assumptions<'a>(&self, typs: &[&'a Type]) -> Vec<View<'a>> {
+        /// Iterative constraint shape walk (no recursion): reports
+        /// whether the subtree holds anything the SMT emitter rejects
+        /// (`2 ^`, applications, names, sets) and collects free
+        /// variables. One explicit stack over nexps, arguments and
+        /// constraints; early exit on the first symbolic node.
+        fn constraint_shape(node: &Constraint) -> (bool, Vec<Symbol>) {
+            enum Task<'a> {
+                Nexp(&'a NExp),
+                Arg(&'a TypArg),
+                Constraint(&'a Constraint),
+            }
+            let mut symbolic = false;
+            let mut free = Vec::new();
+            let mut stack = vec![Task::Constraint(node)];
+            while let Some(task) = stack.pop() {
+                if symbolic {
+                    break;
+                }
+                match task {
+                    Task::Nexp(current) => match &current.kind {
+                        NExpKind::Constant(_) => {}
+                        NExpKind::Var(symbol) => {
+                            if !free.contains(symbol) {
+                                free.push(*symbol);
+                            }
+                        }
+                        // Names need proof variables the canonical
+                        // context does not carry: fail the whole query
+                        // instead of just skipping, hence symbolic.
+                        NExpKind::Id(_) => symbolic = true,
+                        NExpKind::Sum(first, second)
+                        | NExpKind::Minus(first, second)
+                        | NExpKind::Times(first, second) => {
+                            stack.push(Task::Nexp(first));
+                            stack.push(Task::Nexp(second));
+                        }
+                        NExpKind::Neg(inner) => stack.push(Task::Nexp(inner)),
+                        NExpKind::Exp(_) => symbolic = true,
+                        NExpKind::If {
+                            cond,
+                            then_branch,
+                            else_branch,
+                        } => {
+                            stack.push(Task::Nexp(then_branch));
+                            stack.push(Task::Nexp(else_branch));
+                            stack.push(Task::Constraint(cond));
+                        }
+                        NExpKind::App { .. } => symbolic = true,
+                    },
+                    Task::Arg(current) => match &current.kind {
+                        TypArgKind::NExp(nexp) => stack.push(Task::Nexp(nexp)),
+                        TypArgKind::Typ(_) => symbolic = true,
+                        TypArgKind::Bool(inner) => stack.push(Task::Constraint(inner)),
+                    },
+                    Task::Constraint(current) => match &current.kind {
+                        ConstraintKind::True | ConstraintKind::False => {}
+                        ConstraintKind::Var(symbol) => {
+                            if !free.contains(symbol) {
+                                free.push(*symbol);
+                            }
+                        }
+                        ConstraintKind::Id(_) | ConstraintKind::Set { .. } => symbolic = true,
+                        ConstraintKind::Equal(first, second)
+                        | ConstraintKind::NotEqual(first, second) => {
+                            stack.push(Task::Arg(first));
+                            stack.push(Task::Arg(second));
+                        }
+                        ConstraintKind::Ge(first, second)
+                        | ConstraintKind::Gt(first, second)
+                        | ConstraintKind::Le(first, second)
+                        | ConstraintKind::Lt(first, second) => {
+                            stack.push(Task::Nexp(first));
+                            stack.push(Task::Nexp(second));
+                        }
+                        ConstraintKind::And(first, second) | ConstraintKind::Or(first, second) => {
+                            stack.push(Task::Constraint(first));
+                            stack.push(Task::Constraint(second));
+                        }
+                        ConstraintKind::Not(inner) => stack.push(Task::Constraint(inner)),
+                        ConstraintKind::App { .. } => symbolic = true,
+                    },
+                }
+            }
+            (symbolic, free)
+        }
+        let mut assumptions = Vec::new();
+        for typ in typs {
+            if !matches!(&typ.scope.typschm.typ.kind, TypKind::Unknown) {
+                continue;
+            }
+            let binders: Vec<Symbol> = typ
+                .scope
+                .typschm
+                .quant
+                .iter()
+                .filter_map(|item| match item {
+                    QuantItem::Id(binder) => Some(binder.kid),
+                    QuantItem::Constraint(_) => None,
+                })
+                .collect();
+            for item in &typ.scope.typschm.quant {
+                let QuantItem::Constraint(marker) = item else {
+                    continue;
+                };
+                // Iterative `And` flattening (no recursion); `Or` stays
+                // whole like before.
+                let mut conjuncts = vec![marker];
+                let mut flat = Vec::new();
+                while let Some(current) = conjuncts.pop() {
+                    match &current.kind {
+                        ConstraintKind::And(first, second) => {
+                            conjuncts.push(first);
+                            conjuncts.push(second);
+                        }
+                        _ => flat.push(current),
+                    }
+                }
+                for conjunct in flat {
+                    let (symbolic, free) = constraint_shape(conjunct);
+                    if symbolic {
+                        continue;
+                    }
+                    // Only binder-local conjuncts: outer variables would
+                    // miss in the marker scope and fail the whole query
+                    // instead of just skipping.
+                    if free.iter().any(|symbol| {
+                        !binders.contains(symbol) && typ.substitutions.get_scalar(*symbol).is_none()
+                    }) {
+                        continue;
+                    }
+                    assumptions.push(View {
+                        constraint: conjunct,
+                        context: typ.proof_context(),
+                        negated: false,
+                    });
+                }
+            }
+        }
+        assumptions
+    }
     /// Vector-LHS target type (Lane 41 hook for `assignment_type`).
     ///
     /// Pipeline, load-bearing order:
@@ -2000,9 +2675,7 @@ impl Checker<'_> {
     /// keine, darum meldet der Slice-Pfad nach geprüfter Wurzel und
     /// geprüften Grenzen laut `Unsupported`.
     fn vector_target_type(&mut self, lexp: &LExp, scope: &Scope) -> TypeResult<Type> {
-        use crate::lexp_bounds::{
-            check_index_typ, check_slice_root_len, VectorRoot,
-        };
+        use crate::lexp_bounds::{check_index_typ, check_slice_root_len, VectorRoot};
         use crate::vector_lexp::{as_vector, as_vector_range};
         use crate::vector_lexp_bridge as bridge;
         if let Some((base, index)) = as_vector(lexp) {
@@ -2013,8 +2686,7 @@ impl Checker<'_> {
                 &*root.scope.interner as &dyn sail_ast::Interner,
                 &*self.it as &dyn sail_ast::Interner,
             ]);
-            let vector_root =
-                bridge::vector_root_of_canonical(root.node(), &mut union, lexp.span)?;
+            let vector_root = bridge::vector_root_of_canonical(root.node(), &mut union, lexp.span)?;
             // Len folgt der Substitutions-Kette (Helper; NLL beendet die
             // obige Union-Ausleihe vor dem &mut-Borrow).
             let len_nexp = self.vector_len_nexp(&root, lexp.span)?;
@@ -2064,8 +2736,7 @@ impl Checker<'_> {
                 &*root.scope.interner as &dyn sail_ast::Interner,
                 &*self.it as &dyn sail_ast::Interner,
             ]);
-            let vector_root =
-                bridge::vector_root_of_canonical(root.node(), &mut union, lexp.span)?;
+            let vector_root = bridge::vector_root_of_canonical(root.node(), &mut union, lexp.span)?;
             // Ein `vector`-Root ist hier ein Mismatch (OCaml:
             // "Cannot assign slice of non vector type").
             let _len = check_slice_root_len(&vector_root, lexp.span)?;
@@ -2357,7 +3028,7 @@ impl Checker<'_> {
             .ok_or_else(|| TypeError::unbound_var(span, field.to_owned()))?;
         let accessor = Type::root(scheme);
         let instantiated = self.instantiate(accessor, std::slice::from_ref(base), None, span)?;
-        Ok(instantiated.child(Step::Result))
+        Ok(self.open_existential(&instantiated.child(Step::Result)))
     }
 
     /// Field read `record.field` (OCaml `infer_exp` `E_field`): infer the
@@ -2395,6 +3066,18 @@ impl Checker<'_> {
         while let Some((expected, found)) = pairs.pop() {
             let expected = self.resolve(&expected)?;
             let found = self.resolve(&found)?;
+            // Existential expected: subsumption (bind binders from
+            // found, prove the constraint). Existential found: open
+            // (fresh scope per opening, constraints weakened).
+            if matches!(&expected.node().kind, TypKind::Exist { .. }) {
+                self.check_existential(&expected, &found, span)?;
+                continue;
+            }
+            if matches!(&found.node().kind, TypKind::Exist { .. }) {
+                let found = self.open_existential(&found);
+                pairs.push((expected, found));
+                continue;
+            }
             if matches!(
                 (&expected.node().kind, expected.name(), found.name()),
                 (TypKind::Id(_), Some("int"), Some("atom" | "range" | "nat"))
@@ -2552,10 +3235,7 @@ impl Checker<'_> {
                         .as_ref()
                         .and_then(crate::nexp::Nexp::as_const);
                     let Some(have) = have else {
-                        return Err(unsupported(
-                            pat.span,
-                            "non-constant vector pattern width",
-                        ));
+                        return Err(unsupported(pat.span, "non-constant vector pattern width"));
                     };
                     if have != total {
                         return Err(arity(pat.span, have as usize, total as usize));
@@ -2677,17 +3357,11 @@ impl Checker<'_> {
                     // Fehler, nicht inferierbare Variablen ehrlich
                     // `Unsupported` (aus `instantiate`).
                     let name_text = self.name(func)?;
-                    let Some(scheme) =
-                        self.program.value(name_text, self.position).cloned()
-                    else {
-                        return Err(TypeError::unbound_var(
-                            pat.span,
-                            name_text.to_owned(),
-                        ));
+                    let Some(scheme) = self.program.value(name_text, self.position).cloned() else {
+                        return Err(TypeError::unbound_var(pat.span, name_text.to_owned()));
                     };
                     let callee = Type::root(scheme);
-                    let TypKind::Fn { args: formals, .. } = &callee.node().kind
-                    else {
+                    let TypKind::Fn { args: formals, .. } = &callee.node().kind else {
                         return Err(unsupported(
                             pat.span,
                             format!("pattern constructor '{name_text}' is not a function"),
@@ -2702,25 +3376,16 @@ impl Checker<'_> {
                             .filter_map(|(formal, slot)| slot.map(|_| formal))
                             .collect();
                     let callee = if callee.root.typschm.quant.is_empty() {
-                        self.compatible(
-                            &typ,
-                            &callee.child(Step::Result),
-                            pat.span,
-                        )?;
+                        self.compatible(&typ, &callee.child(Step::Result), pat.span)?;
                         callee
                     } else {
                         // Result-only instantiation: payload patterns have
                         // no types yet; the scrutinee binds the result
                         // variables, sub-patterns check against the
                         // substituted formal types below.
-                        let callee = self.instantiate_relaxed(
-                            callee, &[], Some(&typ), pat.span,
-                        )?;
-                        self.compatible(
-                            &typ,
-                            &callee.child(Step::Result),
-                            pat.span,
-                        )?;
+                        let callee = self.instantiate_relaxed(callee, &[], Some(&typ), pat.span)?;
+                        let result = self.open_existential(&callee.child(Step::Result));
+                        self.compatible(&typ, &result, pat.span)?;
                         callee
                     };
                     for (index, pat) in args.iter().enumerate().rev() {
@@ -2930,9 +3595,7 @@ impl Checker<'_> {
                             continue;
                         }
                         ExpKind::Constraint(_) => {
-                            let Some(fact) =
-                                self.guard_fact(exp, scope, exp.span)?
-                            else {
+                            let Some(fact) = self.guard_fact(exp, scope, exp.span)? else {
                                 return Err(unsupported(
                                     exp.span,
                                     "constraint expression needs elaboration",
@@ -3012,24 +3675,25 @@ impl Checker<'_> {
                             continue;
                         }
                         ExpKind::App { func, args } => {
-                            let mut candidates = self.call_candidates(func, scope, args.len())?;
-                            if candidates.len() != 1 {
+                            let candidates = self.call_candidates(func, scope, args.len())?;
+                            // Shallow calls share sibling-guided inference
+                            // for both single callees and overload sets.
+                            // Deep chains use the iterative worklist to
+                            // keep the host stack bounded.
+                            if self.synth_depth >= SYNTH_DIRECT_LIMIT {
                                 work.push(Synthesis::Call(exp, candidates, args.len()));
                                 work.extend(args.iter().rev().map(Synthesis::Enter));
                                 continue;
                             }
-                            let callee = candidates.pop().unwrap();
-                            let TypKind::Fn { args: formal, .. } = &callee.node().kind else {
-                                return Err(unsupported(exp.span, "application of non-function"));
-                            };
-                            let _ = Self::align_call(&callee, formal, args.len(), exp.span)?;
-                            if callee.root.typschm.quant.is_empty() {
-                                self.resolve(&callee.child(Step::Result))?
-                            } else {
-                                work.push(Synthesis::Call(exp, vec![callee], args.len()));
-                                work.extend(args.iter().rev().map(Synthesis::Enter));
-                                continue;
-                            }
+                            self.synth_depth += 1;
+                            let actual = self.infer_app_actuals(args, scope, exp.span);
+                            self.synth_depth -= 1;
+                            let actual = actual?;
+                            let callee = self.select_call(candidates, &actual, None, exp.span)?;
+                            self.calls.insert(exp as *const Exp, callee.clone());
+                            let result = self.resolve(&callee.child(Step::Result))?;
+                            results.push(self.value_type(exp, result));
+                            continue;
                         }
                         _ => {
                             return Err(unsupported(
@@ -3191,7 +3855,11 @@ impl Checker<'_> {
                                         return Err(mismatch(fexp.value.span, &formal, &actual));
                                     };
                                     if items.len() != found.len() {
-                                        return Err(arity(fexp.value.span, items.len(), found.len()));
+                                        return Err(arity(
+                                            fexp.value.span,
+                                            items.len(),
+                                            found.len(),
+                                        ));
                                     }
                                     for i in 0..items.len() {
                                         pairs.push((
@@ -3209,7 +3877,11 @@ impl Checker<'_> {
                                         return Err(mismatch(fexp.value.span, &formal, &actual));
                                     }
                                     if args.len() != found.len() {
-                                        return Err(arity(fexp.value.span, args.len(), found.len()));
+                                        return Err(arity(
+                                            fexp.value.span,
+                                            args.len(),
+                                            found.len(),
+                                        ));
                                     }
                                     for (i, (arg, _)) in args.iter().zip(found).enumerate() {
                                         match (&arg.kind, &found[i].kind) {
@@ -3220,10 +3892,8 @@ impl Checker<'_> {
                                                 ));
                                             }
                                             (
-                                                TypArgKind::NExp(_)
-                                                | TypArgKind::Bool(_),
-                                                TypArgKind::NExp(_)
-                                                | TypArgKind::Bool(_),
+                                                TypArgKind::NExp(_) | TypArgKind::Bool(_),
+                                                TypArgKind::NExp(_) | TypArgKind::Bool(_),
                                             ) => {
                                                 let formal_arg = Scalar {
                                                     owner: formal.clone(),
@@ -3248,15 +3918,15 @@ impl Checker<'_> {
                                                     },
                                                     _ => None,
                                                 };
-                                                if let Some((symbol, _)) = variable.filter(
-                                                    |(s, k)| {
+                                                if let Some((symbol, _)) =
+                                                    variable.filter(|(s, k)| {
                                                         quantified_scalars.iter().any(
                                                             |(bound, bound_kind)| {
                                                                 bound == s && bound_kind == k
                                                             },
                                                         )
-                                                    },
-                                                ) {
+                                                    })
+                                                {
                                                     if let Some((_, bound)) = scalar_bindings
                                                         .iter()
                                                         .find(|(bound, _)| *bound == symbol)
@@ -3325,9 +3995,9 @@ impl Checker<'_> {
                         };
                         match binder.kind {
                             Kind::Type => {
-                                args.push(Node::dummy(TypArgKind::Typ(Node::dummy(
-                                    TypKind::Var(binder.kid),
-                                ))));
+                                args.push(Node::dummy(TypArgKind::Typ(Node::dummy(TypKind::Var(
+                                    binder.kid,
+                                )))));
                             }
                             Kind::Int => {
                                 args.push(Node::dummy(TypArgKind::NExp(Node::dummy(
@@ -3335,9 +4005,9 @@ impl Checker<'_> {
                                 ))));
                             }
                             Kind::Bool => {
-                                args.push(Node::dummy(TypArgKind::Bool(Box::new(
-                                    Node::dummy(ConstraintKind::Var(binder.kid)),
-                                ))));
+                                args.push(Node::dummy(TypArgKind::Bool(Box::new(Node::dummy(
+                                    ConstraintKind::Var(binder.kid),
+                                )))));
                             }
                         }
                     }
@@ -3475,8 +4145,8 @@ impl Checker<'_> {
                 QuantItem::Constraint(_) => {}
             }
         }
-        let mut bindings: Vec<(Symbol, Type)> = Vec::new();
-        let mut scalar_bindings: Vec<(Symbol, Scalar)> = Vec::new();
+        let mut bindings = callee.substitutions.types.clone();
+        let mut scalar_bindings = callee.substitutions.scalars.clone();
         let mut pairs = Vec::with_capacity(actual.len() + 1);
         // Omitted `implicit(..)` formals consume no actual (aligned by
         // `align_call`: same deterministic mapping as the callers).
@@ -3508,6 +4178,17 @@ impl Checker<'_> {
         while let Some((formal, actual, result_context)) = pairs.pop() {
             let formal = self.resolve(&formal)?;
             let actual = self.resolve(&actual)?;
+            if result_context
+                && (matches!(formal.node().kind, TypKind::Exist { .. })
+                    || matches!(actual.node().kind, TypKind::Exist { .. }))
+            {
+                // Local existential binders are witnesses, not the callee's
+                // quantified parameters. Bind parameters from arguments first;
+                // select_call checks result subsumption after substitutions.
+                // A parameter inferable only through this existential still
+                // fails the unresolved-parameter check below.
+                continue;
+            }
             match &formal.node().kind {
                 TypKind::Var(symbol)
                     if Arc::ptr_eq(&formal.root, &callee.root) && quantified.contains(symbol) =>
@@ -3651,7 +4332,18 @@ impl Checker<'_> {
         // all substitutions. Re-expand aliases there: this composes alias
         // binders with fresh call binders without mutating borrowed contexts.
         let scope = self.context.as_ref().map(|s| Type::root(s.clone()));
-        let assumptions = self.proof_assumptions(&scope);
+        let mut assumptions = self.proof_assumptions(&scope);
+        // Dropped existential bounds re-enter here with the opening's
+        // identities (e.g. `uint` guarantees `0 <= 'm` for `mod`).
+        // `actual` borrows outlive the queries below.
+        let mut actual_refs: Vec<&Type> = actual.iter().collect();
+        // Relaxed instantiation binds from an existing scrutinee/witness.
+        // Only in that mode is the result-side type established evidence.
+        // Ordinary call result expectations must never become assumptions.
+        if relaxed_arity {
+            actual_refs.extend(expected);
+        }
+        assumptions.extend(self.marker_assumptions(&actual_refs));
         for q in &callee.root.typschm.quant {
             if let QuantItem::Constraint(c) = q {
                 let query = CanonicalQuery::implication(
@@ -3828,9 +4520,9 @@ impl Checker<'_> {
                 // partial updates (and empty updates) are legal.
                 ExpKind::StructUpdate { record, fields } => {
                     let record_name = expected.name().map(|name| name.to_owned()).filter(|_| {
-                        expected.name().is_some_and(|name| {
-                            self.program.record(name, self.position).is_some()
-                        })
+                        expected
+                            .name()
+                            .is_some_and(|name| self.program.record(name, self.position).is_some())
                     });
                     let Some(record_name) = record_name else {
                         let label = expected.label();
@@ -3853,12 +4545,8 @@ impl Checker<'_> {
                     }
                     for fexp in fields.iter().rev() {
                         let field_name = self.name(&fexp.field)?;
-                        let field_typ = self.struct_field_type(
-                            &record_name,
-                            field_name,
-                            &expected,
-                            fexp.span,
-                        )?;
+                        let field_typ =
+                            self.struct_field_type(&record_name, field_name, &expected, fexp.span)?;
                         tasks.push(Task {
                             exp: &fexp.value,
                             expected: field_typ,
@@ -3879,7 +4567,15 @@ impl Checker<'_> {
                     self.compatible(&expected, &result, exp.span)?;
                 }
                 ExpKind::Let { pat, bind, body } => {
-                    let bound = self.infer(bind, &scope)?;
+                    // An ascribed pattern guides inference (OCaml checks
+                    // the bound against the annotation): names bind the
+                    // annotated type, and the bound checks against it.
+                    // Unascribed patterns bind the inferred type as before.
+                    let bound = if let PatKind::Typ { typ, .. } = &pat.kind {
+                        self.annotation(typ)?
+                    } else {
+                        self.infer(bind, &scope)?
+                    };
                     let mut child = Scope {
                         locals: Vec::new(),
                         facts: Vec::new(),
@@ -4026,9 +4722,7 @@ impl Checker<'_> {
                     for arm in arms.iter().rev() {
                         let (pat, guard, body) = match &arm.kind {
                             PExpKind::PatExp { pat, body } => (pat, None, body),
-                            PExpKind::PatWhen { pat, guard, body } => {
-                                (pat, Some(guard), body)
-                            }
+                            PExpKind::PatWhen { pat, guard, body } => (pat, Some(guard), body),
                         };
                         let mut child = Scope {
                             locals: Vec::new(),
@@ -4215,9 +4909,7 @@ impl Checker<'_> {
                     for arm in arms.iter().rev() {
                         let (pat, guard, body) = match &arm.kind {
                             PExpKind::PatExp { pat, body } => (pat, None, body),
-                            PExpKind::PatWhen { pat, guard, body } => {
-                                (pat, Some(guard), body)
-                            }
+                            PExpKind::PatWhen { pat, guard, body } => (pat, Some(guard), body),
                         };
                         let mut arm_scope = Scope {
                             locals: Vec::new(),

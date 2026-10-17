@@ -115,3 +115,37 @@ fn wrong_arity_still_fails() {
         "over-application should be ArityMismatch, got {err:?}"
     );
 }
+
+#[test]
+fn nested_overloads_propagate_sibling_types_to_omitted_implicits() {
+    check_with(&[
+        "val bool_and : (bool, bool) -> bool",
+        "val bits_and : forall 'n. (bits('n), bits('n)) -> bits('n)",
+        "overload operator & = {bool_and, bits_and}",
+        "val bool_eq : (bool, bool) -> bool",
+        "val bits_eq : forall 'n. (bits('n), bits('n)) -> bool",
+        "overload operator == = {bool_eq, bits_eq}",
+        "val mask : forall 'n, 'n >= 0. (implicit('n), int, int) -> bits('n)",
+        "val is_zero : forall 'n, 'n >= 0. (bits('n), int, int) -> bool",
+        "function is_zero(xs, i, j) = (xs & mask(i, j)) == mk([bitzero] : bits(1))",
+    ])
+    .expect("nested overloaded operands must share their inferred sibling types");
+}
+
+#[test]
+fn nested_overload_inference_keeps_width_obligations() {
+    let error = check_with(&[
+        "val bool_and : (bool, bool) -> bool",
+        "val bits_and : forall 'n. (bits('n), bits('n)) -> bits('n)",
+        "overload operator & = {bool_and, bits_and}",
+        "val bits_eq : forall 'n. (bits('n), bits('n)) -> bool",
+        "overload operator == = {bits_eq}",
+        "val is_zero : forall 'n, 'n >= 0. bits('n) -> bool",
+        "function is_zero(xs) = (xs & (mk([bitzero]) : bits(2))) == xs",
+    ])
+    .expect_err("an arbitrary input width cannot be equated with two bits");
+    assert!(
+        !matches!(error.kind, TypeErrorKind::Unsupported(_)),
+        "{error:?}"
+    );
+}
