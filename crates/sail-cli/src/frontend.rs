@@ -370,6 +370,7 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
     }
     let no_core = opts.no_core;
     let inputs = opts.inputs.clone();
+    let mut declared_vals: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut emit = |path: &str, source: &str, def: sail_parse::SpannedDef| -> Result<(), String> {
         let id = FileId(u32::try_from(files.len()).map_err(|_| "too many input files")?);
         let id = *files.entry(path.to_owned()).or_insert(id);
@@ -398,7 +399,35 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
                 .into(),
         };
         serde_json::to_writer(&mut manifest, &record).map_err(|e| e.to_string())?;
-        manifest.write_all(b"\n").map_err(|e| e.to_string())
+        manifest.write_all(b"\n").map_err(|e| e.to_string())?;
+        // OCaml `generate_enum_number_conversions`: every enum gets
+        // `<E>_of_num` and `num_of_<E>` unless suppressed or already declared.
+        match &def.def {
+            SurfaceDef::Val { name, .. } => {
+                declared_vals.insert(name.clone());
+            }
+            SurfaceDef::Type { name, keyword, body_src, .. } if keyword == "enum" => {
+                let prefix = source.get(..span.start as usize).unwrap_or("");
+                let attributes = prefix.rsplit(['}', ';', '\n']).next().unwrap_or("");
+                let suppressed = record.source.contains("no_enum_number_conversions")
+                    || attributes.contains("no_enum_number_conversions");
+                if !suppressed {
+                    for text in enum_number_conversions(name, body_src, &declared_vals) {
+                        let synthetic = Record {
+                            path: record.path.clone(),
+                            span: record.span,
+                            pragma: None,
+                            declaration: false,
+                            source: text,
+                        };
+                        serde_json::to_writer(&mut manifest, &synthetic).map_err(|e| e.to_string())?;
+                        manifest.write_all(b"\n").map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     };
     if !no_core {
         let (path, source) =
@@ -532,4 +561,110 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
     let mut source_paths = vec![String::new(); files.len()];
     for (path, id) in files { source_paths[id.0 as usize] = path; }
     Ok(FrontendProgram { summary, warm, manifest: scratch.0.join("ast.jsonl"), source_paths, _scratch: scratch })
+}
+
+/// Member names of an enum body (`{A, B}`, `A | B`, `{A -> 1, B -> 2}`),
+/// ignoring comments and attributes.
+fn enum_members(body: &str) -> Vec<String> {
+    let mut text = String::with_capacity(body.len());
+    let mut chars = body.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (c, chars.peek()) {
+            ('/', Some('*')) => {
+                chars.next();
+                let mut previous = ' ';
+                for c in chars.by_ref() {
+                    if previous == '*' && c == '/' {
+                        break;
+                    }
+                    previous = c;
+                }
+                text.push(' ');
+            }
+            ('/', Some('/')) => {
+                for c in chars.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+                text.push(' ');
+            }
+            ('$', Some('[')) => {
+                let mut depth = 0;
+                for c in chars.by_ref() {
+                    match c {
+                        '[' => depth += 1,
+                        ']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                text.push(' ');
+            }
+            _ => text.push(c),
+        }
+    }
+    let text = text.trim();
+    let text = text.strip_prefix('{').and_then(|t| t.rsplit_once('}').map(|(inner, _)| inner)).unwrap_or(text);
+    text.split([',', '|'])
+        .filter_map(|part| {
+            let part = part.split("->").next().unwrap_or("").split('=').next().unwrap_or("").trim();
+            let ident: String = part
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '\'')
+                .collect();
+            (!ident.is_empty()).then_some(ident)
+        })
+        .collect()
+}
+
+/// Source text of the generated enum/number conversion definitions.
+fn enum_number_conversions(
+    name: &str,
+    body: &str,
+    declared: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let members = enum_members(body);
+    if members.is_empty() {
+        return Vec::new();
+    }
+    let last = members.len() - 1;
+    let to_enum = format!("{name}_of_num");
+    let from_enum = format!("num_of_{name}");
+    let mut out = Vec::new();
+    if !declared.contains(&to_enum) {
+        let arms: Vec<String> = members
+            .iter()
+            .enumerate()
+            .map(|(n, member)| {
+                if n == last { format!("_ => {member}") } else { format!("{n} => {member}") }
+            })
+            .collect();
+        out.push(format!(
+            "val {to_enum} : forall 'e, 0 <= 'e <= {last}. int('e) -> {name}"
+        ));
+        out.push(format!(
+            "function {to_enum} arg_ = match arg_ {{ {} }}",
+            arms.join(", ")
+        ));
+    }
+    if !declared.contains(&from_enum) {
+        let arms: Vec<String> = members
+            .iter()
+            .enumerate()
+            .map(|(n, member)| format!("{member} => {n}"))
+            .collect();
+        out.push(format!(
+            "val {from_enum} : {name} -> {{'e, 0 <= 'e <= {last}. int('e)}}"
+        ));
+        out.push(format!(
+            "function {from_enum} arg_ = match arg_ {{ {} }}",
+            arms.join(", ")
+        ));
+    }
+    out
 }

@@ -557,7 +557,9 @@ fn conv_pat(c: &mut Ctx, span: Span, p: &g::Pat) -> Result<Pat, String> {
         g::Pat::Id(s) => PatKind::Id(c.name(span, s)),
         g::Pat::KidVar(s) => {
             let sym = c.interner.intern(s);
-            let pat = c.node(span, PatKind::Wild);
+            // OCaml `id_of_kid`: the value binder is the kid without its tick.
+            let value = c.name(span, s.strip_prefix('\'').unwrap_or(s));
+            let pat = c.node(span, PatKind::Id(value));
             let typ_pat = c.node(span, TypPatKind::Var(sym));
             PatKind::Var {
                 pat: Box::new(pat),

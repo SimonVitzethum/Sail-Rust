@@ -1457,10 +1457,10 @@ impl Program {
             .map(|value| &value.scheme)
     }
     pub(crate) fn type_synonym(&self, name: &str, position: usize) -> Option<&Arc<Scheme>> {
-        self.constructors
-            .get(name)
-            .and_then(|history| at(history, position))
-            .and_then(|constructor| constructor.synonym.as_ref())
+        match self.constructors.get(name) {
+            Some(history) => at(history, position).and_then(|constructor| constructor.synonym.as_ref()),
+            None => builtin_numeric_synonym(name),
+        }
     }
     fn overload(&self, name: &str, position: usize) -> Option<&[String]> {
         self.overloads
@@ -2243,5 +2243,54 @@ impl<'a> WellFormed<'a> {
             }
         }
         Ok(())
+    }
+}
+
+/// OCaml elaborates `range('a, 'b)` to `{'r, 'a <= 'r <= 'b. atom('r)}` and
+/// `nat` to `{'r, 'r >= 0. atom('r)}`; model both as builtin synonyms so
+/// that opening and subsumption see the existential form.
+fn builtin_numeric_synonym(name: &str) -> Option<&'static Arc<Scheme>> {
+    use std::sync::OnceLock;
+    static RANGE: OnceLock<Arc<Scheme>> = OnceLock::new();
+    static NAT: OnceLock<Arc<Scheme>> = OnceLock::new();
+    let build = |range: bool| {
+        let mut it = SimpleInterner::new();
+        let atom = Name::dummy(it.intern("atom"));
+        let (a, b, r) = (it.intern("'__lo"), it.intern("'__hi"), it.intern("'__r"));
+        let var = |k| Node::dummy(NExpKind::Var(k));
+        let (quant, constraint) = if range {
+            (
+                vec![
+                    QuantItem::Id(KOpt { kind: Kind::Int, kid: a }),
+                    QuantItem::Id(KOpt { kind: Kind::Int, kid: b }),
+                ],
+                Node::dummy(ConstraintKind::And(
+                    Box::new(Node::dummy(ConstraintKind::Le(var(a), var(r)))),
+                    Box::new(Node::dummy(ConstraintKind::Le(var(r), var(b)))),
+                )),
+            )
+        } else {
+            (
+                Vec::new(),
+                Node::dummy(ConstraintKind::Ge(
+                    var(r),
+                    Node::dummy(NExpKind::Constant("0".to_owned())),
+                )),
+            )
+        };
+        let typ = Node::dummy(TypKind::Exist {
+            binders: vec![KOpt { kind: Kind::Int, kid: r }],
+            constraint: Box::new(constraint),
+            typ: Box::new(Node::dummy(TypKind::App {
+                name: atom,
+                args: vec![Node::dummy(TypArgKind::NExp(var(r)))],
+            })),
+        });
+        Arc::new(Scheme { typschm: TypSchm { quant, typ }, interner: Arc::new(it) })
+    };
+    match name {
+        "range" => Some(RANGE.get_or_init(|| build(true))),
+        "nat" => Some(NAT.get_or_init(|| build(false))),
+        _ => None,
     }
 }

@@ -360,6 +360,11 @@ struct Checker<'a> {
     inferred: HashMap<*const Exp, InferredValue>,
     calls: HashMap<*const Exp, Type>,
     proof_scope: Arc<Scope>,
+    /// Type variables bound by `P_var` patterns (`let 'm = e`), as numeric
+    /// witness views; a later binding of the same symbol shadows an older
+    /// one. They are not rigid function quantifiers: proofs substitute the
+    /// witness of the bound value.
+    tyvars: Vec<(Symbol, Scalar)>,
     /// Direct-synthesis nesting depth (see `SYNTH_DIRECT_LIMIT`).
     synth_depth: u32,
 }
@@ -435,6 +440,7 @@ pub(crate) fn check(
         inferred: HashMap::new(),
         calls: HashMap::new(),
         proof_scope: Arc::default(),
+        tyvars: Vec::new(),
         synth_depth: 0,
     };
     match &def.kind {
@@ -686,6 +692,136 @@ impl Checker<'_> {
             interner: Arc::new(interner),
         }))
     }
+    /// OCaml `bind_pat` flow typing for literals: matching `atom(n)` against
+    /// a numeric literal (or `atom_bool(c)` against `true`/`false`) assumes
+    /// the equality in the arm instead of proving it. Returns whether the
+    /// literal was handled this way.
+    fn flow_literal(&mut self, lit: &Lit, typ: &Type, scope: &mut Scope) -> TypeResult<bool> {
+        let TypKind::App { args, .. } = &typ.node().kind else {
+            return Ok(false);
+        };
+        if args.len() != 1 {
+            return Ok(false);
+        }
+        match (&lit.kind, typ.name(), &args[0].kind) {
+            (LitKind::Num(symbol), Some("atom"), TypArgKind::NExp(_)) => {
+                let Some(value) = self.it.resolve(*symbol) else {
+                    return Ok(false);
+                };
+                let mut it = SimpleInterner::new();
+                let placeholder = it.intern("__scrutinee");
+                let atom_bool = Name::dummy(it.intern("atom_bool"));
+                let equal = Node::dummy(ConstraintKind::Equal(
+                    Box::new(Node::dummy(TypArgKind::NExp(Node::dummy(NExpKind::Var(
+                        placeholder,
+                    ))))),
+                    Box::new(Node::dummy(TypArgKind::NExp(Node::dummy(
+                        NExpKind::Constant(value.to_owned()),
+                    )))),
+                ));
+                let mut fact = Type::root(Arc::new(Scheme {
+                    typschm: TypSchm {
+                        quant: Vec::new(),
+                        typ: Node::dummy(TypKind::App {
+                            name: atom_bool,
+                            args: vec![Node::dummy(TypArgKind::Bool(Box::new(equal)))],
+                        }),
+                    },
+                    interner: Arc::new(it),
+                }));
+                fact.substitutions = Arc::new(Substitutions {
+                    types: Vec::new(),
+                    scalars: vec![(
+                        placeholder,
+                        Scalar {
+                            owner: typ.clone(),
+                            index: 0,
+                        }
+                        .resolved(),
+                    )],
+                });
+                scope.facts.push((Scalar { owner: fact, index: 0 }, false));
+                Ok(true)
+            }
+            (LitKind::True | LitKind::False, Some("atom_bool"), TypArgKind::Bool(_)) => {
+                scope.facts.push((
+                    Scalar {
+                        owner: typ.clone(),
+                        index: 0,
+                    },
+                    matches!(lit.kind, LitKind::False),
+                ));
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+    /// OCaml `bind_typ_pat`: bind pattern variables to the numeric
+    /// arguments of the matched type (`atom('n)` gives `'n`).
+    fn bind_type_pattern(&mut self, pattern: &TypPat, typ: &Type) -> TypeResult<()> {
+        let mut work = vec![(pattern, typ.resolved())];
+        while let Some((pattern, typ)) = work.pop() {
+            match &pattern.kind {
+                TypPatKind::Wild => {}
+                TypPatKind::Var(symbol) => {
+                    let TypKind::App { args, .. } = &typ.node().kind else {
+                        return Err(unsupported(pattern.span, "type variable pattern against a non-numeric type"));
+                    };
+                    if args.len() != 1 || !matches!(args[0].kind, TypArgKind::NExp(_)) {
+                        return Err(unsupported(
+                            pattern.span,
+                            "type variable pattern against a non-numeric type",
+                        ));
+                    }
+                    let witness = Scalar { owner: typ.clone(), index: 0 }.resolved();
+                    self.tyvars.retain(|(bound, _)| bound != symbol);
+                    self.tyvars.push((*symbol, witness));
+                }
+                TypPatKind::App { args: patterns, .. } => {
+                    let TypKind::App { args, .. } = &typ.node().kind else {
+                        return Err(unsupported(pattern.span, "type pattern against a non-application type"));
+                    };
+                    if args.len() != patterns.len() {
+                        return Err(arity(pattern.span, args.len(), patterns.len()));
+                    }
+                    for (index, sub) in patterns.iter().enumerate() {
+                        match (&sub.kind, &args[index].kind) {
+                            (TypPatKind::Wild, _) => {}
+                            (TypPatKind::Var(symbol), TypArgKind::NExp(_)) => {
+                                let witness = Scalar { owner: typ.clone(), index }.resolved();
+                                self.tyvars.retain(|(bound, _)| bound != symbol);
+                                self.tyvars.push((*symbol, witness));
+                            }
+                            (_, TypArgKind::Typ(_)) => {
+                                work.push((sub, typ.child(Step::TypeArgument(index))));
+                            }
+                            _ => {
+                                return Err(unsupported(sub.span, "type pattern argument kind"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    /// `int`/`bool` when `typ` is a fresh witness made by `open_value`.
+    fn opened_value_base(&self, typ: &Type) -> Option<&'static str> {
+        if !typ.path.is_empty() || typ.root.typschm.quant.len() != 1 {
+            return None;
+        }
+        let QuantItem::Id(binder) = &typ.root.typschm.quant[0] else {
+            return None;
+        };
+        if typ.root.interner.resolve(binder.kid) != Some("__value") {
+            return None;
+        }
+        match binder.kind {
+            Kind::Int => Some("int"),
+            Kind::Bool => Some("bool"),
+            Kind::Type => None,
+        }
+    }
     fn value_type(&mut self, exp: &Exp, declared: Type) -> Type {
         if let Some(typ) = self.inferred.get(&(exp as *const Exp)) {
             return typ.value.clone();
@@ -784,11 +920,59 @@ impl Checker<'_> {
         Ok(())
     }
     fn annotation(&self, typ: &Typ) -> TypeResult<Type> {
-        self.program
-            .check_annotation(typ, &self.it, self.position, self.context.as_deref())?;
+        if self.tyvars.is_empty() {
+            self.program
+                .check_annotation(typ, &self.it, self.position, self.context.as_deref())?;
+        } else {
+            // Local type variables are in scope for well-formedness only;
+            // proofs see them through the witness substitution below.
+            let mut interner = self
+                .context
+                .as_ref()
+                .map_or_else(|| (*self.it).clone(), |scope| (*scope.interner).clone());
+            let mut quant = self
+                .context
+                .as_ref()
+                .map(|scope| scope.typschm.quant.clone())
+                .unwrap_or_default();
+            let shadowed: Vec<&str> = self
+                .tyvars
+                .iter()
+                .filter_map(|(symbol, _)| self.it.resolve(*symbol))
+                .collect();
+            quant.retain(|item| match item {
+                QuantItem::Id(binder) => self
+                    .context
+                    .as_ref()
+                    .and_then(|scope| scope.interner.resolve(binder.kid))
+                    .is_none_or(|name| !shadowed.contains(&name)),
+                QuantItem::Constraint(_) => true,
+            });
+            for name in &shadowed {
+                quant.push(QuantItem::Id(KOpt {
+                    kind: Kind::Int,
+                    kid: interner.intern(name),
+                }));
+            }
+            let extended = Scheme {
+                typschm: TypSchm {
+                    quant,
+                    typ: Node::dummy(TypKind::Unknown),
+                },
+                interner: Arc::new(interner),
+            };
+            self.program
+                .check_annotation(typ, &self.it, self.position, Some(&extended))?;
+        }
         let mut typ = Type::owned(typ.clone(), self.it.clone());
         if let Some(scope) = &self.context {
             typ.scope = scope.clone();
+        }
+        if !self.tyvars.is_empty() {
+            typ.substitutions = Arc::new(Substitutions {
+                types: Vec::new(),
+                scalars: self.tyvars.clone(),
+            });
         }
         Ok(typ)
     }
@@ -1174,6 +1358,45 @@ impl Checker<'_> {
     /// A var declaration may bind fresh identifiers, including tuple leaves,
     /// but cannot shadow existing locals, enum members or registers.
     /// Mirrors OCaml `type_check.ml::bind_lexp` freshness checks.
+    /// OCaml `bind_assignment` in `check_block`: an assignment whose target
+    /// names no local or register declares a mutable variable for the rest
+    /// of the block. Returns the declared type and the extended scope.
+    fn declaring_assignment(
+        &mut self,
+        lexp: &LExp,
+        value: &Exp,
+        scope: &Arc<Scope>,
+    ) -> TypeResult<Option<(Type, Arc<Scope>)>> {
+        let mut declares = false;
+        let mut work = vec![lexp];
+        while let Some(current) = work.pop() {
+            match &current.kind {
+                LExpKind::Id(name) | LExpKind::Typ { id: name, .. } => {
+                    let text = self.name(name)?;
+                    declares |= scope.get(text).is_none()
+                        && self.program.register(text, self.position).is_none();
+                }
+                LExpKind::Tuple(items) => work.extend(items.iter()),
+                _ => return Ok(None),
+            }
+        }
+        if !declares {
+            return Ok(None);
+        }
+        let bound = if let LExpKind::Typ { typ, .. } = &lexp.kind {
+            self.annotation(typ)?
+        } else {
+            self.infer(value, scope)?;
+            (*self
+                .inferred
+                .get(&(value as *const Exp))
+                .expect("inferred initializer")
+                .declared)
+                .clone()
+        };
+        let child = self.mutable_scope(lexp, bound.clone(), scope)?;
+        Ok(Some((bound, Arc::new(child))))
+    }
     fn mutable_scope(&self, lexp: &LExp, typ: Type, parent: &Arc<Scope>) -> TypeResult<Scope> {
         let mut child = Scope {
             parent: Some(parent.clone()),
@@ -1266,6 +1489,7 @@ impl Checker<'_> {
         vars.sort();
         vars.dedup();
         let context_view = self.context.as_ref().map(|s| Type::root(s.clone()));
+        let scope_locals = scope;
         let mut git = SimpleInterner::new();
         // Phase 1: alle Symbole internieren (danach keine Mutation mehr).
         let syms: Vec<Symbol> = vars.iter().map(|text| git.intern(text)).collect();
@@ -1353,7 +1577,13 @@ impl Checker<'_> {
             negated: false,
         };
         let scope = self.context.as_ref().map(|s| Type::root(s.clone()));
-        let query = CanonicalQuery::implication(&self.proof_assumptions(&scope), view, None)
+        let local_types: Vec<&Type> = vars
+            .iter()
+            .filter_map(|text| scope_locals.get(text).map(|(typ, _)| typ))
+            .collect();
+        let mut assumptions = self.proof_assumptions(&scope);
+        assumptions.extend(self.marker_assumptions(&local_types));
+        let query = CanonicalQuery::implication(&assumptions, view, None)
             .map_err(|e| unsupported(span, format!("{what} [{obligation}]: {e}")))?;
         if !self.program.prove(query).is_valid() {
             return Err(TypeError::constraint_not_proved(
@@ -1910,6 +2140,13 @@ impl Checker<'_> {
                 "sizeof of compound size expression needs elaboration",
             ));
         };
+        let local_tyvars: Vec<(String, Scalar)> = self
+            .tyvars
+            .iter()
+            .filter_map(|(symbol, scalar)| {
+                self.it.resolve(*symbol).map(|name| (name.to_owned(), scalar.clone()))
+            })
+            .collect();
         if !self.program.has_overload("__size", self.position) {
             return Err(TypeError::unbound_var(span, "__size".to_owned()));
         };
@@ -1945,6 +2182,9 @@ impl Checker<'_> {
             let text = git
                 .resolve(symbol)
                 .ok_or_else(|| unsupported(span, "dependent size expression typing"))?;
+            if local_tyvars.iter().any(|(name, _)| name == text) {
+                continue;
+            }
             if (&view as &dyn Bindings).rigid(text).is_none() {
                 return Err(unsupported(
                     span,
@@ -1952,6 +2192,10 @@ impl Checker<'_> {
                 ));
             }
         }
+        let generated: HashMap<String, Symbol> = local_tyvars
+            .iter()
+            .map(|(name, _)| (name.clone(), git.intern(name)))
+            .collect();
         let atom = git.intern("atom");
         let typ = Node::dummy(TypKind::App {
             name: Name::dummy(atom),
@@ -1964,7 +2208,15 @@ impl Checker<'_> {
             }),
             path: Vec::new(),
             scope: context,
-            substitutions: Arc::new(Substitutions::default()),
+            substitutions: Arc::new(Substitutions {
+                types: Vec::new(),
+                scalars: local_tyvars
+                    .iter()
+                    .filter_map(|(name, scalar)| {
+                        generated.get(name.as_str()).map(|symbol| (*symbol, scalar.clone()))
+                    })
+                    .collect(),
+            }),
             implicit_argument: false,
         })
     }
@@ -2557,6 +2809,13 @@ impl Checker<'_> {
         let mut scalars = Vec::new();
         if let Some(context) = self.context.clone() {
             for (symbol, kind) in outers {
+                // Variables already bound by the existential's own view (a
+                // callee result with its call substitutions) keep that
+                // binding; only the remaining names are function rigids.
+                if let Some(bound) = expected.substitutions.get_scalar(symbol) {
+                    scalars.push((symbol, bound.clone()));
+                    continue;
+                }
                 let var = match kind {
                     OuterKind::Int => TypArgKind::NExp(Node::dummy(NExpKind::Var(symbol))),
                     OuterKind::Bool => {
@@ -2833,10 +3092,24 @@ impl Checker<'_> {
                 &*root.scope.interner as &dyn sail_ast::Interner,
                 &*self.it as &dyn sail_ast::Interner,
             ]);
-            let index_nexp = bridge::index_nexp_from_exp(index, &mut union2)?;
+            // Syntactic indices map directly; any other expression is bound
+            // through the numeric witness of its inferred type.
+            let witness_scope;
+            let (index_nexp, bound_scope) = match bridge::index_nexp_from_exp(index, &mut union2) {
+                Ok(nexp) => (nexp, scope),
+                Err(error) if matches!(error.kind, TypeErrorKind::Unsupported(_)) => {
+                    witness_scope = Scope {
+                        locals: vec![("__vector_index".to_owned(), (index_typ.clone(), false))],
+                        facts: Vec::new(),
+                        parent: Some(Arc::new(scope.clone())),
+                    };
+                    (crate::nexp::Nexp::Var("__vector_index".to_owned()), &witness_scope)
+                }
+                Err(error) => return Err(error),
+            };
             self.prove_vector_bounds(
                 &crate::lexp_bounds::index_obligation(&index_nexp, &len_nexp),
-                scope,
+                bound_scope,
                 lexp.span,
                 "vector index bounds",
             )?;
@@ -3341,9 +3614,22 @@ impl Checker<'_> {
                         work.push((pat, typ.child(Step::Tuple(i))));
                     }
                 }
+                PatKind::Lit(lit) if self.flow_literal(lit, &typ, scope)? => {}
                 PatKind::Lit(lit) => {
                     let actual = self.literal(lit)?;
-                    self.compatible(&typ, &actual, pat.span)?;
+                    // OCaml binds `bool`/`int` values at their declared
+                    // type; an opened fresh witness must not turn the
+                    // literal match into a proof obligation.
+                    let scrutinee = match self.opened_value_base(&typ) {
+                        Some(name) => self.builtin(name),
+                        None => typ,
+                    };
+                    self.compatible(&scrutinee, &actual, pat.span)?;
+                }
+                PatKind::Var { pat, typ_pat } => {
+                    let typ = self.open_value(&typ);
+                    self.bind_type_pattern(typ_pat, &typ)?;
+                    work.push((pat, typ));
                 }
                 PatKind::Vector(items) => {
                     // OCaml `bind_pat` `P_vector`: every element binds
@@ -3713,8 +3999,27 @@ impl Checker<'_> {
                         ExpKind::Typ { typ, .. } => self.annotation(typ)?,
                         ExpKind::Block(items) => {
                             if let Some(last) = items.last() {
+                                // Asserts before the result extend the scope
+                                // (as in checking mode); the full prefix is
+                                // checked by the later checking task.
+                                let mut current = scope.clone();
+                                for item in &items[..items.len() - 1] {
+                                    match &item.kind {
+                                        ExpKind::Assert { cond, msg } => {
+                                            current = self.check_assert(cond, msg, &current)?;
+                                        }
+                                        ExpKind::Assign { lexp, value } => {
+                                            if let Some((_, extended)) =
+                                                self.declaring_assignment(lexp, value, &current)?
+                                            {
+                                                current = extended;
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
                                 work.push((Synthesis::Forward(exp), scope.clone()));
-                                work.push((Synthesis::Enter(last), scope.clone()));
+                                work.push((Synthesis::Enter(last), current));
                                 continue;
                             }
                             self.builtin("unit")
@@ -3936,13 +4241,24 @@ impl Checker<'_> {
                         unreachable!("block synthesis shape")
                     };
                     let last = items.last().expect("nonempty block");
-                    let declared = (*self
-                        .inferred
-                        .get(&(last as *const Exp))
-                        .expect("inferred block result")
-                        .declared)
-                        .clone();
-                    results.push(self.value_type(exp, declared));
+                    // A block denotes its last expression: share that
+                    // expression's witness so checking the block against its
+                    // own inferred type is the identity.
+                    let (value, declared) = {
+                        let last = self
+                            .inferred
+                            .get(&(last as *const Exp))
+                            .expect("inferred block result");
+                        (last.value.clone(), last.declared.clone())
+                    };
+                    self.inferred.insert(
+                        exp as *const Exp,
+                        InferredValue {
+                            value: value.clone(),
+                            declared,
+                        },
+                    );
+                    results.push(value);
                 }
                 Synthesis::Call(exp, candidates, count) => {
                     let actual = results.split_off(results.len() - count);
@@ -4681,6 +4997,21 @@ impl Checker<'_> {
                             let unit = self.builtin("unit");
                             self.compatible(&expected, &unit, item.span)?;
                             current = self.check_assert(cond, msg, &current)?;
+                        } else if let ExpKind::Assign { lexp, value } = &item.kind {
+                            if let Some((bound, extended)) =
+                                self.declaring_assignment(lexp, value, &current)?
+                            {
+                                let unit = self.builtin("unit");
+                                self.compatible(&expected, &unit, item.span)?;
+                                pending.push((
+                                    value.as_ref(),
+                                    bound,
+                                    current.clone(),
+                                ));
+                                current = extended;
+                            } else {
+                                pending.push((item, expected, current.clone()));
+                            }
                         } else {
                             pending.push((item, expected, current.clone()));
                         }
@@ -5084,6 +5415,48 @@ impl Checker<'_> {
                             returning: returning.clone(),
                         });
                     }
+                }
+                ExpKind::Ref(name) => {
+                    // OCaml `infer_exp` E_ref: a register reference has type
+                    // `register(T)` for the register's declared type `T`.
+                    let text = self.name(name)?;
+                    let Some(register) = self.program.register(text, self.position) else {
+                        return Err(TypeError::unbound_var(name.span, text.to_owned()));
+                    };
+                    let mut interner = (*register.interner).clone();
+                    let head = Name::dummy(interner.intern("register"));
+                    let typ = Node::dummy(TypKind::App {
+                        name: head,
+                        args: vec![Node::dummy(TypArgKind::Typ(register.typschm.typ.clone()))],
+                    });
+                    let found = Type::root(Arc::new(Scheme {
+                        typschm: TypSchm {
+                            quant: Vec::new(),
+                            typ,
+                        },
+                        interner: Arc::new(interner),
+                    }));
+                    self.compatible(&expected, &found, exp.span)?;
+                }
+                ExpKind::Cons(head, tail) if expected.name() == Some("list") => {
+                    let TypKind::App { args, .. } = &expected.node().kind else {
+                        return Err(unsupported(exp.span, "list type arguments"));
+                    };
+                    if !matches!(args.first().map(|arg| &arg.kind), Some(TypArgKind::Typ(_))) {
+                        return Err(unsupported(exp.span, "list element type"));
+                    }
+                    tasks.push(Task {
+                        exp: tail,
+                        expected: expected.clone(),
+                        scope: scope.clone(),
+                        returning: returning.clone(),
+                    });
+                    tasks.push(Task {
+                        exp: head,
+                        expected: expected.child(Step::TypeArgument(0)),
+                        scope: scope.clone(),
+                        returning: returning.clone(),
+                    });
                 }
                 ExpKind::Vector(items) => {
                     let element = match expected.name() {

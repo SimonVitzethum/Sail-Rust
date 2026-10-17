@@ -286,6 +286,21 @@ impl Emitter {
                             Task::NExp(a, context, subst),
                         ]);
                     }
+                    NExpKind::App { func, args }
+                        if args.len() == 2
+                            && matches!(name(context.interner, func.symbol)?, "div" | "mod") =>
+                    {
+                        // OCaml `constraint.ml` passes these to SMT-LIB's
+                        // Euclidean `div`/`mod` unchanged.
+                        let op = name(context.interner, func.symbol)?;
+                        write!(self.output, "({op} ").unwrap();
+                        work.extend([
+                            Task::Text(")"),
+                            Task::NExp(&args[1], context, subst),
+                            Task::Text(" "),
+                            Task::NExp(&args[0], context, subst),
+                        ]);
+                    }
                     NExpKind::Exp(exponent) => {
                         self.uses_power = true;
                         self.output.push_str("(sail_pow2 ");
