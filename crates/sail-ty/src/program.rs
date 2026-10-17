@@ -9,7 +9,7 @@ use sail_solver::{
     canonical::{CanonicalQuery, Context, Substitution, View},
     SmtLibSolver, Solver, SolverPool, SolverQuery,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -258,6 +258,7 @@ impl Drop for OutcomeDef {
 pub struct Program {
     constructors: BTreeMap<String, Vec<Binding<Constructor>>>,
     values: BTreeMap<String, Vec<Binding<Value>>>,
+    global_lets: BTreeSet<String>,
     overloads: BTreeMap<String, Vec<Binding<Vec<String>>>>,
     registers: BTreeMap<String, Vec<Binding<Arc<Scheme>>>>,
     records: BTreeMap<String, Vec<Binding<RecordDef>>>,
@@ -281,6 +282,7 @@ impl Default for Program {
         Self {
             constructors: BTreeMap::new(),
             values: BTreeMap::new(),
+            global_lets: BTreeSet::new(),
             overloads: BTreeMap::new(),
             registers: BTreeMap::new(),
             records: BTreeMap::new(),
@@ -682,6 +684,82 @@ impl Program {
                             position,
                             value: scheme,
                         });
+                }
+                Ok(())
+            }
+            DefKind::Let { pat, .. } => {
+                let mut pending = vec![(pat, None)];
+                let mut bindings = Vec::new();
+                while let Some((pat, expected)) = pending.pop() {
+                    match &pat.kind {
+                        PatKind::Typ { typ, pat } => {
+                            self.check_scheme(
+                                &TypSchm {
+                                    quant: Vec::new(),
+                                    typ: typ.clone(),
+                                },
+                                &it,
+                                position,
+                            )?;
+                            pending.push((pat.as_ref(), Some(typ)));
+                        }
+                        PatKind::Id(name) => {
+                            let name = text(it.as_ref(), name.symbol, name.span)?.to_owned();
+                            if self.enumeration_member(&name, position).is_none() {
+                                bindings.push((name, expected));
+                            }
+                        }
+                        PatKind::As { pat, id } => {
+                            bindings.push((
+                                text(it.as_ref(), id.symbol, id.span)?.to_owned(),
+                                expected,
+                            ));
+                            pending.push((pat.as_ref(), expected));
+                        }
+                        PatKind::Tuple(items) => {
+                            let types = expected.and_then(|typ| match &typ.kind {
+                                TypKind::Tuple(types) if types.len() == items.len() => Some(types),
+                                _ => None,
+                            });
+                            for (index, item) in items.iter().enumerate().rev() {
+                                pending.push((item, types.map(|types| &types[index])));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // Global lets become visible after their initializer. Store
+                // headers in the same source-position histories as all other
+                // values; body workers retain their immutable snapshot view.
+                let visible_from = position
+                    .checked_add(1)
+                    .ok_or_else(|| failure(def.span, "global binding position overflow"))?;
+                let mut names = BTreeSet::new();
+                for (name, _) in &bindings {
+                    if self.global_lets.contains(name) || !names.insert(name.clone()) {
+                        return Err(failure(
+                            def.span,
+                            format!("duplicate toplevel let binding '{name}'"),
+                        ));
+                    }
+                }
+                self.global_lets.extend(names);
+                for (name, typ) in bindings {
+                    let Some(typ) = typ else { continue };
+                    self.values.entry(name).or_default().push(Binding {
+                        position: visible_from,
+                        value: Value {
+                            inline: false,
+                            enumeration_member: false,
+                            scheme: Arc::new(Scheme {
+                                typschm: TypSchm {
+                                    quant: Vec::new(),
+                                    typ: typ.clone(),
+                                },
+                                interner: it.clone(),
+                            }),
+                        },
+                    });
                 }
                 Ok(())
             }

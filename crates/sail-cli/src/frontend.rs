@@ -468,6 +468,7 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
                 &def.kind,
                 DefKind::Type(_)
                     | DefKind::Val(_)
+                    | DefKind::Let { .. }
                     | DefKind::Register(_)
                     | DefKind::Constraint(_)
                     | DefKind::Outcome { .. }
