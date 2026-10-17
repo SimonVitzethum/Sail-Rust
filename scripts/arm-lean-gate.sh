@@ -34,7 +34,16 @@ if [ "${#SOURCES[@]}" -eq 0 ]; then
 fi
 printf 'ARM gate: model=%s memory=%s sources=%s output=%s\n' \
     "$MODEL" "$MEMORY" "${#SOURCES[@]}" "$OUT"
-systemd-run --user --wait --pipe --collect \
+# Transient services do not inherit caller-specific environment variables.
+# Forward compiler controls explicitly so thread/budget comparisons measure
+# the requested settings, and keep out-of-core data on the repository disk.
+COMPILER_ENV=(--setenv="SAIL_RS_SPOOL_DIR=${SAIL_RS_SPOOL_DIR:-$TASK_ROOT/target/spool}")
+for variable in SAIL_RS_THREADS SAIL_TYPECHECK_MEMORY SAIL_REWRITE_MEMORY; do
+    if [[ -v "$variable" ]]; then
+        COMPILER_ENV+=(--setenv="$variable=${!variable}")
+    fi
+done
+systemd-run --user --wait --pipe --collect "${COMPILER_ENV[@]}" \
     -p "MemoryMax=$MEMORY" -p MemorySwapMax=0 -p "WorkingDirectory=$MODEL" \
     "$TASK_ROOT/target/ci/sail-rs" -dprofile -verbose "${SAIL_ARM_VERBOSE:-1}" -memo_z3 \
     -lean -lean-force-output -lean_output_dir "$OUT/lean" -o armv9 \

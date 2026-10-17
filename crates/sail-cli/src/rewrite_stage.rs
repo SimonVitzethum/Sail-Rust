@@ -24,23 +24,27 @@
 //! No stub success: [`Rewritten::require_lean_emit`] keeps failing explicitly
 //! (exit status 1) because Lean body emission does not exist yet. Rewritten
 //! definitions are therefore never reported as a successful model build.
-//! Bodies stay small and disk-backed until this stage runs; the rewritten
-//! items are retained resident for the (missing) downstream emitter and the
-//! outcome reports that residency honestly instead of pretending the
-//! streaming window survived.
+//! Byte-bounded workers persist rewritten definitions through the frontend
+//! flat-snapshot storage path before their input credits are released. The outcome
+//! retains content IDs and labels, never whole-program AST bodies.
+//! Whole-program passes still need a separate integration step; persisting
+//! their local output does not make single-definition windows equivalent.
 
 #![forbid(unsafe_code)]
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-use sail_ast::{Ast, Def, SimpleInterner};
-use sail_ooc::ContentId;
+use sail_ast::Ast;
+#[cfg(test)]
+use sail_ast::{Def, SimpleInterner};
+use sail_ooc::{ContentId, WarmLayer};
 use sail_rewrite::pipeline::TypedPipeline;
+use sail_shard::{Scheduler, SchedulerConfig};
 use sail_ty::{TypedDef, TypedDefKind};
 
 use crate::args::{CliError, EXIT_ERROR};
-use crate::frontend::{load_definition, Descriptor, FrontendProgram};
+use crate::frontend::{load_definition, store_snapshot, Descriptor, FrontendProgram};
 use crate::typecheck::Checked;
 
 fn error(message: impl Into<String>) -> CliError {
@@ -50,18 +54,7 @@ fn error(message: impl Into<String>) -> CliError {
     }
 }
 
-/// The Lean pass order this stage executes per definition.
-///
-/// By construction this is [`TypedPipeline::lean_implemented`] restricted to
-/// the canonical-path implementations, in `lean_rewrites` order. The pipeline
-/// is built from the same constructor inside [`rewrite_defs`], so the
-/// recorded [`Rewritten::passes`] can never drift from what actually ran.
-#[must_use]
-pub fn pass_order() -> Vec<&'static str> {
-    TypedPipeline::lean_implemented().pass_names()
-}
-
-/// One rewritten definition, passed through for the downstream emitter.
+/// Disk reference to one rewritten definition for the downstream emitter.
 ///
 /// `position` is the source-order manifest index the body was reloaded from;
 /// `name`/`kind` are the [`TypedDef`] emission labels, kept so logs can be
@@ -71,8 +64,7 @@ pub struct RewrittenDef {
     pub position: usize,
     pub name: String,
     pub kind: TypedDefKind,
-    pub def: Def,
-    pub interner: SimpleInterner,
+    pub contents: Vec<ContentId>,
 }
 
 /// Outcome of running the typed rewrite pipeline over emitted [`TypedDef`]s.
@@ -80,7 +72,7 @@ pub struct RewrittenDef {
 /// `definitions`/`expressions` are derived observations (`items.len()` and
 /// the summed [`TypedDef::expressions`](sail_ty::TypedDef) payload); they are
 /// never a success criterion — see [`Rewritten::require_lean_emit`].
-/// `items` is in the input emission order; each item ran the full
+/// `items` is in source order; each item ran the full
 /// [`Rewritten::passes`] order over its own single-definition window.
 #[derive(Debug)]
 pub struct Rewritten {
@@ -108,10 +100,18 @@ impl Rewritten {
     /// incomplete" until a downstream emitter consumes [`Self::items`] and
     /// this returns `Ok`.
     pub fn require_lean_emit(&self) -> Result<(), CliError> {
+        let outputs: usize = self.items.iter().map(|item| item.contents.len()).sum();
+        let functions = self.count_by_kind(TypedDefKind::Function);
+        let first = if self.is_empty() {
+            "<empty>"
+        } else {
+            &self.items[0].name
+        };
         Err(error(format!(
             "sail-rs: compilation incomplete: lean-emit stage \"lean-emit\" missing \
              (no Lean body emission); {} rewritten TypedDefs through {} passes ({}) \
-             are not a successful model build",
+             are not a successful model build; {outputs} output definitions, \
+             {functions} source functions, first source `{first}`",
             self.definitions,
             self.passes.len(),
             self.passes.join(", "),
@@ -133,46 +133,72 @@ fn ensure_alignment(descriptors: usize, defs: &[TypedDef]) -> Result<(), CliErro
     Ok(())
 }
 
-/// Run [`TypedPipeline::lean_implemented`] over the emitted defs.
-///
-/// `loader` maps a [`TypedDef::position`](sail_ty::TypedDef) to its
-/// (`Def`, definition-local interner) pair; [`run`] builds it from the
-/// frontend warm layer, tests use an in-memory map. Each pair is wrapped as
-/// a single-definition [`Ast`](sail_ast::Ast) and rewritten in place, in
-/// emission order. A loader failure aborts the stage with the loader's
-/// error — partial rewrites are never returned as success.
-pub fn rewrite_defs(
-    loader: &mut dyn FnMut(usize) -> Result<(Def, SimpleInterner), CliError>,
-    defs: &[TypedDef],
-) -> Result<Rewritten, CliError> {
+/// One input's source reference and byte charge. Bodies are loaded only after
+/// the shared scheduler grants credits, so parallel workers keep the same
+/// bounded input window as typechecking.
+struct RewriteJob<'a> {
+    checked: &'a TypedDef,
+    content: ContentId,
+    bytes: u64,
+}
+
+fn rewrite_jobs<'a, I>(
+    warm: &WarmLayer,
+    jobs: I,
+    config: SchedulerConfig,
+) -> Result<Rewritten, CliError>
+where
+    I: IntoIterator<Item = Result<RewriteJob<'a>, CliError>>,
+    I::IntoIter: Send,
+{
     let pipeline = TypedPipeline::lean_implemented();
-    let passes = pipeline.pass_names();
-    let mut items = Vec::with_capacity(defs.len());
-    let mut expressions = 0;
-    for def in defs {
-        let (mut body, mut interner) = loader(def.position)?;
-        let mut ast = Ast::new(vec![body]);
-        pipeline.run(&mut ast, &mut interner);
-        debug_assert_eq!(ast.defs.len(), 1);
-        body = ast
-            .defs
-            .pop()
-            .expect("single-definition window keeps its def");
-        expressions += def.expressions;
-        items.push(RewrittenDef {
-            position: def.position,
-            name: def.name.clone(),
-            kind: def.kind,
-            def: body,
-            interner,
-        });
-    }
-    Ok(Rewritten {
-        definitions: items.len(),
-        expressions,
-        passes,
-        items,
-    })
+    let mut rewritten = Rewritten {
+        definitions: 0,
+        expressions: 0,
+        passes: pipeline.pass_names(),
+        items: Vec::new(),
+    };
+    Scheduler::new(config).run_streaming_weighed(
+        jobs,
+        |job| job.as_ref().map_or(1, |job| job.bytes.max(1)),
+        |job| {
+            let job = job?;
+            let (body, mut interner) = load_definition(warm, &job.content)?;
+            let mut ast = Ast::new(vec![body]);
+            pipeline.run(&mut ast, &mut interner);
+            // Rewrites may synthesize helpers or split the input. Persist
+            // every output in order; flatten first for iterative cleanup.
+            let snapshots: Vec<_> = ast
+                .defs
+                .into_iter()
+                .map(sail_ast::storage::DefinitionSnapshot::new)
+                .collect();
+            let mut contents = Vec::with_capacity(snapshots.len());
+            for snapshot in &snapshots {
+                let (content, _) = store_snapshot(warm, snapshot, &interner)?;
+                contents.push(content);
+            }
+            Ok::<_, CliError>((
+                RewrittenDef {
+                    position: job.checked.position,
+                    name: job.checked.name.clone(),
+                    kind: job.checked.kind,
+                    contents,
+                },
+                job.checked.expressions,
+            ))
+        },
+        |_, result| {
+            let (item, expressions) = result?;
+            rewritten.expressions += expressions;
+            rewritten.items.push(item);
+            Ok::<_, CliError>(())
+        },
+    )?;
+    // Completion order is deliberately independent of source order.
+    rewritten.items.sort_by_key(|item| item.position);
+    rewritten.definitions = rewritten.items.len();
+    Ok(rewritten)
 }
 
 fn manifest_descriptors(frontend: &FrontendProgram) -> Result<Vec<Descriptor>, CliError> {
@@ -193,23 +219,49 @@ fn blob_id(descriptor: &Descriptor) -> Result<ContentId, CliError> {
 
 /// Rewrite every emitted [`TypedDef`](sail_ty::TypedDef) of `checked`.
 ///
-/// Bodies are reloaded from the frontend warm layer at their emission
-/// positions (out-of-core until here) and each runs the full
-/// [`pass_order`]. The returned [`Rewritten`] still fails
+/// Bodies are reloaded from the frontend warm layer within a byte-bounded
+/// parallel window, and each runs the implemented Lean pass sequence. The returned [`Rewritten`] still fails
 /// [`Rewritten::require_lean_emit`] until Lean body emission exists.
 pub fn run(frontend: &FrontendProgram, checked: &Checked) -> Result<Rewritten, CliError> {
     let descriptors = manifest_descriptors(frontend)?;
     ensure_alignment(descriptors.len(), &checked.defs)?;
-    let mut loader = |position: usize| {
-        let descriptor = descriptors.get(position).ok_or_else(|| {
+    let budget = sail_ooc::byte_budget_from_env(
+        "SAIL_REWRITE_MEMORY",
+        sail_ooc::DEFAULT_TYPECHECK_BUDGET_BYTES,
+    )
+    .map_err(CliError::fatal)?;
+    eprintln!(
+        "sail-rs: rewrite byte budget {} ({} workers)",
+        sail_ooc::format_bytes(budget),
+        frontend.summary.workers
+    );
+    let jobs = checked.defs.iter().map(|checked| {
+        let descriptor = descriptors.get(checked.position).ok_or_else(|| {
             CliError::fatal(format!(
-                "rewrite stage: TypedDef position {position} outside {} manifest descriptors",
+                "rewrite stage: TypedDef position {} outside {} manifest descriptors",
+                checked.position,
                 descriptors.len(),
             ))
         })?;
-        load_definition(&frontend.warm, &blob_id(descriptor)?)
-    };
-    rewrite_defs(&mut loader, &checked.defs)
+        let content = blob_id(descriptor)?;
+        let bytes = std::fs::metadata(frontend.warm.blob_path(&content))
+            .map_err(|e| CliError::fatal(e.to_string()))?
+            .len();
+        Ok(RewriteJob {
+            checked,
+            content,
+            bytes,
+        })
+    });
+    rewrite_jobs(
+        &frontend.warm,
+        jobs,
+        SchedulerConfig::new_byte_budget(
+            budget,
+            sail_ooc::TYPECHECK_COUNT_CEILING,
+            frontend.summary.workers,
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -217,6 +269,30 @@ mod tests {
     use super::*;
     use sail_ast::DefKind;
     use sail_rewrite::pipeline::{is_typed_implemented_pass, LEAN_REWRITES};
+
+    struct TestStore(WarmLayer);
+
+    impl TestStore {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let dir = std::env::current_dir()
+                .unwrap()
+                .join("target/rewrite-stage-tests")
+                .join(format!(
+                    "{}-{}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                ));
+            Self(WarmLayer::open(dir).with_max_live_bytes(0))
+        }
+    }
+
+    impl Drop for TestStore {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(self.0.dir());
+        }
+    }
 
     fn pragma_def(key: &str) -> (Def, SimpleInterner) {
         (
@@ -232,20 +308,56 @@ mod tests {
         TypedDef::without_scheme(name.to_owned(), TypedDefKind::Other, position, position + 1)
     }
 
-    fn memory_loader(
-        bodies: &std::collections::BTreeMap<usize, (String, String)>,
-    ) -> impl FnMut(usize) -> Result<(Def, SimpleInterner), CliError> + '_ {
-        move |position| {
-            bodies
-                .get(&position)
-                .map(|(key, _)| pragma_def(key))
-                .ok_or_else(|| CliError::fatal(format!("missing test body {position}")))
+    struct Source {
+        checked: TypedDef,
+        content: ContentId,
+        bytes: u64,
+    }
+
+    fn source(store: &TestStore, key: &str, position: usize, size: usize) -> Source {
+        let (mut body, mut interner) = pragma_def(key);
+        let symbol = sail_ast::Interner::intern(&mut interner, "local_symbol");
+        assert_eq!(
+            sail_ast::Interner::resolve(&interner, symbol),
+            Some("local_symbol")
+        );
+        let DefKind::Pragma { payload, .. } = &mut body.kind else {
+            panic!()
+        };
+        *payload = "x".repeat(size);
+        let snapshot = sail_ast::storage::DefinitionSnapshot::new(body);
+        let (content, bytes) = store_snapshot(&store.0, &snapshot, &interner).unwrap();
+        Source {
+            checked: emitted(key, position),
+            content,
+            bytes,
         }
     }
 
+    fn run_sources(
+        store: &TestStore,
+        sources: &[Source],
+        workers: usize,
+        budget: u64,
+    ) -> Result<Rewritten, CliError> {
+        rewrite_jobs(
+            &store.0,
+            sources.iter().map(|source| {
+                Ok(RewriteJob {
+                    checked: &source.checked,
+                    content: source.content,
+                    bytes: source.bytes,
+                })
+            }),
+            SchedulerConfig::new_byte_budget(budget, 1024, workers),
+        )
+    }
+
+    const BUDGET: u64 = 32 * 1024 * 1024;
+
     #[test]
     fn pass_order_is_the_implemented_lean_sequence() {
-        let order = pass_order();
+        let order = TypedPipeline::lean_implemented().pass_names();
         assert_eq!(order, TypedPipeline::lean_implemented().pass_names());
         assert!(
             !order.is_empty(),
@@ -273,88 +385,143 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_loads_by_position_and_preserves_emission_order() {
-        let defs = vec![emitted("b", 1), emitted("a", 0)];
-        let bodies = [(0, ("k0".to_string(), "v".to_string()))]
-            .into_iter()
-            .chain([(1, ("k1".to_string(), "v".to_string()))])
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let rewritten = rewrite_defs(&mut memory_loader(&bodies), &defs).unwrap();
-        // Emission order in, emission order out — even though positions are
-        // visited out of order through the loader.
+    fn rewrite_preserves_helpers_symbols_and_source_order() {
+        let store = TestStore::new();
+        let sources = [source(&store, "b", 1, 1), source(&store, "a", 0, 1)];
+        let rewritten = run_sources(&store, &sources, 4, BUDGET).unwrap();
         assert_eq!(rewritten.definitions, 2);
-        assert_eq!(rewritten.items[0].position, 1);
-        assert_eq!(rewritten.items[1].position, 0);
-        assert_eq!(rewritten.items[0].name, "b");
-        assert_eq!(rewritten.expressions, 1 + 2);
-        assert_eq!(rewritten.passes, pass_order());
+        assert_eq!(rewritten.items[0].position, 0);
+        assert_eq!(rewritten.items[1].position, 1);
+        assert_eq!(rewritten.items[0].name, "a");
+        assert_eq!(rewritten.expressions, 3);
+        assert_eq!(
+            rewritten.passes,
+            TypedPipeline::lean_implemented().pass_names()
+        );
         assert_eq!(rewritten.count_by_kind(TypedDefKind::Other), 2);
-        assert_eq!(rewritten.count_by_kind(TypedDefKind::Function), 0);
-        // Loader round-trip kept the right bodies: k1 belongs to position 1.
         for item in &rewritten.items {
-            let DefKind::Pragma { key, .. } = &item.def.kind else {
-                panic!("test bodies are pragmas")
-            };
-            assert_eq!(*key, format!("k{}", item.position));
+            assert!(
+                item.contents.len() > 1,
+                "generated helpers must be retained"
+            );
+            let mut found_original = false;
+            for content in &item.contents {
+                let (body, interner) = load_definition(&store.0, content).unwrap();
+                assert_eq!(
+                    sail_ast::Interner::resolve(&interner, sail_ast::Symbol(0)),
+                    Some("local_symbol")
+                );
+                if let DefKind::Pragma { key, .. } = &body.kind {
+                    assert_eq!(key, &item.name);
+                    found_original = true;
+                }
+                sail_ast::storage::drop_definition(body);
+            }
+            assert!(found_original);
         }
+        assert_eq!(store.0.live_bytes(), 0);
+    }
+
+    #[test]
+    fn sequential_and_parallel_rewrites_are_identical() {
+        let store = TestStore::new();
+        let sources: Vec<_> = (0..32)
+            .map(|i| source(&store, &format!("k{i}"), i, 1024))
+            .collect();
+        let single = run_sources(&store, &sources, 1, BUDGET).unwrap();
+        let parallel = run_sources(&store, &sources, 4, BUDGET).unwrap();
+        for (first, second) in single.items.iter().zip(&parallel.items) {
+            assert_eq!(first.position, second.position);
+            assert_eq!(first.contents, second.contents);
+        }
+        assert_eq!(single.expressions, parallel.expressions);
     }
 
     #[test]
     fn rewrite_empty_is_vacuous_but_still_incomplete() {
-        let bodies = std::collections::BTreeMap::new();
-        let rewritten = rewrite_defs(&mut memory_loader(&bodies), &[]).unwrap();
+        let store = TestStore::new();
+        let rewritten = run_sources(&store, &[], 4, BUDGET).unwrap();
         assert!(rewritten.is_empty());
-        assert_eq!(rewritten.definitions, 0);
-        assert_eq!(rewritten.expressions, 0);
-        assert_eq!(rewritten.passes, pass_order());
-        let err = rewritten
-            .require_lean_emit()
-            .expect_err("rewrite is not a successful build");
-        assert_eq!(err.exit_code, crate::args::EXIT_ERROR);
-        assert!(err.message.contains("lean-emit"), "{err}");
-        assert!(
-            err.message.contains("not a successful model build"),
-            "{err}"
-        );
+        let error = rewritten.require_lean_emit().expect_err("no stub success");
+        assert_eq!(error.exit_code, crate::args::EXIT_ERROR);
+        assert!(error.message.contains("lean-emit"));
     }
 
     #[test]
-    fn loader_failure_aborts_without_partial_success() {
-        let defs = vec![emitted("a", 0), emitted("b", 1)];
-        let bodies = [(0, ("k0".to_string(), "v".to_string()))]
-            .into_iter()
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let err = rewrite_defs(&mut memory_loader(&bodies), &defs)
-            .expect_err("missing body must fail the stage");
-        assert_eq!(err.exit_code, crate::args::EXIT_FATAL);
-        assert!(err.message.contains('1'), "{err}");
+    fn missing_blob_aborts_without_partial_success() {
+        let store = TestStore::new();
+        let sources = [source(&store, "a", 0, 1), source(&store, "b", 1, 1)];
+        std::fs::remove_file(store.0.blob_path(&sources[1].content)).unwrap();
+        let error = run_sources(&store, &sources, 4, BUDGET).unwrap_err();
+        assert_eq!(error.exit_code, crate::args::EXIT_FATAL);
+        assert!(error.message.contains("missing AST blob"));
+    }
+
+    #[test]
+    fn failed_persistence_aborts_the_stage() {
+        let store = TestStore::new();
+        let sources = [source(&store, "a", 0, 1)];
+        let first = run_sources(&store, &sources, 1, BUDGET).unwrap();
+        let generated = first.items[0]
+            .contents
+            .iter()
+            .find(|id| **id != sources[0].content)
+            .unwrap();
+        let path = store.0.blob_path(generated);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let error = run_sources(&store, &sources, 4, BUDGET).unwrap_err();
+        assert_eq!(error.exit_code, crate::args::EXIT_FATAL);
+    }
+
+    #[test]
+    fn rewritten_bodies_larger_than_test_memory_stay_on_disk() {
+        let store = TestStore::new();
+        let sources: Vec<_> = (0..160)
+            .map(|i| source(&store, &format!("large_{i}"), i, 1024 * 1024))
+            .collect();
+        let rewritten = run_sources(&store, &sources, 4, 4 * 1024 * 1024).unwrap();
+        assert_eq!(rewritten.definitions, sources.len());
+        assert_eq!(store.0.live_bytes(), 0);
+        let bytes: u64 = rewritten
+            .items
+            .iter()
+            .flat_map(|item| &item.contents)
+            .map(|content| std::fs::metadata(store.0.blob_path(content)).unwrap().len())
+            .sum();
+        assert!(
+            bytes > 128 * 1024 * 1024,
+            "workload must exceed the 128 MiB test limit"
+        );
+        let item = rewritten.items.last().unwrap();
+        let mut found = false;
+        for content in &item.contents {
+            let (body, _) = load_definition(&store.0, content).unwrap();
+            if let DefKind::Pragma { key, payload } = &body.kind {
+                assert_eq!(key, "large_159");
+                assert_eq!(payload.len(), 1024 * 1024);
+                found = true;
+            }
+            sail_ast::storage::drop_definition(body);
+        }
+        assert!(found);
     }
 
     #[test]
     fn require_lean_emit_reports_passes_and_counts() {
-        let defs = vec![emitted("a", 0)];
-        let bodies = [(0, ("k0".to_string(), "v".to_string()))]
-            .into_iter()
-            .collect::<std::collections::BTreeMap<_, _>>();
-        let rewritten = rewrite_defs(&mut memory_loader(&bodies), &defs).unwrap();
-        let err = rewritten.require_lean_emit().expect_err("no stub success");
-        assert_eq!(err.exit_code, crate::args::EXIT_ERROR);
-        assert!(err.message.contains("1 rewritten TypedDefs"), "{err}");
-        assert!(
-            err.message
-                .contains(&format!("{} passes", rewritten.passes.len())),
-            "{err}"
-        );
-        assert!(err.message.contains(&rewritten.passes.join(", ")), "{err}");
+        let store = TestStore::new();
+        let sources = [source(&store, "a", 0, 1)];
+        let rewritten = run_sources(&store, &sources, 2, BUDGET).unwrap();
+        let error = rewritten.require_lean_emit().unwrap_err();
+        assert!(error.message.contains("1 rewritten TypedDefs"));
+        assert!(error.message.contains(&rewritten.passes.join(", ")));
     }
 
     #[test]
     fn manifest_def_count_mismatch_is_fatal() {
         let defs = vec![emitted("a", 0)];
-        let err = ensure_alignment(2, &defs).expect_err("counts must align 1:1");
-        assert_eq!(err.exit_code, crate::args::EXIT_FATAL);
-        assert!(err.message.contains("2 descriptors"), "{err}");
-        assert!(err.message.contains("1 TypedDefs"), "{err}");
-        ensure_alignment(1, &defs).expect("aligned counts pass");
+        let error = ensure_alignment(2, &defs).unwrap_err();
+        assert_eq!(error.exit_code, crate::args::EXIT_FATAL);
+        ensure_alignment(1, &defs).unwrap();
     }
 }

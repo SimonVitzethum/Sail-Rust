@@ -325,6 +325,22 @@ pub fn load_definition(warm: &WarmLayer, id: &ContentId) -> Result<(sail_ast::De
     Ok((snapshot.into_definition(), interner))
 }
 
+/// Persist one flat definition and its symbols without caching the bytes.
+/// Callers retain the snapshot for iterative disposal on success and failure.
+pub fn store_snapshot(
+    warm: &WarmLayer,
+    snapshot: &DefinitionSnapshot,
+    interner: &sail_ast::SimpleInterner,
+) -> Result<(ContentId, u64), CliError> {
+    let mut bytes = Vec::new();
+    snapshot.write(&mut bytes, interner)
+        .map_err(|e| CliError::fatal(e.to_string()))?;
+    let id = ContentId::of_domain_parts("sail-rs/flat-ast-v1", &[&bytes]);
+    warm.store(&id, &bytes)
+        .map_err(|e| CliError::fatal(e.to_string()))?;
+    Ok((id, bytes.len() as u64))
+}
+
 /// Convert all active input definitions without retaining whole-program bodies.
 /// Any lexical, include, grammar, conversion or linkage gap stops the pipeline.
 /// Successful conversion is deliberately not reported as successful checking.
@@ -464,16 +480,9 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
             );
             if opts.verbose >= 2 { eprintln!("sail-rs: spool {}:{}", record.path, record.span); }
             let snapshot = DefinitionSnapshot::new(def);
-            let mut bytes = Vec::new();
-            snapshot.write(&mut bytes, &interner)
-                .map_err(|e| CliError::fatal(e.to_string()))?;
-            drop(snapshot);
-            drop(interner);
-            let id = ContentId::of_domain_parts("sail-rs/flat-ast-v1", &[&bytes]);
-            warm.store(&id, &bytes)
-                .map_err(|e| CliError::fatal(e.to_string()))?;
+            let (id, bytes) = store_snapshot(&warm, &snapshot, &interner)?;
             // Queued results hold disk references, never completed AST bodies.
-            Ok::<_, CliError>((id, bytes.len() as u64, declaration))
+            Ok::<_, CliError>((id, bytes, declaration))
         },
         |_, result| {
             let (id, bytes, declaration) = result?;
