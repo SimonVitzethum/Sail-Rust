@@ -228,7 +228,11 @@ impl<S: Solver> SolverPool<S> {
         };
         let v = guard.prove(query);
         self.cache.note_smt_call(start.elapsed());
-        self.cache.store(query, v);
+        // Only definitive verdicts are cached (see `MemoSolver::prove`):
+        // a transient `Unknown` must never poison later queries.
+        if !matches!(v, SolverVerdict::Unknown) {
+            self.cache.store(query, v);
+        }
         v
     }
 
@@ -379,7 +383,8 @@ mod tests {
     #[test]
     fn prove_cached_counts_smt_and_reuses_cache() {
         let pool = SolverPool::with_default_cache(StubSolver::new);
-        let q = SolverQuery::new(Constraint::atom("pooled"));
+        // `True` faltet zu `Valid` (definitiv, also gecacht).
+        let q = SolverQuery::new(Constraint::True);
         pool.prove_cached(&q);
         pool.prove_cached(&q);
         let (calls, secs) = pool.smt_totals();

@@ -16,18 +16,20 @@ fn cache_eviction_bounds_entries() {
             ttl: Duration::from_secs(60),
         },
     );
-    // Stub liefert Unknown fuer Atome, aber der Cache muss trotzdem
-    // begrenzen + Treffer zaehlen.
+    // Eviction ist Cache-Eigenschaft (direkt abgelegt): Unknown-Verdikte
+    // werden seit dem Poisoning-Fix nicht mehr ueber prove() gecacht.
     let a = sail_solver::SolverQuery::new(Constraint::atom("a"));
     let b = sail_solver::SolverQuery::new(Constraint::atom("b"));
     let c = sail_solver::SolverQuery::new(Constraint::atom("c"));
-    assert_eq!(solver.prove(&a), SolverVerdict::Unknown); // miss
-    assert_eq!(solver.prove(&a), SolverVerdict::Unknown); // hit
-    assert_eq!(solver.prove(&b), SolverVerdict::Unknown); // miss
-    assert_eq!(solver.prove(&c), SolverVerdict::Unknown); // miss + evict a
+    solver.cache().store(&a, SolverVerdict::Valid);
+    solver.cache().store(&b, SolverVerdict::Valid);
+    solver.cache().store(&c, SolverVerdict::Valid); // evict a
     let s = solver.stats();
     assert_eq!(s.len, 2);
-    assert_eq!((s.hits, s.misses), (1, 3));
+    assert_eq!(solver.prove(&b), SolverVerdict::Valid); // hit
+    assert_eq!(solver.prove(&c), SolverVerdict::Valid); // hit
+    let s = solver.stats();
+    assert_eq!((s.hits, s.misses), (2, 0));
 }
 
 #[test]

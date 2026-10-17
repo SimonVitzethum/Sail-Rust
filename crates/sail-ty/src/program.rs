@@ -372,7 +372,11 @@ impl Program {
         let cache = self.solvers.cache();
         cache.lookup(&query).unwrap_or_else(|| {
             let verdict = self.solvers.checkout().prove(&query);
-            cache.store(&query, verdict);
+            // Only definitive verdicts are cached: a transient `Unknown`
+            // must never poison later identical queries.
+            if !matches!(verdict, sail_solver::SolverVerdict::Unknown) {
+                cache.store(&query, verdict);
+            }
             verdict
         })
     }

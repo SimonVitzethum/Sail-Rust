@@ -204,18 +204,23 @@ fn bounded_lru_is_mandatory() {
     let kb = ix.intern("b");
     let kc = ix.intern("c");
     let q = |k: Kid| SolverQuery::new(Constraint::from_nconstraint(&ge(k, 0), &ix));
-    assert_eq!(solver.prove(&q(ka)), SolverVerdict::Unknown);
-    assert_eq!(solver.prove(&q(ka)), SolverVerdict::Unknown); // hit
-    assert_eq!(solver.prove(&q(kb)), SolverVerdict::Unknown);
-    assert_eq!(solver.prove(&q(kc)), SolverVerdict::Unknown); // evict a
+    // Eviction ist Cache-Eigenschaft (direkt abgelegt, nicht ueber
+    // Solver-Verdikte, die seit dem Unknown-Fix nur definitiv
+    // gecacht werden).
+    for k in [ka, kb, kc] {
+        solver.cache().store(&q(k), SolverVerdict::Valid);
+    }
     let s = solver.stats();
     assert_eq!(s.len, 2);
-    assert_eq!((s.hits, s.misses), (1, 3));
+    assert_eq!(solver.prove(&q(kb)), SolverVerdict::Valid); // hit
+    assert_eq!(solver.prove(&q(kc)), SolverVerdict::Valid); // hit
+    let s = solver.stats();
+    assert_eq!((s.hits, s.misses), (2, 0));
     // Memo greift auch fuer strukturierte NConstraint-Queries.
     let valid = SolverQuery::new(Constraint::from_nconstraint(&NConstraint::True, &ix));
     assert_eq!(solver.prove(&valid), SolverVerdict::Valid);
     assert_eq!(solver.prove(&valid), SolverVerdict::Valid);
-    assert_eq!(solver.stats().hits, 2);
+    assert_eq!(solver.stats().hits, 3);
 }
 
 #[test]

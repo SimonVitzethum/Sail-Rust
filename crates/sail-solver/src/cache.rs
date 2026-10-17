@@ -377,7 +377,12 @@ impl<S: Solver> MemoSolver<S> {
         let start = Instant::now();
         let v = self.solver.prove(query);
         self.cache.note_smt_call(start.elapsed());
-        self.cache.store(query, v);
+        // Only definitive verdicts are cached: a transient `Unknown`
+        // (timeout under parallel load, stub) must never poison later
+        // identical queries into deterministic failures.
+        if !matches!(v, SolverVerdict::Unknown) {
+            self.cache.store(query, v);
+        }
         v
     }
 
@@ -471,9 +476,10 @@ mod tests {
         );
         assert_eq!(solver.cache().smt_totals().0, 0);
         // Miss mit Solver-Kontakt zaehlt genau einen SMT-Rundlauf.
-        solver.prove(&q("smt-a"));
+        // `True` faltet zu `Valid` (definitiv, also gecacht).
+        solver.prove(&SolverQuery::new(Constraint::True));
         // Treffer zaehlt keinen weiteren Rundlauf.
-        solver.prove(&q("smt-a"));
+        solver.prove(&SolverQuery::new(Constraint::True));
         let (calls, secs) = solver.cache().smt_totals();
         assert_eq!(calls, 1);
         assert!(secs >= 0.0);
@@ -481,6 +487,27 @@ mod tests {
         assert_eq!(s.smt_calls, 1);
         assert!((s.smt_secs - secs).abs() < 1e-9);
         assert_eq!((s.hits, s.misses), (1, 1));
+    }
+
+    #[test]
+    fn unknown_verdicts_are_never_cached() {
+        // Ein transientes `Unknown` (Timeout unter paralleler Last)
+        // darf spaetere identische Queries nicht deterministisch
+        // fehlschlagen lassen: kein Store, kein Hit.
+        use crate::stub::StubSolver;
+        let solver = MemoSolver::new(
+            StubSolver::new(),
+            SolverCacheConfig {
+                capacity: 8,
+                ttl: Duration::from_secs(60),
+            },
+        );
+        let query = SolverQuery::new(Constraint::atom("flaky"));
+        assert_eq!(solver.prove(&query), SolverVerdict::Unknown);
+        assert_eq!(solver.prove(&query), SolverVerdict::Unknown);
+        // Kein Treffer trotz identischer Query: nichts gecacht.
+        let s = solver.stats();
+        assert_eq!((s.hits, s.misses), (0, 2));
     }
 
     #[test]
