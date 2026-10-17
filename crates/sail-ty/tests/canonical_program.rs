@@ -1570,8 +1570,8 @@ fn audit_o6_synonym_head_mismatch_is_a_mismatch_not_a_guess() {
 #[test]
 fn outcome_outer_binders_scope_over_inner_val_schemes() {
     // B1 (evidence/2026-10-13/lane-31/REPORT.md + fixture-b1-outcome.sail):
-    // an inner `val` sees the outer `with`-binders and the header
-    // quantifiers, mirroring OCaml `check_outcome` (`type_check.ml:5379ff`).
+    // an inner `val` sees the outer `with`-binders, mirroring
+    // OCaml `check_outcome` (`type_check.ml:5379ff`).
     // Prelude-free mirrors of the fixture's outcome blocks (`bits` is a
     // prelude abbreviation for `bitvector`, which is checked here directly).
     let defs = parse(&[

@@ -1232,8 +1232,8 @@ impl Program {
     }
 
     /// Validate an outcome header and its nested specs. The outer `with`
-    /// binders (`params`) plus the outcome type-scheme quantifiers scope over
-    /// every nested scheme (OCaml `check_outcome`: `add_typquant params`,
+    /// binders (`params`) scope over every nested scheme. Header quantifiers
+    /// scope over implementations only (OCaml `check_outcome`: `add_typquant params`,
     /// then `check_defs` in the local environment, `type_check.ml:5379ff`).
     /// Only `val`/`impl` members are admitted, as in OCaml
     /// (`valid_outcome_def`). Implementation bodies additionally need the
@@ -1251,15 +1251,15 @@ impl Program {
         self.check_scoped_scheme(typschm, it, position, &[(params, it)])?;
         for def in defs {
             match &def.kind {
-                // Inner val specs see outer plus header quantifiers, mirroring
-                // `check_defs local_env` (B1: `val pa_bits` sees `with 'pa`).
+                // Inner val specs see outcome parameters, mirroring
+                // `check_defs local_env` (`val pa_bits` sees `with 'pa`).
                 // Like OCaml `check_val_spec`, only well-formedness is
                 // required here, never an arrow shape.
                 DefKind::Val(val) => self.check_scoped_scheme(
                     &val.typschm,
                     it,
                     position,
-                    &[(params, it), (&typschm.quant, it)],
+                    &[(params, it)],
                 )?,
                 DefKind::Impl(_) => {}
                 _ => {

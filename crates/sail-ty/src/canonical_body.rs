@@ -502,11 +502,54 @@ pub(crate) fn check(
             debug_assert_eq!(count, measures.len());
             checker.loop_measures(measures)?;
         }
-        DefKind::Impl(_)
-        | DefKind::Mapdef { .. }
-        | DefKind::Outcome { .. }
-        | DefKind::Instantiation { .. }
-        | DefKind::InternalMutrec(_) => {
+        DefKind::Outcome {
+            typschm,
+            quant: params,
+            defs,
+            ..
+        } => {
+            // Outcome parameters are rigid throughout the block. Header
+            // quantifiers additionally scope over each implementation, while
+            // local vals retain only their own polymorphic quantifiers.
+            let scheme = Arc::new(Scheme {
+                typschm: TypSchm {
+                    quant: params.iter().chain(&typschm.quant).cloned().collect(),
+                    typ: typschm.typ.clone(),
+                },
+                interner: checker.it.clone(),
+            });
+            let mut locals = Arc::new(Scope::default());
+            for inner in defs {
+                match &inner.kind {
+                    DefKind::Val(val) => {
+                        let mut typ = Type::root(Arc::new(Scheme {
+                            typschm: val.typschm.clone(),
+                            interner: checker.it.clone(),
+                        }));
+                        typ.scope = scheme.clone();
+                        locals = Arc::new(Scope {
+                            locals: vec![(checker.name(&val.name)?.to_owned(), (typ, false))],
+                            facts: Vec::new(),
+                            parent: Some(locals),
+                        });
+                    }
+                    DefKind::Impl(funcl) => checker.function_with_type(
+                        funcl,
+                        None,
+                        Type::root(scheme.clone()),
+                        Some(locals.clone()),
+                    )?,
+                    _ => {
+                        return Err(unsupported(
+                            inner.span,
+                            "forbidden definition in outcome block",
+                        ))
+                    }
+                }
+            }
+        }
+        DefKind::Impl(_) => return Err(unsupported(def.span, "implementation outside an outcome")),
+        DefKind::Mapdef { .. } | DefKind::Instantiation { .. } | DefKind::InternalMutrec(_) => {
             return Err(unsupported(
                 def.span,
                 "mapping, scattered, outcome or measure definition",
@@ -3482,7 +3525,16 @@ impl Checker<'_> {
         let name = self.name(&funcl.name)?.to_owned();
         let scheme = self.program.value(&name, self.position).cloned()
             .ok_or_else(|| unsupported(funcl.span, format!("cannot infer type of unannotated function '{name}' without a val specification")))?;
-        let typ = Type::root(scheme);
+        self.function_with_type(funcl, measure, Type::root(scheme), None)
+    }
+    fn function_with_type(
+        &mut self,
+        funcl: &Funcl,
+        measure: Option<(&Pat, &Exp)>,
+        typ: Type,
+        parent: Option<Arc<Scope>>,
+    ) -> TypeResult<()> {
+        self.proof_scope = Arc::default();
         self.context = Some(typ.root.clone());
         let TypKind::Fn { args, .. } = &typ.node().kind else {
             return Err(unsupported(
@@ -3494,7 +3546,11 @@ impl Checker<'_> {
             PExpKind::PatExp { pat, body } => (pat, None, body),
             PExpKind::PatWhen { pat, guard, body } => (pat, Some(guard), body),
         };
-        let mut scope = Scope::default();
+        let mut scope = Scope {
+            parent,
+            locals: Vec::new(),
+            facts: Vec::new(),
+        };
         if args.len() == 1 {
             self.pattern(pat, typ.child(Step::Argument(0)), false, &mut scope)?;
         } else {
@@ -3534,7 +3590,7 @@ impl Checker<'_> {
         if let Some((pat, exp)) = measure {
             let args = crate::measure_check::lookup_function_args(
                 self.program,
-                &name,
+                self.name(&funcl.name)?,
                 self.position,
                 funcl.span,
             )?;
