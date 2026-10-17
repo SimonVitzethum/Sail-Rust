@@ -9,7 +9,7 @@ use crate::{
 use sail_ast::*;
 use sail_solver::canonical::{Argument, Bindings, CanonicalQuery, Context, View};
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -2510,13 +2510,13 @@ impl Checker<'_> {
     /// (planted by `open_existential`): dropped callee bounds re-enter
     /// proofs as assumptions with the opening's identities. Marker
     /// scopes carry a dummy `Unknown` type (never a real scheme), so
-    /// ordinary scheme constraints are never double-added. Nonlinear
-    /// conjuncts (`2 ^`, applications) are skipped (honest gap, the
-    /// emitter would reject them); linear ones prove directly.
+    /// ordinary scheme constraints are never double-added. Powers retain
+    /// congruence through the SMT emitter's conservative UF abstraction;
+    /// unsupported applications remain outside these assumptions.
     fn marker_assumptions<'a>(&self, typs: &[&'a Type]) -> Vec<View<'a>> {
         /// Iterative constraint shape walk (no recursion): reports
         /// whether the subtree holds anything the SMT emitter rejects
-        /// (`2 ^`, applications, names, sets) and collects free
+        /// (applications, names, sets) and collects free
         /// variables. One explicit stack over nexps, arguments and
         /// constraints; early exit on the first symbolic node.
         fn constraint_shape(node: &Constraint) -> (bool, Vec<Symbol>) {
@@ -2551,7 +2551,7 @@ impl Checker<'_> {
                             stack.push(Task::Nexp(second));
                         }
                         NExpKind::Neg(inner) => stack.push(Task::Nexp(inner)),
-                        NExpKind::Exp(_) => symbolic = true,
+                        NExpKind::Exp(exponent) => stack.push(Task::Nexp(exponent)),
                         NExpKind::If {
                             cond,
                             then_branch,
@@ -2600,7 +2600,23 @@ impl Checker<'_> {
             (symbolic, free)
         }
         let mut assumptions = Vec::new();
-        for typ in typs {
+        let mut pending: Vec<&'a Type> = typs.to_vec();
+        let mut seen = HashSet::new();
+        while let Some(typ) = pending.pop() {
+            let key = (Arc::as_ptr(&typ.scope), Arc::as_ptr(&typ.substitutions));
+            if !seen.insert(key) {
+                continue;
+            }
+            // Bounds can depend on values returned by earlier calls. Follow
+            // their existing substitution views to retain that evidence with
+            // its original binder identities, without copying AST subtrees.
+            pending.extend(typ.substitutions.types.iter().map(|(_, owner)| owner));
+            pending.extend(
+                typ.substitutions
+                    .scalars
+                    .iter()
+                    .map(|(_, scalar)| &scalar.owner),
+            );
             if !matches!(&typ.scope.typschm.typ.kind, TypKind::Unknown) {
                 continue;
             }
@@ -2636,9 +2652,8 @@ impl Checker<'_> {
                     if symbolic {
                         continue;
                     }
-                    // Only binder-local conjuncts: outer variables would
-                    // miss in the marker scope and fail the whole query
-                    // instead of just skipping.
+                    // Outer variables need explicit substitution views;
+                    // unlinked names stay outside this marker's assumptions.
                     if free.iter().any(|symbol| {
                         !binders.contains(symbol) && typ.substitutions.get_scalar(*symbol).is_none()
                     }) {

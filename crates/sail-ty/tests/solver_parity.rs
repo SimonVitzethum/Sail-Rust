@@ -14,7 +14,9 @@ use sail_solver::{
     Constraint, MemoCache, Solver as CanonicalSolver, SolverCacheConfig, SolverQuery,
     SolverVerdict, StubSolver as CanonicalStub,
 };
-use sail_ty::solver::{CachingSolver, NormalizingSolver, ProveResult, Solver as TySolver, StubSolver as TyStub};
+use sail_ty::solver::{
+    CachingSolver, NormalizingSolver, ProveResult, Solver as TySolver, StubSolver as TyStub,
+};
 use sail_ty::{NConstraint as TyNc, Nexp as TyNexp};
 
 /// Stub-Antworten stimmen auf faltbaren Formeln ueberein.
@@ -24,8 +26,18 @@ fn stub_verdicts_agree_on_foldable() {
     let canon = CanonicalStub::new();
     // (sail-ty-Constraint, sail-solver-Constraint, erwartetes Paar).
     let cases: &[(TyNc, Constraint, ProveResult, SolverVerdict)] = &[
-        (TyNc::True, Constraint::True, ProveResult::Proved, SolverVerdict::Valid),
-        (TyNc::False, Constraint::False, ProveResult::Refuted, SolverVerdict::Invalid),
+        (
+            TyNc::True,
+            Constraint::True,
+            ProveResult::Proved,
+            SolverVerdict::Valid,
+        ),
+        (
+            TyNc::False,
+            Constraint::False,
+            ProveResult::Refuted,
+            SolverVerdict::Invalid,
+        ),
         (
             TyNc::Not(Box::new(TyNc::True)),
             Constraint::Not(Box::new(Constraint::True)),
@@ -153,12 +165,17 @@ fn lane10_canonical_path_powers_apps_parity() {
         ProveResult::Proved
     );
     assert_eq!(
-        canon.prove(&SolverQuery::new(Constraint::atom("(= (+ (var n) (const 0)) (var n))"))),
+        canon.prove(&SolverQuery::new(Constraint::atom(
+            "(= (+ (var n) (const 0)) (var n))"
+        ))),
         SolverVerdict::Unknown
     );
     // Allgemeine Apps / opake Booleans: beidseitig `Unknown`.
     assert_eq!(
-        ty.prove(&TyNc::App("sorted".to_string(), vec![TyNexp::Var("n".to_string())])),
+        ty.prove(&TyNc::App(
+            "sorted".to_string(),
+            vec![TyNexp::Var("n".to_string())]
+        )),
         ProveResult::Unknown
     );
     assert_eq!(
@@ -174,21 +191,21 @@ fn lane10_canonical_path_powers_apps_parity() {
 // Was die lokale Schicht (sail-ty: `Nexp::simplify`, `linear_form`,
 // `StubSolver`-Lineararithmetik, `match_scalar_arg`/`match_bool_arg`)
 // jetzt beweist — und was auf beiden Schichten sound-offen bleibt:
-// symbolische Potenzen (`2 ^ 'n`: SMT braucht Elaboration, vgl.
-// `canonical.rs` "numeric application/power needs elaboration before
-// proof"), allgemeine Constraint-Applikationen (`canonical.rs`
+// symbolische Potenzarithmetik (`2 ^ 'n`: der kanonische SMT-Pfad
+// erhaelt nur Kongruenz ohne arithmetische Axiome), allgemeine
+// Constraint-Applikationen (`canonical.rs`
 // "constraint synonym needs expansion before proof") sowie nicht
 // exakt-invertierbare abhängige Aufrufparameter (kanonisch
 // `cannot infer dependent call parameter`, lokal
 // `ScalarMatch::Uninferred`).
 
 use sail_ast::{
-    Constraint as AstConstraint, ConstraintKind as AstConstraintKind, Interner,
-    NExp as AstNExp, NExpKind as AstNExpKind, Name, Node, SimpleInterner,
-    TypArg as AstTypArg, TypArgKind as AstTypArgKind,
+    Constraint as AstConstraint, ConstraintKind as AstConstraintKind, Interner, NExp as AstNExp,
+    NExpKind as AstNExpKind, Name, Node, SimpleInterner, TypArg as AstTypArg,
+    TypArgKind as AstTypArgKind,
 };
 use sail_solver::canonical::{CanonicalQuery, Context, View};
-use sail_ty::subsume::{BoolMatch, ScalarMatch, match_bool_arg, match_scalar_arg};
+use sail_ty::subsume::{match_bool_arg, match_scalar_arg, BoolMatch, ScalarMatch};
 use std::collections::{BTreeMap, HashSet};
 
 fn ty_var(v: &str) -> TyNexp {
@@ -280,36 +297,47 @@ fn lane20_stub_discharges_checker_range_and_bits_obligations() {
     assert_eq!(ty.prove(&congruence), ProveResult::Proved);
 }
 
-/// Der kanonische SMT-Emitter verweigert Potenzen und allgemeine
-/// Constraint-Applikationen mit Fehler statt zu raten (sound-offen,
-/// vgl. `canonical.rs`-Meldungen).
+/// Powers retain congruence without assuming arithmetic facts. General
+/// constraint applications still require elaboration.
 #[test]
-fn lane20_canonical_emitter_refuses_powers_and_general_apps() {
+fn lane20_canonical_emitter_abstracts_powers_and_refuses_general_apps() {
     let mut it = SimpleInterner::new();
     let n_sym = it.intern("n");
     let m_sym = it.intern("m");
     let pred = it.intern("my_pred");
     let mut variables = BTreeMap::new();
     variables.insert("n".to_string(), 0);
-    let context = Context { interner: &it, variables: &variables, bindings: None };
+    let context = Context {
+        interner: &it,
+        variables: &variables,
+        bindings: None,
+    };
     fn view<'a>(constraint: &'a AstConstraint, context: Context<'a>) -> View<'a> {
-        View { negated: false, constraint, context }
+        View {
+            negated: false,
+            constraint,
+            context,
+        }
     }
-    // `2 ^ 'n == 8`: Potenz braucht Elaboration vor dem Beweis.
-    let power = Node::dummy(AstNExpKind::Exp(Box::new(Node::dummy(
-        AstNExpKind::Var(n_sym),
-    ))));
+    // `2 ^ 'n == 8` cannot follow from congruence without assumptions.
+    let power = Node::dummy(AstNExpKind::Exp(Box::new(Node::dummy(AstNExpKind::Var(
+        n_sym,
+    )))));
     let eight: AstNExp = Node::dummy(AstNExpKind::Constant("8".to_string()));
     let goal: AstConstraint = Node::dummy(AstConstraintKind::Equal(
         Box::new(Node::dummy(AstTypArgKind::NExp(power))),
         Box::new(Node::dummy(AstTypArgKind::NExp(eight))),
     ));
-    let error = CanonicalQuery::implication(&[], view(&goal, context), None).unwrap_err();
-    assert_eq!(error, "numeric application/power needs elaboration before proof");
+    let query = CanonicalQuery::implication(&[], view(&goal, context), None).unwrap();
+    let solver = sail_solver::SmtLibSolver::new();
+    assert_eq!(
+        solver.prove(&sail_solver::SolverQuery::new(
+            sail_solver::Constraint::SmtLib(query)
+        )),
+        SolverVerdict::Unknown,
+    );
     // Allgemeines Constraint-Prädikat `my_pred('n)`: braucht Expansion.
-    let arg: AstTypArg = Node::dummy(AstTypArgKind::NExp(Node::dummy(AstNExpKind::Var(
-        m_sym,
-    ))));
+    let arg: AstTypArg = Node::dummy(AstTypArgKind::NExp(Node::dummy(AstNExpKind::Var(m_sym))));
     let app: AstConstraint = Node::dummy(AstConstraintKind::App {
         func: Name::dummy(pred),
         args: vec![arg],
@@ -335,11 +363,13 @@ fn lane20_dependent_parameters_bind_exactly_or_stay_open() {
     let int = HashSet::from(["n".to_string()]);
     // Arithmetisch exakt: `'n + 1 = 5` bindet `'n := 4` (kanonisch waere
     // dies `cannot infer dependent call parameter` — Verdrahtung folgt).
-    let formal =
-        TyNexp::Add(Box::new(ty_var("n")), Box::new(ty_const(1)));
+    let formal = TyNexp::Add(Box::new(ty_var("n")), Box::new(ty_const(1)));
     assert_eq!(
         match_scalar_arg(&formal, &ty_const(5), &int),
-        ScalarMatch::Bind { var: "n".to_string(), to: ty_const(4) }
+        ScalarMatch::Bind {
+            var: "n".to_string(),
+            to: ty_const(4)
+        }
     );
     // Potenz-Formal `2 ^ 'n = 8`: lokal wie kanonisch sound-offen.
     let power = TyNexp::Exp(Box::new(ty_var("n")));
@@ -351,7 +381,10 @@ fn lane20_dependent_parameters_bind_exactly_or_stay_open() {
     let bools = HashSet::from(["p".to_string()]);
     assert_eq!(
         match_bool_arg(&TyNc::Var("p".to_string()), &TyNc::True, &bools),
-        BoolMatch::Bind { var: "p".to_string(), to: TyNc::True }
+        BoolMatch::Bind {
+            var: "p".to_string(),
+            to: TyNc::True
+        }
     );
     assert!(matches!(
         match_bool_arg(

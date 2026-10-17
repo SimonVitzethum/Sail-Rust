@@ -147,3 +147,35 @@ fn nested_existentials_are_rejected_before_opening_witnesses() {
         sail_ty::error::TypeErrorKind::QuantError(_)
     ));
 }
+
+const POWER_DECLARATIONS: &[&str] = &[
+    "default Order dec",
+    "type bits('n) = bitvector('n)",
+    "val pow_witness : forall 'n, 'n >= 0. int('n) -> { 'p, 'p == 2 ^ 'n & 'p >= 0. int('p) }",
+    "val unsigned_witness : forall 'n. bits('n) -> { 'u, 0 <= 'u & 'u < 2 ^ 'n. int('u) }",
+    "val mod_witness : forall 'n 'm, 'n >= 0 & 'm >= 0. (int('n), int('m)) -> { 'r, 0 <= 'r & 'r < 'm. int('r) }",
+];
+
+#[test]
+fn dependent_power_witnesses_preserve_transitive_bounds() {
+    let mut sources = POWER_DECLARATIONS.to_vec();
+    sources.extend([
+        "val bounded : forall 'n 'l, 'n >= 0 & 'l >= 0. (bits('n), int('l)) -> { 'r, 0 <= 'r & 'r < 2 ^ 'l. int('r) }",
+        "function bounded(v, l) = mod_witness(unsigned_witness(v), pow_witness(l))",
+    ]);
+    check(&sources).unwrap();
+}
+
+#[test]
+fn dependent_power_witnesses_do_not_invent_a_smaller_bound() {
+    let mut sources = POWER_DECLARATIONS.to_vec();
+    sources.extend([
+        "val bounded : forall 'n 'l, 'n >= 0 & 'l > 0. (bits('n), int('l)) -> { 'r, 0 <= 'r & 'r < 2 ^ ('l - 1). int('r) }",
+        "function bounded(v, l) = mod_witness(unsigned_witness(v), pow_witness(l))",
+    ]);
+    let error = check(&sources).expect_err("the smaller exponent has no supporting evidence");
+    assert!(
+        !matches!(error.kind, sail_ty::error::TypeErrorKind::Unsupported(_)),
+        "{error:?}"
+    );
+}

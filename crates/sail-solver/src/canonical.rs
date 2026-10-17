@@ -1,5 +1,6 @@
-//! Stack-safe canonical Sail constraints -> validated SMT-LIB. No AST clones,
-//! integer truncation, raw Sail identifiers, or unproved opaque fallbacks.
+//! Stack-safe canonical Sail constraints -> validated SMT-LIB. Powers use a
+//! conservative congruence abstraction; only UNSAT proves obligations. No
+//! recursive AST clones, integer truncation or raw Sail identifiers.
 use sail_ast::*;
 use std::collections::BTreeMap;
 use std::fmt::Write;
@@ -52,6 +53,7 @@ impl CanonicalQuery {
     ) -> Result<Self, String> {
         let mut emitter = Emitter {
             declarations: BTreeMap::new(),
+            uses_power: false,
             output: String::new(),
         };
         for assumption in assumptions {
@@ -77,6 +79,7 @@ impl CanonicalQuery {
         }
         let mut emitter = Emitter {
             declarations: BTreeMap::new(),
+            uses_power: false,
             output: String::new(),
         };
         for a in assumptions {
@@ -113,6 +116,12 @@ impl Emitter {
     }
     fn finish(self) -> CanonicalQuery {
         let mut script = String::new();
+        if self.uses_power {
+            // A conservative abstraction: every mathematical power function
+            // is an interpretation of this UF. UNSAT therefore remains sound.
+            // No positivity or arithmetic axiom is invented by the emitter.
+            script.push_str("(declare-fun sail_pow2 (Int) Int)\n");
+        }
         for (name, sort) in self.declarations {
             writeln!(script, "(declare-const {name} {sort})").unwrap();
         }
@@ -129,6 +138,7 @@ enum Task<'a> {
 }
 struct Emitter {
     declarations: BTreeMap<String, &'static str>,
+    uses_power: bool,
     output: String,
 }
 fn name(it: &SimpleInterner, symbol: Symbol) -> Result<&str, String> {
@@ -276,10 +286,13 @@ impl Emitter {
                             Task::NExp(a, context, subst),
                         ]);
                     }
-                    NExpKind::Exp(_) | NExpKind::App { .. } => {
-                        return Err(
-                            "numeric application/power needs elaboration before proof".into()
-                        )
+                    NExpKind::Exp(exponent) => {
+                        self.uses_power = true;
+                        self.output.push_str("(sail_pow2 ");
+                        work.extend([Task::Text(")"), Task::NExp(exponent, context, subst)]);
+                    }
+                    NExpKind::App { .. } => {
+                        return Err("numeric application needs elaboration before proof".into())
                     }
                 },
                 Task::Constraint(c, context, subst) => match &c.kind {
