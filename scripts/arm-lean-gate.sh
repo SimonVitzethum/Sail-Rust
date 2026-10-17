@@ -16,7 +16,10 @@ mkdir -p "$OUT_ROOT"
 OUT="$(mktemp -d "$OUT_ROOT/run.XXXXXXXX")"
 OUT="$(realpath "$OUT")"
 cd "$TASK_ROOT"
-systemd-run --user --wait --pipe --collect \
+TASK_TMP="$TASK_ROOT/target/tmp"
+mkdir -p "$TASK_TMP"
+export TMPDIR="$TASK_TMP"
+systemd-run --user --wait --pipe --collect --setenv="TMPDIR=$TASK_TMP" \
     -p MemoryMax=4G -p MemorySwapMax=0 -p "WorkingDirectory=$TASK_ROOT" \
     "$(command -v cargo)" build --profile ci -j 2 -p sail-cli
 # Read the canonical source list from the model's Makefile, including its
@@ -43,7 +46,7 @@ for variable in SAIL_RS_THREADS SAIL_TYPECHECK_MEMORY SAIL_REWRITE_MEMORY; do
         COMPILER_ENV+=(--setenv="$variable=${!variable}")
     fi
 done
-systemd-run --user --wait --pipe --collect "${COMPILER_ENV[@]}" \
+systemd-run --user --wait --pipe --collect --setenv="TMPDIR=$TASK_TMP" "${COMPILER_ENV[@]}" \
     -p "MemoryMax=$MEMORY" -p MemorySwapMax=0 -p "WorkingDirectory=$MODEL" \
     "$TASK_ROOT/target/ci/sail-rs" -dprofile -verbose "${SAIL_ARM_VERBOSE:-1}" -memo_z3 \
     -lean -lean-force-output -lean_output_dir "$OUT/lean" -o armv9 \
@@ -58,7 +61,7 @@ if [ ! -f "$OUT/lean/lakefile.toml" ] && [ ! -f "$OUT/lean/lakefile.lean" ]; the
     echo 'ARM gate failed: generated Lean project has no lakefile.' >&2
     exit 1
 fi
-systemd-run --user --wait --pipe --collect \
+systemd-run --user --wait --pipe --collect --setenv="TMPDIR=$TASK_TMP" \
     -p "MemoryMax=$MEMORY" -p MemorySwapMax=0 -p "WorkingDirectory=$OUT/lean" \
     "$(command -v lake)" build 2>&1 | tee "$OUT/lake.log"
 python3 - "$OUT/lean/.lake/build/lib/lean" > "$OUT/lean-modules.txt" <<'PY'
@@ -71,7 +74,7 @@ if not modules:
     sys.exit('ARM gate failed: lake build produced no compiled Lean modules')
 print('\n'.join(modules))
 PY
-systemd-run --user --wait --pipe --collect \
+systemd-run --user --wait --pipe --collect --setenv="TMPDIR=$TASK_TMP" \
     -p "MemoryMax=$MEMORY" -p MemorySwapMax=0 -p "WorkingDirectory=$OUT/lean" \
     "$(command -v lake)" env lean --run "$TASK_ROOT/scripts/CheckLeanNoSorry.lean" \
     "$OUT/lean-modules.txt" 2>&1 | tee "$OUT/no-sorry.log"

@@ -32,6 +32,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 TASK_DIR="$(pwd)"
+# Keep test fixtures, Cargo scratch and manifests on the project disk.
+# The transient services need an explicit TMPDIR; they do not inherit it.
+TASK_TMP="$TASK_DIR/target/tmp"
+mkdir -p "$TASK_TMP"
+export TMPDIR="$TASK_TMP"
 BUILD_MEMORY="${SAIL_BUILD_MEMORY:-4G}"
 TEST_MEMORY="${SAIL_TEST_MEMORY:-128M}"
 BUILD_JOBS="${SAIL_BUILD_JOBS:-2}"
@@ -43,7 +48,7 @@ trap 'rm -f "$MANIFEST" "$BINARIES"' EXIT
 if [ "$#" -eq 0 ]; then
     set -- -p sail-rewrite -p sail-shard -p sail-ooc -p sail-par-pipe
 fi
-systemd-run --user --wait --pipe --collect \
+systemd-run --user --wait --pipe --collect --setenv="TMPDIR=$TASK_TMP" \
     -p "MemoryMax=$BUILD_MEMORY" -p MemorySwapMax=0 \
     -p "WorkingDirectory=$TASK_DIR" \
     "$(command -v cargo)" test --no-run --profile ci -j "$BUILD_JOBS" \
@@ -70,7 +75,7 @@ while IFS= read -r binary; do
         else
             THREADS=1
         fi
-        if systemd-run --user --wait --pipe --collect \
+        if systemd-run --user --wait --pipe --collect --setenv="TMPDIR=$TASK_TMP" \
             -p "MemoryMax=$TEST_MEMORY" -p MemorySwapMax=0 -p RuntimeMaxSec=180 \
             -p "WorkingDirectory=$TASK_DIR" \
             "$binary" --test-threads="$THREADS"; then
