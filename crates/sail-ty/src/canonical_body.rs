@@ -2619,7 +2619,7 @@ impl Checker<'_> {
     fn marker_assumptions<'a>(&self, typs: &[&'a Type]) -> Vec<View<'a>> {
         /// Iterative constraint shape walk (no recursion): reports
         /// whether the subtree holds anything the SMT emitter rejects
-        /// (applications, names, sets) and collects free
+        /// (applications and unresolved names) and collects free
         /// variables. One explicit stack over nexps, arguments and
         /// constraints; early exit on the first symbolic node.
         fn constraint_shape(node: &Constraint) -> (bool, Vec<Symbol>) {
@@ -2678,7 +2678,8 @@ impl Checker<'_> {
                                 free.push(*symbol);
                             }
                         }
-                        ConstraintKind::Id(_) | ConstraintKind::Set { .. } => symbolic = true,
+                        ConstraintKind::Id(_) => symbolic = true,
+                        ConstraintKind::Set { nexp, .. } => stack.push(Task::Nexp(nexp)),
                         ConstraintKind::Equal(first, second)
                         | ConstraintKind::NotEqual(first, second) => {
                             stack.push(Task::Arg(first));
@@ -2721,6 +2722,14 @@ impl Checker<'_> {
                     .map(|(_, scalar)| &scalar.owner),
             );
             if !matches!(&typ.scope.typschm.typ.kind, TypKind::Unknown) {
+                continue;
+            }
+            // Marker syntax belongs to its opening's symbol table. Alias
+            // views use a different table and telescope substitutions; the
+            // original marker owner is reached through those substitutions.
+            // Emitting this view's marker under the alias table can resolve
+            // unrelated symbols or fail on a symbol absent from that table.
+            if !Arc::ptr_eq(&typ.root.interner, &typ.scope.interner) {
                 continue;
             }
             let binders: Vec<Symbol> = typ

@@ -88,3 +88,32 @@ fn implementation_requires_an_enclosing_outcome() {
 fn header_quantifiers_are_not_in_scope_in_local_specs() {
     assert!(check(&["outcome read : forall 'n, 'n >= 4. int('n) -> int = { val helper : int('n) -> int impl emulator(x) = helper(x) }"]).is_err());
 }
+
+#[test]
+fn outcome_record_constraints_survive_local_calls_and_branch_selection() {
+    let prelude = [
+        "default Order dec",
+        "type bits('n) = bitvector('n)",
+        "struct Request('n : Int, 'pa : Type), 'n > 0 = { pa : 'pa, size : int('n) }",
+        "val check_request : forall 'n ('pa : Type), 'n > 0. Request('n, 'pa) -> bool",
+        "val mono : forall 'n, 'n >= 0. bits('n) -> bits('n)",
+        "val bitvector_length : forall 'n, 'n >= 0. bits('n) -> int('n)",
+        "overload length = {bitvector_length}",
+        "val equal : forall 'n 'm. (int('n), int('m)) -> bool('n == 'm)",
+        "overload operator == = {equal}",
+        "val read_tag : forall 'l, 'l in {32, 64}. (int('l), bits('l)) -> bool",
+    ];
+    let selected = "let pa = pa_bits(request.pa); let pa = if check_request(request) then mono(pa) else pa; let tag : bool = if length(pa) == 32 then read_tag(32, pa) else read_tag(64, pa); ()";
+    for (members, body, accepted) in [
+        ("32, 64", "let pa = pa_bits(request.pa); ()", true),
+        ("32, 64", "let pa = pa_bits(request.pa); let pa = if check_request(request) then mono(pa) else pa; ()", true),
+        ("32, 64", selected, true),
+        ("16, 64", selected, false),
+    ] {
+        let source = format!("outcome read : forall 'n, 'n > 0. Request('n, 'pa) -> unit with 'pa : Type = {{ val pa_bits : 'pa -> {{ 'l, 'l in {{{members}}}. bits('l) }} impl emulator(request) = {{ {body} }} }}");
+        let mut sources = prelude.to_vec();
+        sources.push(&source);
+        let result = check(&sources);
+        assert_eq!(result.is_ok(), accepted, "{members}: {body}: {result:?}");
+    }
+}
