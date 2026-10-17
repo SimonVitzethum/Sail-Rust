@@ -74,6 +74,8 @@ pub struct Checked {
     /// Echte Solver-Beweiszähler (Lane-35-Hook über `Program::smt_totals`).
     pub smt_calls: u64,
     pub smt_seconds: f64,
+    /// The frozen declaration tables, for the Lean backend's queries.
+    pub program: Option<Program>,
 }
 
 impl Checked {
@@ -135,7 +137,7 @@ fn type_error(frontend: &FrontendProgram, phase: &str, e: sail_ty::TypeError) ->
         .unwrap_or("<unknown source>");
     error(format!("sail-rs: {source}: {phase} typecheck: {e}"))
 }
-fn descriptors(
+pub(crate) fn descriptors(
     frontend: &FrontendProgram,
 ) -> Result<impl Iterator<Item = Result<Descriptor, CliError>>, CliError> {
     let file = File::open(&frontend.manifest).map_err(|e| CliError::fatal(e.to_string()))?;
@@ -228,6 +230,7 @@ pub fn run(frontend: &FrontendProgram) -> Result<Checked, CliError> {
         defs: Vec::new(),
         smt_calls: 0,
         smt_seconds: 0.0,
+        program: None,
     };
     scheduler.run_streaming_weighed(
         descriptors(frontend)?.enumerate(),
@@ -275,6 +278,7 @@ pub fn run(frontend: &FrontendProgram) -> Result<Checked, CliError> {
     let (smt_calls, smt_seconds) = program.smt_totals();
     checked.smt_calls = smt_calls;
     checked.smt_seconds = smt_seconds;
+    checked.program = Some(program);
     Ok(checked)
 }
 
@@ -298,6 +302,7 @@ mod tests {
             defs: Vec::new(),
             smt_calls: 0,
             smt_seconds: 0.0,
+            program: None,
         }
     }
 
@@ -326,6 +331,7 @@ mod tests {
             defs,
             smt_calls: 0,
             smt_seconds: 0.0,
+            program: None,
         }
     }
 
@@ -359,6 +365,7 @@ mod tests {
             defs: Vec::new(),
             smt_calls: 0,
             smt_seconds: 0.0,
+            program: None,
         };
         for position in 0..4 {
             checked.push(

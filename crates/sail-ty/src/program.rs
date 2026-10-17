@@ -376,6 +376,90 @@ impl Program {
     pub fn new() -> Self {
         Self::default()
     }
+    /// `Type_check.prove (nexp >= 0)` under the constraints of `quant`
+    /// (Lean backend: `provably_nneg`). Variables are matched by name.
+    #[must_use]
+    pub fn prove_nonneg(
+        &self,
+        quant: &[QuantItem],
+        quant_it: &SimpleInterner,
+        nexp: &NExp,
+        nexp_it: &SimpleInterner,
+    ) -> bool {
+        let mut variables: BTreeMap<String, u64> = BTreeMap::new();
+        let mut next = 0u64;
+        for item in quant {
+            if let QuantItem::Id(binder) = item {
+                if let Some(name) = quant_it.resolve(binder.kid) {
+                    variables.entry(name.to_owned()).or_insert_with(|| {
+                        next += 1;
+                        next
+                    });
+                }
+            }
+        }
+        // Free variables of the goal that the quantifier does not bind.
+        let mut stack = vec![nexp];
+        while let Some(n) = stack.pop() {
+            match &n.kind {
+                NExpKind::Var(symbol) => {
+                    if let Some(name) = nexp_it.resolve(*symbol) {
+                        variables.entry(name.to_owned()).or_insert_with(|| {
+                            next += 1;
+                            next
+                        });
+                    }
+                }
+                NExpKind::Sum(a, b) | NExpKind::Minus(a, b) | NExpKind::Times(a, b) => {
+                    stack.push(a);
+                    stack.push(b);
+                }
+                NExpKind::Neg(a) | NExpKind::Exp(a) => stack.push(a),
+                NExpKind::App { args, .. } => stack.extend(args.iter()),
+                NExpKind::If { then_branch, else_branch, .. } => {
+                    stack.push(then_branch);
+                    stack.push(else_branch);
+                }
+                NExpKind::Id(_) | NExpKind::Constant(_) => {}
+            }
+        }
+        let goal = Node::dummy(ConstraintKind::Ge(
+            nexp.clone(),
+            Node::dummy(NExpKind::Constant("0".to_owned())),
+        ));
+        let assumptions: Vec<View<'_>> = quant
+            .iter()
+            .filter_map(|item| match item {
+                QuantItem::Constraint(constraint) => Some(View {
+                    negated: false,
+                    constraint,
+                    context: Context {
+                        interner: quant_it,
+                        variables: &variables,
+                        bindings: None,
+                    },
+                }),
+                QuantItem::Id(_) => None,
+            })
+            .collect();
+        let query = CanonicalQuery::implication(
+            &assumptions,
+            View {
+                negated: false,
+                constraint: &goal,
+                context: Context {
+                    interner: nexp_it,
+                    variables: &variables,
+                    bindings: None,
+                },
+            },
+            None,
+        );
+        match query {
+            Ok(query) => self.prove(query).is_valid(),
+            Err(_) => false,
+        }
+    }
     /// Infer the types of an unannotated global `let` against the
     /// declarations visible at `position`.
     pub fn infer_let(
@@ -427,6 +511,16 @@ impl Program {
         position: usize,
     ) -> TypeResult<usize> {
         crate::canonical_body::check(self, def, it, position)
+    }
+
+    /// Check a definition and annotate its nodes with elaborated types.
+    pub fn elaborate_definition(
+        &self,
+        def: &mut Def,
+        it: Arc<SimpleInterner>,
+        position: usize,
+    ) -> TypeResult<SimpleInterner> {
+        crate::canonical_body::elaborate(self, def, it, position)
     }
 
     /// Check and retain a declaration in source order. Repeated val specs
@@ -1767,6 +1861,36 @@ impl Program {
         }
         constraint_synonym::expand_scheme(typschm, interner, &lookup)
     }
+    /// Name of the type constructor at the head of `typ` after expanding type
+    /// abbreviations (`Env.expand_synonyms` then the head `Typ_id`/`Typ_app`).
+    #[must_use]
+    pub fn typ_head(&self, typ: &Typ, it: &SimpleInterner) -> Option<String> {
+        let mut current: (Typ, Arc<SimpleInterner>) = (typ.clone(), Arc::new(SimpleInterner::new()));
+        let mut interner: Option<Arc<SimpleInterner>> = None;
+        for _ in 0..64 {
+            let text = {
+                let table: &SimpleInterner = interner.as_deref().unwrap_or(it);
+                match &current.0.kind {
+                    TypKind::Id(n) | TypKind::App { name: n, .. } => table.resolve(n.symbol)?.to_owned(),
+                    TypKind::Tuple(_) => return Some("(tuple)".to_owned()),
+                    TypKind::Exist { typ, .. } => {
+                        let inner = (**typ).clone();
+                        current.0 = inner;
+                        continue;
+                    }
+                    _ => return None,
+                }
+            };
+            match self.type_synonym(&text, usize::MAX - 1) {
+                Some(scheme) => {
+                    current.0 = scheme.typschm.typ.clone();
+                    interner = Some(scheme.interner.clone());
+                }
+                None => return Some(text),
+            }
+        }
+        None
+    }
     pub(crate) fn type_synonym(&self, name: &str, position: usize) -> Option<&Arc<Scheme>> {
         match self.constructors.get(name) {
             Some(history) => at(history, position).and_then(|constructor| constructor.synonym.as_ref()),
@@ -1790,6 +1914,16 @@ impl Program {
         name: &str,
         position: usize,
     ) -> TypeResult<Option<Vec<Arc<Scheme>>>> {
+        Ok(self
+            .overload_members(name, position)?
+            .map(|members| members.into_iter().map(|(_, scheme)| scheme).collect()))
+    }
+    /// Like [`Self::overload_candidates`], with each candidate's function name.
+    pub(crate) fn overload_members(
+        &self,
+        name: &str,
+        position: usize,
+    ) -> TypeResult<Option<Vec<(String, Arc<Scheme>)>>> {
         let Some(initial) = self.overload(name, position) else {
             return Ok(None);
         };
@@ -1822,7 +1956,7 @@ impl Program {
                             .register(name, position)
                             .or_else(|| self.value(name, position))
                             .ok_or_else(|| TypeError::unbound_var(Span::DUMMY, name.to_owned()))?;
-                        candidates.push(scheme.clone());
+                        candidates.push((name.to_owned(), scheme.clone()));
                     }
                 }
             }

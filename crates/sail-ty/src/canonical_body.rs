@@ -13,6 +13,8 @@ use std::{
     sync::Arc,
 };
 
+mod elab_snapshot;
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Step {
     Argument(usize),
@@ -359,12 +361,16 @@ struct Checker<'a> {
     /// are never dereferenced. The loaded AST outlives this checker.
     inferred: HashMap<*const Exp, InferredValue>,
     calls: HashMap<*const Exp, Type>,
+    /// Scheme of the candidate the last `select_call` picked.
+    picked: std::cell::RefCell<Option<Arc<Scheme>>>,
     proof_scope: Arc<Scope>,
     /// Type variables bound by `P_var` patterns (`let 'm = e`), as numeric
     /// witness views; a later binding of the same symbol shadows an older
     /// one. They are not rigid function quantifiers: proofs substitute the
     /// witness of the bound value.
     tyvars: Vec<(Symbol, Scalar)>,
+    /// Types of visited nodes, when elaborating.
+    recorder: Option<elab_snapshot::Recorder>,
     /// Rigid witnesses met while grounding lengths to Mini numerics, under
     /// unique names, so obligations can link them back to their binders.
     witness_links: std::cell::RefCell<Vec<(String, Scalar)>>,
@@ -443,8 +449,10 @@ impl<'a> Checker<'a> {
         context: None,
         inferred: HashMap::new(),
         calls: HashMap::new(),
+        picked: std::cell::RefCell::new(None),
         proof_scope: Arc::default(),
         tyvars: Vec::new(),
+        recorder: None,
         witness_links: std::cell::RefCell::new(Vec::new()),
         weak_facts: std::cell::Cell::new(false),
         call_hint: std::cell::RefCell::new(String::new()),
@@ -498,7 +506,117 @@ pub(crate) fn check(
     it: Arc<SimpleInterner>,
     position: usize,
 ) -> TypeResult<usize> {
+    check_with(program, def, it, position, false).map(|checker| checker.expressions)
+}
+
+/// Check a definition and annotate its expressions and patterns with their
+/// elaborated types (`Annotation::typ`). Returns the interner extended with
+/// the names the snapshots introduced.
+pub(crate) fn elaborate(
+    program: &Program,
+    def: &mut Def,
+    it: Arc<SimpleInterner>,
+    position: usize,
+) -> TypeResult<SimpleInterner> {
+    let checker = check_with(program, &*def, it.clone(), position, true)?;
+    let mut checker = checker;
+    // Expressions that were only inferred (conditions, assert operands, ...)
+    // never became tasks; their inferred type is the best annotation.
+    let inferred_types: Vec<(usize, Type)> = checker
+        .inferred
+        .iter()
+        .map(|(address, inferred)| (*address as usize, (*inferred.declared).clone()))
+        .collect();
+    if let Some(recorder) = checker.recorder.as_mut() {
+        for (address, typ) in inferred_types {
+            recorder.exps.entry(address).or_insert(typ);
+        }
+    }
+    let recorder = checker.recorder.as_ref().expect("recording checker");
+    let mut out = (*it).clone();
+    let mut exp_types: HashMap<usize, Typ> = HashMap::with_capacity(recorder.exps.len());
+    for (address, typ) in &recorder.exps {
+        exp_types.insert(*address, checker.snapshot_typ(typ, &mut out));
+    }
+    let mut pat_types: HashMap<usize, Typ> = HashMap::with_capacity(recorder.pats.len());
+    for (address, typ) in &recorder.pats {
+        pat_types.insert(*address, checker.snapshot_typ(typ, &mut out));
+    }
+    struct Attach<'o> {
+        out: &'o mut SimpleInterner,
+        callees: HashMap<usize, String>,
+        exps: HashMap<usize, Typ>,
+        pats: HashMap<usize, Typ>,
+        lexps: HashMap<usize, Typ>,
+        intros: std::collections::HashSet<usize>,
+    }
+    impl elab_snapshot::Visit for Attach<'_> {
+        fn exp(&mut self, exp: &mut Exp) {
+            let address = exp as *const Exp as usize;
+            if std::env::var_os("SAIL_RS_DEBUG_CALLS").is_some() {
+                if let ExpKind::App { func, .. } = &exp.kind {
+                    eprintln!("attach app {:?} at {address:x}: {:?}", self.out.resolve(func.symbol), self.callees.get(&address));
+                }
+            }
+            if let Some(member) = self.callees.remove(&address) {
+                if let ExpKind::App { func, .. } = &mut exp.kind {
+                    func.symbol = self.out.intern(&member);
+                    func.is_operator = false;
+                }
+            }
+            if let Some(typ) = self.exps.remove(&address) {
+                exp.annotation_mut().typ = Some(Box::new(typ));
+            }
+            if self.intros.contains(&address) {
+                exp.annotation_mut().attributes.push(Attribute {
+                    name: "intro".into(),
+                    data: None,
+                });
+            }
+        }
+        fn pat(&mut self, pat: &mut Pat) {
+            if let Some(typ) = self.pats.remove(&(pat as *const Pat as usize)) {
+                pat.annotation_mut().typ = Some(Box::new(typ));
+            }
+        }
+        fn lexp(&mut self, lexp: &mut LExp) {
+            if let Some(typ) = self.lexps.remove(&(lexp as *const LExp as usize)) {
+                lexp.annotation_mut().typ = Some(Box::new(typ));
+            }
+        }
+    }
+    let mut lexp_types: HashMap<usize, Typ> = HashMap::with_capacity(recorder.lexps.len());
+    for (address, typ) in &recorder.lexps {
+        lexp_types.insert(*address, checker.snapshot_typ(typ, &mut out));
+    }
+    let intros = recorder.intros.clone();
+    let callees = recorder.callees.clone();
+    drop(checker);
+    elab_snapshot::walk_def_mut(
+        def,
+        &mut Attach {
+            out: &mut out,
+            callees,
+            exps: exp_types,
+            pats: pat_types,
+            lexps: lexp_types,
+            intros,
+        },
+    );
+    Ok(out)
+}
+
+fn check_with<'a>(
+    program: &'a Program,
+    def: &Def,
+    it: Arc<SimpleInterner>,
+    position: usize,
+    record: bool,
+) -> TypeResult<Checker<'a>> {
     let mut checker = Checker::new(program, it, position);
+    if record {
+        checker.recorder = Some(elab_snapshot::Recorder::default());
+    }
     match &def.kind {
         DefKind::Fundef { rec, funcls, .. } => {
             program.check_function_header(def, &checker.it, position)?;
@@ -667,7 +785,7 @@ pub(crate) fn check(
         | DefKind::Default(_)
         | DefKind::Pragma { .. } => {}
     }
-    Ok(checker.expressions)
+    Ok(checker)
 }
 
 impl Checker<'_> {
@@ -1435,6 +1553,7 @@ impl Checker<'_> {
         let single = candidates.len() == 1;
         let mut last = None;
         for callee in candidates {
+            let original = callee.root.clone();
             let attempt = (|| {
                 let TypKind::Fn { args, .. } = &callee.node().kind else {
                     return Err(unsupported(span,"overload candidate is not an elaborated function (mapping expansion may be required)"));
@@ -1467,7 +1586,10 @@ impl Checker<'_> {
                 Ok(callee)
             })();
             match attempt {
-                Ok(callee) => return Ok(callee),
+                Ok(callee) => {
+                    *self.picked.borrow_mut() = Some(original);
+                    return Ok(callee);
+                }
                 // OCaml tries every overload candidate: a gap in one
                 // (`Unsupported`) must not abort the others; if none
                 // matches, the last error (of any kind) is reported.
@@ -1595,6 +1717,7 @@ impl Checker<'_> {
     }
     fn declaring_assignment(
         &mut self,
+        assign: &Exp,
         lexp: &LExp,
         value: &Exp,
         scope: &Arc<Scope>,
@@ -1615,6 +1738,7 @@ impl Checker<'_> {
         if !declares {
             return Ok(None);
         }
+        self.record_intro(assign);
         let bound = if let LExpKind::Typ { typ, .. } = &lexp.kind {
             self.annotation(typ)?
         } else {
@@ -1627,6 +1751,9 @@ impl Checker<'_> {
                 .clone()
         };
         let child = self.mutable_scope(lexp, bound.clone(), scope)?;
+        if self.recorder.is_some() {
+            self.record_lexp(lexp, &bound);
+        }
         Ok(Some((bound, Arc::new(child))))
     }
     /// Getter/updater of a bitfield accessor (`_get_T_f`, `_update_T_f`) for a
@@ -3715,6 +3842,9 @@ impl Checker<'_> {
                             } else {
                                 declared
                             };
+                            if self.recorder.is_some() {
+                                self.record_lexp(lexp, &declared);
+                            }
                             results.push(declared);
                         }
                         LExpKind::Field { lexp: base, field } => {
@@ -4103,6 +4233,9 @@ impl Checker<'_> {
         let mut work = vec![(pat, typ)];
         while let Some((pat, typ)) = work.pop() {
             let typ = self.resolve(&typ)?;
+            if self.recorder.is_some() {
+                self.record_pat(pat, &typ);
+            }
             match &pat.kind {
                 PatKind::Wild => {}
                 PatKind::Id(name) => {
@@ -4577,7 +4710,7 @@ impl Checker<'_> {
                                         }
                                         ExpKind::Assign { lexp, value } => {
                                             if let Some((_, extended)) =
-                                                self.declaring_assignment(lexp, value, &current)?
+                                                self.declaring_assignment(item, lexp, value, &current)?
                                             {
                                                 current = extended;
                                             }
@@ -4726,6 +4859,7 @@ impl Checker<'_> {
                                 continue;
                             }
                             let candidates = self.call_candidates(func, &scope, args.len())?;
+                            self.record_single(exp, &candidates);
                             let args: &[Exp] = Self::effective_args(&candidates, args);
                             // Shallow calls share sibling-guided inference
                             // for both single callees and overload sets.
@@ -4771,6 +4905,7 @@ impl Checker<'_> {
                             let actual = actual?;
                             self.set_call_hint(func);
                             let callee = self.select_call(candidates, &actual, None, exp.span)?;
+                            self.record_call(exp, &callee);
                             self.calls.insert(exp as *const Exp, callee.clone());
                             let result = self.resolve(&callee.child(Step::Result))?;
                             results.push(self.value_type(exp, result));
@@ -4871,6 +5006,7 @@ impl Checker<'_> {
                         self.set_call_hint(func);
                     }
                     let callee = self.select_call(candidates, &actual, None, exp.span)?;
+                    self.record_call(exp, &callee);
                     let result = self.resolve(&callee.child(Step::Result))?;
                     // value_type inserts the shared declared/value pair; no
                     // second insert here (that would duplicate the entry).
@@ -5545,6 +5681,13 @@ impl Checker<'_> {
             self.proof_scope = scope.clone();
             self.expressions += 1;
             let mut expected = self.resolve(&expected)?;
+            if self.recorder.is_some() {
+                let recorded = match self.inferred.get(&(exp as *const Exp)) {
+                    Some(inferred) => (*inferred.declared).clone(),
+                    None => expected.clone(),
+                };
+                self.record_exp(exp, &recorded);
+            }
             // Synthesis opens one witness for the result of the whole
             // control expression. Its children check against the declared
             // result type, not against that fresh result's singleton identity.
@@ -5609,6 +5752,7 @@ impl Checker<'_> {
                         if let ExpKind::Assert { cond, msg } = &item.kind {
                             let unit = self.builtin("unit");
                             self.compatible(&expected, &unit, item.span)?;
+                            self.record_exp(item, &unit);
                             current = self.check_assert(cond, msg, &current)?;
                         } else if let ExpKind::If { cond, then_branch, .. } = &item.kind {
                             if index + 1 < items.len() && Self::branch_escapes(then_branch) {
@@ -5620,10 +5764,11 @@ impl Checker<'_> {
                             }
                         } else if let ExpKind::Assign { lexp, value } = &item.kind {
                             if let Some((bound, extended)) =
-                                self.declaring_assignment(lexp, value, &current)?
+                                self.declaring_assignment(item, lexp, value, &current)?
                             {
                                 let unit = self.builtin("unit");
                                 self.compatible(&expected, &unit, item.span)?;
+                                self.record_exp(item, &unit);
                                 pending.push((
                                     value.as_ref(),
                                     bound,
@@ -5674,6 +5819,7 @@ impl Checker<'_> {
                         continue;
                     }
                     let mut candidates = self.call_candidates(func, &scope, args.len())?;
+                    self.record_single(exp, &candidates);
                     let args: &[Exp] = Self::effective_args(&candidates, args);
                     let callee = if let Some(callee) = self.calls.get(&(exp as *const Exp)) {
                         callee.clone()
@@ -5700,7 +5846,9 @@ impl Checker<'_> {
                             Err(error) => return Err(error),
                         };
                         self.set_call_hint(func);
-                        self.select_call(candidates, &actual, Some(&expected), exp.span)?
+                        let selected = self.select_call(candidates, &actual, Some(&expected), exp.span)?;
+                        self.record_call(exp, &selected);
+                        selected
                     } else {
                         candidates.pop().unwrap()
                     };

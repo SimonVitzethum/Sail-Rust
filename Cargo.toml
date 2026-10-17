@@ -11,6 +11,7 @@ members = [
     "crates/sail-lower",
     "crates/sail-lean",
     "crates/sail-lake",
+    "crates/sail-leangen",
     "crates/sail-oracle",
     "crates/sail-perf",
     "crates/sail-shard",

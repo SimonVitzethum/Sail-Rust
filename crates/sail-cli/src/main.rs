@@ -7,6 +7,7 @@ mod args;
 mod e2e;
 mod frontend;
 mod memo;
+mod lean_backend;
 mod lean_stage;
 mod ooc;
 mod profile;
@@ -124,6 +125,14 @@ fn run_compiler(opts: &Options, profiler: &mut Profiler) -> Result<(), CliError>
         summary.definitions, summary.files, summary.workers, summary.ast_bytes);
     let checked = profiler.phase("typecheck", || typecheck::run(&frontend))?;
     eprintln!("sail-rs: typechecked {} definitions and {} expressions using {} workers", checked.definitions, checked.expressions, summary.workers);
+    if opts.lean && std::env::var_os("SAIL_RS_OLD_REWRITES").is_none() {
+        let program = checked
+            .program
+            .as_ref()
+            .ok_or_else(|| CliError::fatal("typechecker returned no program tables"))?;
+        profiler.phase("lean-backend", || lean_backend::run(&frontend, program, opts))?;
+        return Ok(());
+    }
     let rewritten = profiler.phase("rewrite", || rewrite_stage::run(&frontend, &checked))?;
     eprintln!("sail-rs: rewrote {} definitions through {} passes ({})",
         rewritten.definitions, rewritten.passes.len(), rewritten.passes.join(", "));

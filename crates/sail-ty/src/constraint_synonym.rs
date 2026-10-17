@@ -642,3 +642,14 @@ pub fn render_arg(arg: &TypArg, interner: &Arc<SimpleInterner>) -> String {
     go(&copied, &to, &mut out);
     out
 }
+
+/// Copy a type from `from`'s symbol space into `to`'s (no synonym expansion).
+pub fn import_typ(typ: &Typ, from: &SimpleInterner, to: &mut SimpleInterner) -> Typ {
+    Copier {
+        from,
+        to,
+        subst: HashMap::new(),
+        lookup: &|_| None,
+    }
+    .typ(typ)
+}

@@ -16,6 +16,7 @@ workspace = true
 sail-parse = { path = "../sail-parse" }
 sail-lean = { path = "../sail-lean" }
 sail-lake = { path = "../sail-lake" }
+sail-leangen = { path = "../sail-leangen" }
 sail-regs = { path = "../sail-regs" }
 sail-prelude = { path = "../sail-prelude" }
 sail-ast = { path = "../sail-ast" }

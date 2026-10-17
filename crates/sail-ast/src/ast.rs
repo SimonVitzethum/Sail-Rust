@@ -16,6 +16,10 @@ pub struct Annotation {
     pub attributes: Vec<Attribute>,
     pub documentation: Option<String>,
     pub private: bool,
+    /// Elaborated type of this node (set by the typechecker's elaboration
+    /// pass for the Lean backend; symbols live in the definition's interner).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typ: Option<Box<Typ>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

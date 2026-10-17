@@ -41,7 +41,7 @@ pub mod program;
 mod canonical_body;
 mod canonical_eq;
 mod canonical_literal;
-pub(crate) mod constraint_synonym;
+pub mod constraint_synonym;
 pub mod quant;
 pub mod recursion;
 pub mod rules;

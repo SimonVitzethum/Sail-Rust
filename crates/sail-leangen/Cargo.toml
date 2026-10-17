@@ -1,0 +1,14 @@
+[package]
+name = "sail-leangen"
+version = "0.1.0"
+edition = "2021"
+description = "Lean backend: typed rewrites and printer over the canonical Sail AST"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+sail-ast = { path = "../sail-ast" }
+sail-ty = { path = "../sail-ty" }
+sail-lake = { path = "../sail-lake" }
+
+[lints]
+workspace = true
