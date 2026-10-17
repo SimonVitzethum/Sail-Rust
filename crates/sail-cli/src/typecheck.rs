@@ -213,6 +213,10 @@ pub fn run(frontend: &FrontendProgram) -> Result<Checked, CliError> {
                 .max(1),
         }
     };
+    let check_from_file: u32 = std::env::var("SAIL_RS_CHECK_FROM_FILE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
     let mut checked = Checked {
         definitions: 0,
         expressions: 0,
@@ -234,7 +238,14 @@ pub fn run(frontend: &FrontendProgram) -> Result<Checked, CliError> {
             let (def, interner) = load_definition(&frontend.warm, &content)?;
             let bytes = blob_bytes(frontend, &content)?;
             let interner = Arc::new(interner);
-            let result = program.check_definition(&def, interner.clone(), position);
+            // Development aid: `SAIL_RS_CHECK_FROM_FILE=n` declares everything but
+            // checks only bodies from file index `n` on (re-checking a later
+            // file after a fix without paying for the whole model).
+            let result = if def.span.file.0 < check_from_file {
+                Ok(0)
+            } else {
+                program.check_definition(&def, interner.clone(), position)
+            };
             // Emit before the storage-path drop: snapshot the frozen
             // declaration-table scheme; only the small payload is retained.
             let emitted = match &result {

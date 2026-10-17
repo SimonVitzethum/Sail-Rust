@@ -1,0 +1,12 @@
+RAM gate: avail=23420MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p232620-i249012.service
+[93mType error[0m:
+[96mevidence/2026-10-17/control-inference-negative-prefix.sail[0m:2.52-57:
+2[96m |[0mfunction select(flag, left, right) = let choice = { false; left } in choice
+ [91m |[0m                                                    [91m^---^[0m
+ [91m |[0m bool(false) is not a subtype of unit
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 26ms
+             CPU time consumed: 18ms
+                   Memory peak: 11.8M (swap: 0B)

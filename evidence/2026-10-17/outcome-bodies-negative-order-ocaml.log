@@ -1,0 +1,12 @@
+RAM gate: avail=23681MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p229312-i199738.service
+[93mType error[0m:
+[96mevidence/2026-10-17/outcome-bodies-negative-order.sail[0m:2.23-29:
+2[96m |[0m    impl emulator(x) = helper(x)
+ [91m |[0m                       [91m^----^[0m
+ [91m |[0m Function helper not found
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 29ms
+             CPU time consumed: 18ms
+                   Memory peak: 11.7M (swap: 0B)

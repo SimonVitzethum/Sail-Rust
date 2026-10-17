@@ -1,0 +1,23 @@
+RAM gate: avail=23825MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p222142-i243500.service
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 8.65s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8.691s
+             CPU time consumed: 15.031s
+                   Memory peak: 302.5M (swap: 0B)
+Running as unit: run-p222276-i247810.service; invocation ID: dbd09ce0fbd740a39cb01cde04eb9291
+
+running 3 tests
+test a_global_initializer_cannot_return_from_a_function ... ok
+test annotated_global_initializers_cannot_change_type ... ok
+test annotated_global_literals_check_against_the_annotation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 17ms
+             CPU time consumed: 7ms
+                   Memory peak: 2.6M (swap: 0B)

@@ -1,0 +1,13 @@
+RAM gate: avail=23390MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p239463-i239504.service; invocation ID: 2207872419fe497faadac7708e3bec11
+[93mWarning[0m: Unused variable
+[96mevidence/2026-10-17/global-environment-positive.sail[0m:5.45-46:
+5[96m |[0moutcome read : int -> bool = { impl emulator(x) = other }
+ [91m |[0m                                             [91m^[0m
+ [91m |[0m This variable is defined but never used.
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 26ms
+             CPU time consumed: 18ms
+                   Memory peak: 12M (swap: 0B)

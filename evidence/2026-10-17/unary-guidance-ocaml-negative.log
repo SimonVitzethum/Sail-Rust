@@ -1,0 +1,12 @@
+RAM gate: avail=23982MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p218191-i247523.service
+[93mType error[0m:
+[96mevidence/2026-10-17/unary-guidance-negative.sail[0m:8.28-67:
+8[96m |[0mfunction masked(xs, i, j) = xs & test_not_bits(test_mask(false, j))
+ [91m |[0m                            [91m^-------------------------------------^[0m [91mchecking function argument has type int('ex136#)[0m
+ [91m |[0m Type mismatch between int('ex136#) and bool(false)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 46ms
+             CPU time consumed: 26ms
+                   Memory peak: 13.2M (swap: 0B)

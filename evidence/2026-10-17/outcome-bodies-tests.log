@@ -1,0 +1,27 @@
+RAM gate: avail=23697MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p229164-i199730.service
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 8.54s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8.573s
+             CPU time consumed: 14.944s
+                   Memory peak: 304.4M (swap: 0B)
+Running as unit: run-p229266-i199733.service
+
+running 7 tests
+test implementation_names_do_not_need_global_signatures ... ok
+test implementation_requires_an_enclosing_outcome ... ok
+test implementations_check_result_and_argument_types ... ok
+test local_spec_does_not_override_global_signature_outside_the_block ... ok
+test local_specs_are_visible_only_after_their_declarations ... ok
+test outcome_parameters_and_local_polymorphism_remain_distinct ... ok
+test header_constraints_are_available_in_implementations ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 40ms
+             CPU time consumed: 33ms
+                   Memory peak: 21M (swap: 0B)

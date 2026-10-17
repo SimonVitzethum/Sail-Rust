@@ -1,0 +1,272 @@
+RAM gate: avail=21474MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p187729-i167476.service
+   Compiling sail-cli v0.0.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-cli)
+    Finished `ci` profile [optimized] target(s) in 43.88s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 43.941s
+             CPU time consumed: 1min 26.564s
+                   Memory peak: 436.7M (swap: 0B)
+Running as unit: run-p188014-i167498.service
+
+running 17 tests
+test declared_constructor_kinds_follow_include_order_in_parallel_frontend ... FAILED
+test arm_legacy_trace_include_contains_real_declarations_and_bodies ... FAILED
+test disk_spool_override_is_used_and_cleaned_after_successful_and_failed_frontends ... ok
+test gen_lean_dry_run_exits_zero ... ok
+test gen_lean_dry_run_via_env_without_flag ... ok
+test help_lists_ocaml_compatible_flags ... ok
+test disk_backed_parallel_typechecking_checks_bodies_and_reports_errors_in_source_order ... FAILED
+test inline_signatures_are_declared_before_disk_backed_parallel_body_checks ... FAILED
+test just_check_rejects_invalid_sail_and_unresolved_includes ... ok
+test includes_macros_attributes_and_fixities_keep_order_across_workers ... FAILED
+test missing_input_file_exits_2 ... ok
+test ordinary_lean_run_rejects_missing_stages_without_stub_output ... FAILED
+test legacy_val_redeclarations_do_not_stop_the_frontend ... FAILED
+test require_version_violation_exits_1 ... ok
+test unknown_flag_exits_1 ... ok
+test version_flag_exits_zero ... ok
+test parallel_disk_backed_checks_resolve_overloads_and_confine_branch_assumptions ... FAILED
+
+failures:
+
+---- declared_constructor_kinds_follow_include_order_in_parallel_frontend stdout ----
+
+thread 'declared_constructor_kinds_follow_include_order_in_parallel_frontend' (188017) panicked at crates/sail-cli/tests/gen_lean_dropin.rs:279:9:
+sail-rs: frontend converted 4 definitions from 2 files using 1 workers; 4913 AST bytes spooled
+sail-rs: typecheck byte budget 32 MiB (4913 AST bytes spooled, 1 workers)
+sail-rs: typechecked 4 definitions and 0 expressions using 1 workers
+rewrite stage: single-definition window at position 0 produced 7 definitions; whole-program rewrite integration is required
+
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- arm_legacy_trace_include_contains_real_declarations_and_bodies stdout ----
+
+thread 'arm_legacy_trace_include_contains_real_declarations_and_bodies' (188016) panicked at crates/sail-cli/tests/gen_lean_dropin.rs:416:5:
+sail-rs: frontend converted 8 definitions from 2 files using 2 workers; 9763 AST bytes spooled
+sail-rs: typecheck byte budget 32 MiB (9763 AST bytes spooled, 2 workers)
+sail-rs: typechecked 8 definitions and 3 expressions using 2 workers
+rewrite stage: single-definition window at position 0 produced 7 definitions; whole-program rewrite integration is required
+
+
+---- disk_backed_parallel_typechecking_checks_bodies_and_reports_errors_in_source_order stdout ----
+
+thread 'disk_backed_parallel_typechecking_checks_bodies_and_reports_errors_in_source_order' (188027) panicked at crates/sail-cli/tests/gen_lean_dropin.rs:313:17:
+sail-rs: frontend converted 4 definitions from 1 files using 1 workers; 6707 AST bytes spooled
+sail-rs: typecheck byte budget 32 MiB (6707 AST bytes spooled, 1 workers)
+sail-rs: typechecked 4 definitions and 5 expressions using 1 workers
+[profile] phase="frontend" wall_s=0.023524 rss_peak_mb=6 smt_calls=0 smt_s=0.000000
+[profile] phase="typecheck" wall_s=0.001263 rss_peak_mb=7 smt_calls=0 smt_s=0.000000
+[profile] phase="rewrite" wall_s=0.000165 rss_peak_mb=8 smt_calls=0 smt_s=0.000000
+[profile] phase="total" wall_s=0.025584 rss_peak_mb=8 smt_calls=0 smt_s=0.000000
+rewrite stage: single-definition window at position 0 produced 7 definitions; whole-program rewrite integration is required
+
+
+---- inline_signatures_are_declared_before_disk_backed_parallel_body_checks stdout ----
+
+thread 'inline_signatures_are_declared_before_disk_backed_parallel_body_checks' (188055) panicked at crates/sail-cli/tests/gen_lean_dropin.rs:332:136:
+sail-rs: frontend converted 3 definitions from 1 files using 1 workers; 7516 AST bytes spooled
+sail-rs: typecheck byte budget 32 MiB (7516 AST bytes spooled, 1 workers)
+sail-rs: typechecked 3 definitions and 4 expressions using 1 workers
+rewrite stage: single-definition window at position 0 produced 7 definitions; whole-program rewrite integration is required
+
+
+---- includes_macros_attributes_and_fixities_keep_order_across_workers stdout ----
+
+thread 'includes_macros_attributes_and_fixities_keep_order_across_workers' (188049) panicked at crates/sail-cli/tests/gen_lean_dropin.rs:260:9:
+sail-rs: frontend converted 6 definitions from 2 files using 1 workers; 6636 AST bytes spooled
+sail-rs: typecheck byte budget 32 MiB (6636 AST bytes spooled, 1 workers)
+sail-rs: typechecked 6 definitions and 3 expressions using 1 workers
+rewrite stage: single-definition window at position 0 produced 7 definitions; whole-program rewrite integration is required
+
+
+---- ordinary_lean_run_rejects_missing_stages_without_stub_output stdout ----
+
+thread 'ordinary_lean_run_rejects_missing_stages_without_stub_output' (188090) panicked at crates/sail-cli/tests/gen_lean_dropin.rs:196:5:
+sail-rs: frontend converted 2 definitions from 1 files using 16 workers; 2954 AST bytes spooled
+sail-rs: typecheck byte budget 32 MiB (2954 AST bytes spooled, 16 workers)
+sail-rs: typechecked 2 definitions and 1 expressions using 16 workers
+[profile] phase="frontend" wall_s=0.010325 rss_peak_mb=6 smt_calls=0 smt_s=0.000000
+[profile] phase="typecheck" wall_s=0.001208 rss_peak_mb=7 smt_calls=0 smt_s=0.000000
+[profile] phase="rewrite" wall_s=0.000226 rss_peak_mb=8 smt_calls=0 smt_s=0.000000
+[profile] phase="total" wall_s=0.012267 rss_peak_mb=8 smt_calls=0 smt_s=0.000000
+rewrite stage: single-definition window at position 0 produced 7 definitions; whole-program rewrite integration is required
+
+
+---- legacy_val_redeclarations_do_not_stop_the_frontend stdout ----
+
+thread 'legacy_val_redeclarations_do_not_stop_the_frontend' (188084) panicked at crates/sail-cli/tests/gen_lean_dropin.rs:399:9:
+sail-rs: warning: duplicate val spec 'changed' (first at file0:0-25, again at file0:25-52)
+sail-rs: frontend converted 5 definitions from 1 files using 1 workers; 7440 AST bytes spooled
+sail-rs: typecheck byte budget 32 MiB (7440 AST bytes spooled, 1 workers)
+sail-rs: typechecked 5 definitions and 3 expressions using 1 workers
+rewrite stage: single-definition window at position 0 produced 7 definitions; whole-program rewrite integration is required
+
+
+---- parallel_disk_backed_checks_resolve_overloads_and_confine_branch_assumptions stdout ----
+
+thread 'parallel_disk_backed_checks_resolve_overloads_and_confine_branch_assumptions' (188126) panicked at crates/sail-cli/tests/gen_lean_dropin.rs:351:136:
+sail-rs: frontend converted 7 definitions from 1 files using 1 workers; 20763 AST bytes spooled
+sail-rs: typecheck byte budget 32 MiB (20763 AST bytes spooled, 1 workers)
+sail-rs: typechecked 7 definitions and 9 expressions using 1 workers
+rewrite stage: single-definition window at position 0 produced 7 definitions; whole-program rewrite integration is required
+
+
+
+failures:
+    arm_legacy_trace_include_contains_real_declarations_and_bodies
+    declared_constructor_kinds_follow_include_order_in_parallel_frontend
+    disk_backed_parallel_typechecking_checks_bodies_and_reports_errors_in_source_order
+    includes_macros_attributes_and_fixities_keep_order_across_workers
+    inline_signatures_are_declared_before_disk_backed_parallel_body_checks
+    legacy_val_redeclarations_do_not_stop_the_frontend
+    ordinary_lean_run_rejects_missing_stages_without_stub_output
+    parallel_disk_backed_checks_resolve_overloads_and_confine_branch_assumptions
+
+test result: FAILED. 9 passed; 8 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 242ms
+             CPU time consumed: 200ms
+                   Memory peak: 23.5M (swap: 0B)
+FAIL: /home/simon/Dokumente/Sail/sail-rs/target/ci/deps/gen_lean_dropin-292880ad288054d6 (threads=2; retries exhausted)
+Running as unit: run-p188148-i167527.service
+
+running 1 test
+test lane70_tiny_lake_skeleton ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 29ms
+             CPU time consumed: 13ms
+                   Memory peak: 2.5M (swap: 0B)
+Running as unit: run-p188155-i167528.service
+
+running 75 tests
+test args::tests::bool_flag_with_equals_is_usage_error ... ok
+test args::tests::case_sensitive_o_vs_big_o ... ok
+test args::tests::double_dash_ends_flag_parsing ... ok
+test args::tests::dash_underscore_and_single_double_dash_are_equivalent ... ok
+test args::tests::e2e_bool_mit_gleich_ist_usage_fehler ... ok
+test args::tests::e2e_flags_parsen_mit_out_dir_und_modul ... ok
+test args::tests::equals_form_works_for_value_flags ... ok
+test args::tests::help_text_covers_required_flags ... ok
+test args::tests::invalid_integer_is_exit_1 ... ok
+test args::tests::joined_short_form_is_rejected_like_ocaml ... ok
+test args::tests::lean_gen_lean_argv_parses ... ok
+test args::tests::memo_bounds_must_be_positive ... ok
+test args::tests::missing_value_is_exit_1 ... ok
+test args::tests::no_memo_z3_disables_default ... ok
+test args::tests::out_dir_underscore_form_ist_aequivalent ... ok
+test args::tests::repeatable_lean_flags_accumulate ... ok
+test args::tests::unknown_flag_is_exit_1 ... ok
+test args::tests::version_comparison_is_numeric ... ok
+test e2e::tests::exit_code_0_ohne_fails_2_bei_io_1_bei_pipeline_fails ... ok
+test e2e::tests::gezaehlte_definitionen_gelten_nie_als_typisiertes_programm ... ok
+test e2e::tests::fehlende_eingabe_ist_io_fehler_ohne_ooc_zaehler ... ok
+test e2e::tests::jede_luecke_hat_genau_einen_owner ... ok
+test e2e::tests::solver_memo_spill_wird_run_uebergreifend_genutzt ... ok
+test e2e::tests::streaming_versiegelt_jeden_shard_in_reihenfolge ... ok
+test e2e::tests::warm_budget_fehler_wird_fail_mit_genau_einem_owner ... ok
+test e2e::tests::with_input_ueberschreibt_nur_out_dir_und_modul ... ok
+test frontend::tests::library_extern_options_extend_the_effective_compiler_configuration ... ok
+test frontend::tests::profiler_felder_tragen_ooc_fenster ... ok
+test frontend::tests::spool_mount_detection_respects_components_and_escaped_paths ... ok
+test lean_stage::tests::emission_preserves_input_order ... ok
+test lean_stage::tests::empty_registers_use_the_fallback_template ... ok
+test lean_stage::tests::empty_run_is_vacuous ... ok
+test lean_stage::tests::first_hard_error_stops_the_stream ... ok
+test lean_stage::tests::header_only_forms_are_skipped_loudly ... ok
+test lean_stage::tests::hole_scan_ignores_strings_comments_and_substrings ... ok
+test lean_stage::tests::missing_body_is_refused_never_sorry ... ok
+test lean_stage::tests::missing_signature_is_unsupported_exit_1 ... ok
+test lean_stage::tests::missing_register_type_is_unsupported_exit_1 ... ok
+test lean_stage::tests::proof_holes_are_refused_before_writing ... ok
+test lean_stage::tests::registers_feed_lake_templates_and_never_become_defs ... ok
+test lean_stage::tests::value_like_defs_render_without_sorry ... ok
+test memo::tests::byte_bound_is_enforced ... ok
+test memo::tests::disabled_cache_never_stores ... ok
+test memo::tests::entry_bound_is_enforced_fifo ... ok
+test memo::tests::hits_and_misses_are_counted ... ok
+test memo::tests::oversized_single_entry_is_rejected ... ok
+test ooc::tests::barriere_laesst_nur_einen_heissen_shard_zu ... ok
+test ooc::tests::fenster_verweigert_ueber_budget_und_zaehlt_drop_punkte ... ok
+test ooc::tests::finish_mit_heissem_shard_verwirft_statt_zu_lecken ... ok
+test ooc::tests::fremder_inhalt_unter_gleichem_key_wird_abgewiesen ... ok
+test ooc::tests::memo_prove_trifft_beim_zweiten_mal ... ok
+test ooc::tests::profiler_zaehler_sind_stabil_parsbar ... ok
+test ooc::tests::schranken_sind_an_sail_ooc_verankert ... ok
+test ooc::tests::run_shard_reihenfolge_und_summary_schranke ... ok
+test ooc::tests::stale_seal_und_abort_werden_abgewiesen ... ok
+test ooc::tests::warm_budget_mit_drop_punkt_freigeben ... ok
+test profile::tests::format_matches_documented_shape ... ok
+test profile::tests::add_smt_to_last_attaches_to_named_phase ... ok
+test profile::tests::peak_rss_does_not_panic ... ok
+test profile::tests::phase_with_counters_records_prover_delta ... ok
+test profile::tests::prover_counters_diff_saturates ... ok
+test profile::tests::profiler_records_phases_and_total ... ok
+test profile::tests::simulated_phases_have_zero_wall_time ... ok
+test rewrite_stage::tests::manifest_def_count_mismatch_is_fatal ... ok
+test rewrite_stage::tests::pass_order_is_the_implemented_lean_sequence ... ok
+test rewrite_stage::tests::loader_failure_aborts_without_partial_success ... FAILED
+test rewrite_stage::tests::rewrite_empty_is_vacuous_but_still_incomplete ... ok
+test rewrite_stage::tests::require_lean_emit_reports_passes_and_counts ... FAILED
+test rewrite_stage::tests::rewrite_loads_by_position_and_preserves_emission_order ... FAILED
+test rewrite_stage::tests::storage_failure_is_fatal_and_stops_loading ... FAILED
+test typecheck::tests::counts_are_derived_from_emission ... ok
+test typecheck::tests::emission_never_passes_as_typed_program ... ok
+test typecheck::tests::ooc_window_starts_empty ... ok
+test typecheck::tests::profiler_counters_carry_real_ooc_counts_and_zero_smt ... ok
+test rewrite_stage::tests::rewritten_bodies_larger_than_test_memory_stay_on_disk ... FAILED
+
+failures:
+
+---- rewrite_stage::tests::loader_failure_aborts_without_partial_success stdout ----
+
+thread 'rewrite_stage::tests::loader_failure_aborts_without_partial_success' (188220) panicked at crates/sail-cli/src/rewrite_stage.rs:366:9:
+assertion `left == right` failed
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- rewrite_stage::tests::require_lean_emit_reports_passes_and_counts stdout ----
+
+thread 'rewrite_stage::tests::require_lean_emit_reports_passes_and_counts' (188223) panicked at crates/sail-cli/src/rewrite_stage.rs:377:84:
+called `Result::unwrap()` on an `Err` value: CliError { exit_code: 1, message: "rewrite stage: single-definition window at position 0 produced 7 definitions; whole-program rewrite integration is required" }
+
+---- rewrite_stage::tests::rewrite_loads_by_position_and_preserves_emission_order stdout ----
+
+thread 'rewrite_stage::tests::rewrite_loads_by_position_and_preserves_emission_order' (188225) panicked at crates/sail-cli/src/rewrite_stage.rs:315:84:
+called `Result::unwrap()` on an `Err` value: CliError { exit_code: 1, message: "rewrite stage: single-definition window at position 1 produced 7 definitions; whole-program rewrite integration is required" }
+
+---- rewrite_stage::tests::storage_failure_is_fatal_and_stops_loading stdout ----
+
+thread 'rewrite_stage::tests::storage_failure_is_fatal_and_stops_loading' (188227) panicked at crates/sail-cli/src/rewrite_stage.rs:443:9:
+assertion `left == right` failed
+  left: 1
+ right: 2
+
+---- rewrite_stage::tests::rewritten_bodies_larger_than_test_memory_stay_on_disk stdout ----
+
+thread 'rewrite_stage::tests::rewritten_bodies_larger_than_test_memory_stay_on_disk' (188226) panicked at crates/sail-cli/src/rewrite_stage.rs:402:68:
+called `Result::unwrap()` on an `Err` value: CliError { exit_code: 1, message: "rewrite stage: single-definition window at position 0 produced 7 definitions; whole-program rewrite integration is required" }
+
+
+failures:
+    rewrite_stage::tests::loader_failure_aborts_without_partial_success
+    rewrite_stage::tests::require_lean_emit_reports_passes_and_counts
+    rewrite_stage::tests::rewrite_loads_by_position_and_preserves_emission_order
+    rewrite_stage::tests::rewritten_bodies_larger_than_test_memory_stay_on_disk
+    rewrite_stage::tests::storage_failure_is_fatal_and_stops_loading
+
+test result: FAILED. 70 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 34ms
+             CPU time consumed: 26ms
+                   Memory peak: 3.2M (swap: 0B)
+FAIL: /home/simon/Dokumente/Sail/sail-rs/target/ci/deps/sail_rs-a1ba95cb8b5de9b7 (threads=2; retries exhausted)

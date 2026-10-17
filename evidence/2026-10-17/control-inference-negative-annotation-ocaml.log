@@ -1,0 +1,17 @@
+RAM gate: avail=23428MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p232613-i249010.service
+[93mType error[0m:
+[96mevidence/2026-10-17/control-inference-negative-annotation.sail[0m:2.50-86:
+2[96m |[0mfunction select(flag, left, right) = let choice = if flag then left else (false : int) in choice
+ [91m |[0m                                                  [91m^----------------------------------^[0m
+ [91m |[0m Could not infer type of false : int
+ [91m |[0m 
+ [91m |[0m [93mCaused by [0m[96mevidence/2026-10-17/control-inference-negative-annotation.sail[0m:2.74-79:
+ [91m |[0m 2[96m |[0mfunction select(flag, left, right) = let choice = if flag then left else (false : int) in choice
+ [91m |[0m  [91m |[0m                                                                          [91m^---^[0m
+ [91m |[0m  [91m |[0m Type mismatch between int('ex6#) and bool(false)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 26ms
+             CPU time consumed: 16ms
+                   Memory peak: 12.1M (swap: 0B)

@@ -1,0 +1,16 @@
+Running as unit: run-p988044-i1008633.service
+sail-rs: warning: duplicate val spec 'max_int' (first at file4:8826-9021, again at file1:4640-4750)
+sail-rs: warning: duplicate val spec 'pow2' (first at file4:5758-5977, again at file1:5559-5628)
+sail-rs: warning: duplicate val spec 'sub_bits_int' (first at file7:9939-10098, again at file1:8375-8509)
+sail-rs: frontend converted 85701 definitions from 45 files using 16 workers; 1182587804 AST bytes spooled
+sail-rs: typecheck byte budget 32 MiB (1182587804 AST bytes spooled, 16 workers)
+sail-rs: typechecked 85701 definitions and 1707207 expressions using 16 workers
+sail-rs: rewrite byte budget 32 MiB (16 workers)
+sail-rs: rewrote 85701 definitions through 22 passes (move_termination_measures, remove_vector_subrange_pats, remove_duplicate_valspecs, pat_string_append, add_unspecified_rec, undefined, tuple_assignments, vector_concat_assignments, simple_assignments, split, minimise_recursive_functions, const_prop_mutrec, exp_lift_assign, early_return, merge_function_clauses, remove_blocks, remove_e_assign, int
+sail-rs: compilation incomplete: lean-emit stage "lean-emit" missing (no Lean body emission); 85701 rewritten TypedDefs through 22 passes (move_termination_measures, remove_vector_subrange_pats, remove_duplicate_valspecs, pat_string_append, add_unspecified_rec, undefined, tuple_assignments, vector_concat_assignments, simple_assignments, split, minimise_recursive_functions, const_prop_mutrec, exp_l
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 13min 26.552s
+             CPU time consumed: 30min 49.267s
+                   Memory peak: 6.5G (swap: 0B)
+FIN

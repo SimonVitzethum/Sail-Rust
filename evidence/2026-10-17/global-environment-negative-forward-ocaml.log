@@ -1,0 +1,12 @@
+RAM gate: avail=23391MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p237100-i239428.service
+[93mType error[0m:
+[96mevidence/2026-10-17/global-environment-negative-forward.sail[0m:2.17-21:
+2[96m |[0mfunction use() = flag
+ [91m |[0m                 [91m^--^[0m
+ [91m |[0m Identifier flag is unbound
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 15ms
+             CPU time consumed: 15ms
+                   Memory peak: 11.7M (swap: 0B)

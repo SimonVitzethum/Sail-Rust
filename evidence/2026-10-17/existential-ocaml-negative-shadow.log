@@ -1,0 +1,19 @@
+RAM gate: avail=21472MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p202168-i178847.service; invocation ID: 8f183bd76e38456e83e6453544554880
+[93mType error[0m:
+[96mevidence/2026-10-17/existential-negative-shadow.sail[0m:5.20-30:
+5[96m |[0mfunction wrong(n) = produce(n)
+ [91m |[0m                    [91m^--------^[0m
+ [91m |[0m {('syn#n : Int), 'syn#n == 0. int('syn#n)} is not a subtype of int(42)
+ [91m |[0m as 'ex182 == 42 could not be proven
+ [91m |[0m 
+ [91m |[0m type variable 'ex182:
+ [91m |[0m [96mevidence/2026-10-17/existential-negative-shadow.sail[0m:5.20-30:
+ [91m |[0m 5[96m |[0mfunction wrong(n) = produce(n)
+ [91m |[0m  [93m |[0m                    [93m^--------^[0m [93mbound here[0m
+ [91m |[0m  [93m |[0m has constraint: 0 == 'ex182
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 53ms
+             CPU time consumed: 50ms
+                   Memory peak: 31.8M (swap: 0B)

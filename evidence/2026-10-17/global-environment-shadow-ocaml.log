@@ -1,0 +1,15 @@
+RAM gate: avail=23372MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p239477-i266648.service; invocation ID: 47ff002ded6d4720b30cced27c4164f9
+[93mType error[0m:
+[96mevidence/2026-10-17/global-environment-shadow.sail[0m:1.4-8:
+1[96m |[0mlet flag : bool = false
+ [92m |[0m    [92m^--^[0m [92mPrevious definition[0m
+[96mevidence/2026-10-17/global-environment-shadow.sail[0m:4.0-18:
+4[96m |[0mlet flag : int = 4
+ [91m |[0m[91m^----------------^[0m
+ [91m |[0m Duplicate toplevel let binding flag
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 23ms
+             CPU time consumed: 17ms
+                   Memory peak: 11.9M (swap: 0B)

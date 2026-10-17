@@ -1,0 +1,24 @@
+RAM gate: avail=21788MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p201076-i178791.service
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 8.14s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8.178s
+             CPU time consumed: 14.368s
+                   Memory peak: 295.6M (swap: 0B)
+Running as unit: run-p201187-i178795.service
+
+running 4 tests
+test existential_return_accepts_a_witness_satisfying_its_predicate ... ok
+test existential_return_cannot_strengthen_existing_witness_bounds ... ok
+test existential_return_may_weaken_existing_witness_bounds ... ok
+test existential_return_rejects_a_witness_outside_its_predicate ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 38ms
+             CPU time consumed: 51ms
+                   Memory peak: 38.7M (swap: 0B)

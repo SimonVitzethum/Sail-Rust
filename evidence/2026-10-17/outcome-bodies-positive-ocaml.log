@@ -1,0 +1,13 @@
+RAM gate: avail=23706MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p229333-i199741.service; invocation ID: 1f8e865811a14600843d74889fa439cf
+[93mWarning[0m: Unused variable
+[96mevidence/2026-10-17/outcome-bodies-positive.sail[0m:3.18-19:
+3[96m |[0m    impl symbolic(x) = 4
+ [91m |[0m                  [91m^[0m
+ [91m |[0m This variable is defined but never used.
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 71ms
+             CPU time consumed: 63ms
+                   Memory peak: 31.1M (swap: 0B)

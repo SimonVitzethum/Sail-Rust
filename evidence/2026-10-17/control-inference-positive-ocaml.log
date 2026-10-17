@@ -1,0 +1,7 @@
+RAM gate: avail=23413MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p232627-i249016.service; invocation ID: a30babd2b2804f61ae3fa1e8e1b8ff31
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 41ms
+             CPU time consumed: 41ms
+                   Memory peak: 31.3M (swap: 0B)

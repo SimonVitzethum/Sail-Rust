@@ -1,256 +1,172 @@
 # Architektur und Verträge
 
-Stand: 2026-10-11. Der Implementierungs- und Prüfstatus steht ausschließlich in
-[WORK_STATE.md](WORK_STATE.md), Befehle in [TESTING.md](TESTING.md).
-Die Existenz einer Crate, eines Renderers oder eines Mini-AST-Tests bedeutet
-keine vollständige Integration in den realen Compilerpfad.
+Stand: 2026-10-17. Messungen und offene Arbeiten stehen in [WORK_STATE.md](WORK_STATE.md),
+Befehle in [TESTING.md](TESTING.md). Der vollständige ARM-/Lean-Pfad ist unvollständig.
 
 ## Reale Pipeline
 
+`crates/sail-cli/src/main.rs:119` führt den normalen Compilerpfad aus:
+
 ```text
-Sail-Dateien und eingebettete Bibliotheken
-  → Includes/Makros und Quellreihenfolge
-  → Rohdefinitionen auf Platte
-  → begrenzte Parser-/Konverter-Worker mit Fixity-Snapshots
-  → flache kanonische Definitionen und lokale Interner auf Platte
-  → geordnete Auflösung und Deklarationstabellen
-  → begrenzte parallele Körperprüfung
-  → noch zu vervollständigendes typisiertes Programm
-  → noch zu integrierende Rewrites und ausführbare Lean-Ausgabe
-  → lake build und elaborierte Prüfung auf Sorry-Proof-Holes
+Sail-Dateien und Bibliotheken
+  → geordnete Vorverarbeitung und parallele AST-Konvertierung
+  → Deklarationsumgebung in Quellreihenfolge
+  → parallele Körperprüfung
+  → parallele Rewrites auf einzelnen Eingabedefinitionen
+  → expliziter Fehler wegen fehlender vollständiger Lean-Ausgabe
 ```
 
-Die CLI meldet fehlende Stufen als Fehler. Sidecars mit ungeprüftem Rohtext,
-leere Funktionskörper, Kommentare oder Projektgerüste dürfen den echten
-Compilerlauf nicht erfolgreich abschließen.
-
-| Bereich | Implementierungsstellen |
-| --- | --- |
-| CLI und disk-basierter Compilerpfad | `crates/sail-cli/src/{main,frontend,typecheck,ooc}.rs` |
-| Kanonischer AST, Symbole, flache Speicherung | `crates/sail-ast/src/` |
-| Generierte LALRPOP-Grammatik | `crates/sail-grammar/{build.rs,src/sail.lalrpop}` |
-| RealParser, Konvertierung und Präprozessor | `crates/sail-parse/src/{real,convert,preprocess}.rs` |
-| Auflösung | `crates/sail-resolve/src/` |
-| Deklarationen, Aliase, Overloads, Konstruktorbeweise | `crates/sail-ty/src/program.rs` |
-| Kanonische bidirektionale Körperprüfung | `crates/sail-ty/src/canonical_body.rs` |
-| Gemeinsame Literale und Typvergleiche | `crates/sail-ty/src/{canonical_literal,canonical_eq}.rs` |
-| Beweise und Solverprozess-Lebenszyklus | `crates/sail-solver/src/{canonical,smtlib_backend}.rs` |
-| Begrenzte Parallelisierung und Speicherinfrastruktur | `crates/sail-par-pipe/`, `crates/sail-ooc/`, `crates/sail-shard/` |
-| Rewrites, Effekte, Lowering, Lean-Printer und Projektlayout | `crates/sail-{rewrite,effects,lower,lean,lake}/` |
-| Eingebettete Bibliotheken | `crates/sail-prelude/` |
-| Diagnosen und Messinfrastruktur | `crates/sail-diag/`, `crates/sail-perf/` |
-
-Worktree-Stand (uncommitted, Lane-13/18): typisierte Rewrite-Stufe mit 10
-implementierten Pässen in `crates/sail-rewrite/src/pipeline.rs:279-311,348-394`
-(`is_typed_implemented_pass`, `TypedStubPass`, `TypedPipeline`),
-gemeinsame Helfer in `crates/sail-rewrite/src/passes/typed.rs`, neue Pässe
-`add_unspecified_rec`, `merge_function_clauses`, `minimise_recursive_functions`,
-`pat_string_append`, `remove_blocks`, `remove_duplicate_valspecs`,
-`remove_superfluous_letbinds` unter `crates/sail-rewrite/src/passes/`,
-Ordnungstests in `crates/sail-rewrite/tests/typed_pipeline.rs`;
-`crates/sail-cli/` verbraucht `TypedPipeline` weiter nicht.
+Das Frontend liegt in `crates/sail-cli/src/frontend.rs:347`, die Typprüfung in
+`crates/sail-cli/src/typecheck.rs:157`, die Rewrite-Anbindung in
+`crates/sail-cli/src/rewrite_stage.rs:225`. Die fehlende Lean-Integration wird
+in `crates/sail-cli/src/rewrite_stage.rs:102` mit Exit 1 gemeldet. Ein erfolgreiches
+Frontend oder eine vollständige Teilmengenprüfung ist kein Compiler-Erfolg.
 
 ## Out-of-core und Parallelisierung
 
-Die Auslagerungseinheit ist eine kanonische Definition mit ihrem lokalen
-Interner. `DefinitionSnapshot` in `sail-ast/src/storage.rs` verwendet das interne
-Format `flat-definition-v1`. Rekursive Kinder werden iterativ in flache Datensätze
-überführt. Knotenmetadaten und Nutzdaten bleiben erhalten. Speicherindizes sind
-unabhängig von AST-NodeIds und Symbolen.
+Frontend, Typprüfung und Rewrites verwenden den Scheduler aus `sail-shard`.
+`crates/sail-shard/src/scheduler.rs:324` begrenzt gleichzeitig offene Jobs nach
+Eingabe-Bytes und Anzahl. Credits werden erst nach der Ergebnisübernahme frei.
+Ein Job oberhalb des Bytebudgets läuft allein; seine eigene Größe wird dadurch
+nicht hart RAM-begrenzt. Das cgroup-Limit bleibt die äußere Speichergrenze.
 
-Kinddatensätze werden vor ihren Eltern geschrieben. Der Leser prüft einen
-typkorrekten azyklischen Baum und baut ihn iterativ wieder auf. Typen, Muster,
-Ausdrücke, Constraints, Outcomes, interne Werte und Annotationen benutzen die
-gemeinsame Traversierung. Neue Varianten brauchen explizite Traversierungsregeln.
-Zum Freigeben kanonischer Bäume dient `drop_definition`; die normale rekursive
-Freigabe sehr tiefer ASTs ist ungeeignet.
+`SAIL_RS_THREADS` bestimmt die Workerzahl; automatisch werden maximal 16 gewählt
+(`crates/sail-cli/src/frontend.rs:347`). Das Typprüfungsfenster verwendet
+`SAIL_TYPECHECK_MEMORY`, standardmäßig 32 MiB
+(`crates/sail-ooc/src/budget.rs:29`). Rewrites verwenden ein unabhängiges
+`SAIL_REWRITE_MEMORY`, ebenfalls standardmäßig 32 MiB
+(`crates/sail-cli/src/rewrite_stage.rs:225`). Die Auswahl der Workerzahl erhöht
+diese gemeinsamen Bytebudgets nicht.
 
-Worker schreiben fertige Definitionen in den disk-basierten Warm-Layer und liefern
-nur Content-ID und Größe. Der geordnete Consumer lädt, verarbeitet und verwirft
-eine Definition. Die Queue hält keine vollständigen fertigen AST-Körper.
-Der Scheduler begrenzt wartende, laufende und auf Reihenfolge wartende Ergebnisse
-gemeinsam. Vor dem nächsten Input wird ein Credit erworben; Fehler und Panics
-beenden den weiteren Input. Das hält die Fehlerreihenfolge deterministisch.
+Die kanonischen AST-Symbole gehören jeweils zu einem Definition-Interner.
+Definitionen dürfen nicht ohne Symbol-Remapping unter einen gemeinsamen
+Interner kopiert werden. `crates/sail-ast/src/interner.rs:62` serialisiert die
+Symbol-Map in Textreihenfolge. Hash-Seeds nach Deserialisierung verändern damit
+keine Inhalts-IDs; die bestehende JSON-Struktur bleibt erhalten.
 
-Die CLI nutzt standardmäßig höchstens 16 Worker; `SAIL_RS_THREADS` setzt die
-Anzahl. Der committete Speichermechanismus begrenzt ein Definitionenfenster,
-noch kein striktes Bytebudget. Worktree-Stand (uncommitted, Lane-22/23):
-Byte-Budget in `crates/sail-ooc/src/budget.rs:49-94`
-(`parse_byte_limit`, `byte_budget_from_env`), Scheduler mit
-`crates/sail-shard/src/scheduler.rs:57-59` (`new_byte_budget`) und
-`:324` (`run_streaming_weighed`); Z3-Quote in
-`crates/sail-solver/src/quota.rs:74-82,86,134,257,290-325`
-(`BYTES_PER_SOLVER`, `QuotaConfig`, `QuotaStats`, `set_max_live`,
-`QuotaPermit`, `QuotaRecommendation::recommend`), durchgesetzt über
-`crates/sail-solver/src/pool.rs:104-115` (`set_max_idle`/`evict_idle`) und
-`crates/sail-solver/src/cache.rs:278-289` (`set_max_bytes`/`enforce_byte_quota`),
-Politik-Hilfe in `crates/sail-perf/src/quota.rs:22-39` (`QuotaAdvice::recommend`).
+Flache Snapshots zerlegen und rekonstruieren rekursive ASTs iterativ:
+`crates/sail-ast/src/storage.rs:704` (`new`), `:729` (`write`), `:756` (`read`),
+`:846` (`into_definition`) und `:875` (`drop_definition`). Direkte AST-Clones
+und andere abgeleitete rekursive Operationen sind dadurch nicht automatisch
+stack-sicher.
 
-Spool-Priorität: `SAIL_RS_SPOOL_DIR`, sonst `$XDG_CACHE_HOME/sail-rs/spool`,
-sonst `$HOME/.cache/sail-rs/spool`, ohne beide Variablen `target/sail-rs-spool`.
-Jeder Lauf verwendet einen isolierten und anschließend aufgeräumten Unterordner.
-Linux-RAM-Dateisysteme werden über `/proc/self/mountinfo` abgewiesen.
-Ein tmpfs ersetzt bei deaktiviertem Swap keine Auslagerung auf Platte.
+Frontend und Rewrites teilen die Speicherung über
+`crates/sail-cli/src/frontend.rs:330` (`store_snapshot`) und das Laden über `:320`.
+`crates/sail-ooc/src/warm.rs:183` speichert Blobs ohne sie im Live-Cache zu halten;
+`:205` öffnet einen gepufferten Leser. Ein großer einzelner Snapshot und seine
+serialisierten Bytes müssen während der Speicherung weiterhin in RAM passen.
 
-## Parser, AST und Interner
+Die Rewrite-Stufe speichert alle erzeugten Definitionen eines Jobs in
+Passreihenfolge und behält Inhalts-IDs statt ganzer ASTs. Ergebnisgruppen werden
+nach Quellposition sortiert. Sie verarbeitet weiterhin einzelne Eingabedefinitionen;
+programmübergreifende Pässe sind dadurch noch nicht vollständig integriert.
+Ein registrierter Typed-Pass ist kein Beleg für vollständige Semantik: etwa
+`crates/sail-rewrite/src/passes/undefined.rs:27` bewahrt untypisierte Knoten
+absichtlich, bis vollständige Typinformationen verfügbar sind.
 
-`sail-grammar/build.rs` erzeugt die LALRPOP-Tabellen tatsächlich. `RealParser`
-führt expliziten Zustand für Fixities und Konstruktorkinds mit. Infix-Ausdrücke,
-numerische Ausdrücke und Constraints werden gemeinsam gefaltet; Ausdruckskonversion
-und Infix-Baumaufbau verwenden explizite Arbeitsstapel.
+## Typen, Gültigkeitsbereiche und Beweise
 
-Die Grammatik trennt offene und geschlossene Ausdrücke für die Zuordnung von
-`else`. Ausdrucks-`let`/`var` verlangen `in`; innerhalb eines Blocks werden sie
-ohne `in` durch eigene Blockproduktionen erkannt. Der verbleibende Block ist ihr
-Körper, kein Geschwister außerhalb des Gültigkeitsbereichs. Dieser letzte Fix ist
-noch laufende Arbeit, siehe `WORK_STATE.md`.
-Parenthesierte Bitfeldbereiche folgen den getrennten OCaml-Produktionen für
-Bereiche und Konkatenationen; einzelne Typklammern dürfen dabei nicht doppelt
-abgeleitet werden. Tabellenkonflikte werden an den Produktionen behoben.
+`crates/sail-ty/src/program.rs:408` baut Deklarationstabellen in Quellreihenfolge
+auf. Lookups berücksichtigen die Position eines Körpers, beispielsweise
+`Program::value` in `:1453`. Spätere Deklarationen dürfen frühere Körper nicht
+rückwirkend typisieren. Record-/Union- und Outcome-Deklarationen haben eigene
+Tabellen; Outcome-lokale Val-Spezifikationen sind über `:1729` zugänglich und
+werden nicht als globale Werte eingetragen.
 
-Die separate Legacy-Dateibrücke kann nicht konvertierte Bestandteile in Sidecars
-aufbewahren. Das ist kein Nachweis einer vollständigen Prüfung. Der echte
-Compiler muss Lücken explizit ablehnen. Präzise Spans aller Nachfahren sowie die
-vollständige Weitergabe von Annotationen bleiben zu auditieren.
+Annotierte globale `let`-Muster werden über dieselbe Werthistorie sichtbar,
+erst ab der folgenden Quellposition. Doppelte globale Bindungsnamen werden
+abgewiesen. Ohne Annotation wird derzeit noch keine globale Typsignatur aus
+dem Initialisierer übernommen. Die Body-Prüfung bleibt auch für annotierte
+Initialisierer verpflichtend (`crates/sail-ty/src/program.rs:690`).
 
-`Symbol` ist nur innerhalb seines Interners gültig. Namen werden zum Vergleich
-über den jeweiligen Interner aufgelöst; gleiche Symbolnummern aus verschiedenen
-Tabellen sind keine gleichen Namen. AST, Typansichten und gespeicherte Definitionen
-müssen den passenden Interner behalten. Lexer-Payloads, AST-Literale und `Kid`
-verwenden Symbole; `TokenKind::Error` behält Fehlertext als `String`.
-`NExpKind::Constant`, Set-Mitglieder und einige andere Nutzdaten bleiben Strings.
-AST-JSON-Symbole benötigen die mitgelieferte Tabelle zur Interpretation.
-`bitone` und `bitzero` werden wie OCaml zu einem Bit breiten Binärliteralen;
-sie sind keine Integerliterale oder numerischen Typgrößen.
+Outcome-Implementierungen verwenden die Outcome-Signatur mit starren äußeren
+Parametern. Lokale Vals gelangen in Quellreihenfolge in eine unveränderliche
+Scope-Kette; Implementierungsnamen benötigen keine globale Val-Signatur.
+Header-Quantoren gelten in Implementierungen, nicht in lokalen Val-Spezifikationen
+(`crates/sail-ty/src/canonical_body.rs:505`). Outcome-Instantiierungen fehlen noch.
 
-## Kanonische Typprüfung
+Der Körperprüfer in `crates/sail-ty/src/canonical_body.rs` verwendet Typansichten
+mit Quelltabellen, Substitutionen und getrennten rigiden Bindungsidentitäten.
+`infer_app_actuals` in `:907` nutzt bekannte Geschwistertypen für ausgelassene
+implizite Argumente. Eine eindeutige Resultatsignatur kann auch die Prüfung noch
+unaufgelöster innerer Argumente führen. Diese Argumente werden geprüft, bevor
+ihre Typen weiterverwendet werden. Direkte Verschachtelung ist begrenzt; tiefe
+Aufrufketten verwenden einen iterativen Synthesepfad. Nicht auflösbare Fälle
+bleiben explizite Fehler.
 
-`Program` hält immutable Signaturen und Deklarationshistorien. Jede Körperprüfung
-sieht nur Deklarationen bis zur eigenen Quellposition. Spätere Val-Spezifikationen,
-Overload-Erweiterungen oder globale Constraints dürfen frühere Körper nicht ändern.
-Worktree-Stand (uncommitted, Lane-08/16/19): Record-/Union-Feldpayloads in
-`crates/sail-ty/src/program.rs:64-80,252,554-560,1340`
-(`RecordField`, `RecordDef`, `records`-Tabelle, `record()`), gelesen über
-`crates/sail-ty/src/ast_env.rs:97-129`
-(`record_fields_ast`, `variant_ctors_ast`, `accessor_scheme_ast`);
-Vektor-Prim-Normalisierung in `crates/sail-ty/src/vector_prims.rs:47-71,123-182`
-(`VectorPrim`, `classify`, `normalize`, `resolve_app`), Call-Site
-`crates/sail-ty/src/canonical_body.rs:647`; Arm-Planer für fehlende
-kanonische Regeln in `crates/sail-ty/src/exp_arms.rs` (Lane-19).
-Konstruktorbedingungen werden nach simultaner Parameterersetzung bewiesen.
-Inline-Rückgabeannotationen werden mit den Argumentmustern zu Signaturen ergänzt.
-Overloads werden in OCaml-Reihenfolge auf Argumente, Ergebnis und Bedingungen
-geprüft; verschachtelte Listen werden iterativ expandiert und Zyklen abgewiesen.
+Die Synthese verarbeitet `if`- und Blockresultate auf einem Arbeitsstapel mit
+einer Scope-Sicht pro Frame. Bedingungen liefern getrennte Zweigannahmen.
+Unterschiedliche boolesche Singletons werden zu `bool`, unterschiedliche
+Integer-Singletons gegebenenfalls zu `int` verbreitert; allgemeine präzise
+numerische Vereinigungen fehlen noch. Deklarierte Existentialtypen bleiben
+getrennt von den geöffneten Wertzeugen. Die spätere Körperprüfung kontrolliert
+Bedingungen, beide Zweige und Block-Präfixe vollständig
+(`crates/sail-ty/src/canonical_body.rs:3685`).
 
-`Type` hält eine `Arc<Scheme>`-Wurzel, einen Pfad, eine rigide Scope-Identität
-und geliehene Substitutionen. Typalias-Expansion ersetzt keine großen Bäume durch
-rekursives Klonen: Type-Argumente und numerische/Boolean-Argumente werden als
-Ansichten gebunden. `Substitutions` hält beide Arten gemeinsam und gibt gemischte
-Ketten iterativ frei. Auch Scope-Elternketten besitzen iterative Freigabe.
-Einige Kopien von Signaturen und Annotationen benutzen weiterhin AST-`Clone`;
-die Rekursionsfreiheit des gesamten Compilers ist noch nicht nachgewiesen.
+Erwartete Existentialtypen sind Beweisverpflichtungen.
+`check_existential` in `:2370` bindet Zeugen aus dem vorhandenen Werttyp und
+übernimmt das Zielprädikat in die zu beweisenden Constraints. Nur bereits
+vorhandene Zeugen liefern Marker-Annahmen; ein gewöhnlicher erwarteter
+Call-Rückgabetyp darf keine Annahme über sein eigenes Ergebnis erzeugen.
+Äußere Substitutionen bleiben bei der Instantiierung erhalten, und lokale
+Existentialbinder verdecken gleichnamige äußere Substitutionen.
 
-Frische Aufrufinstanzen trennen rigide Variablen zwischen Rekursion, Geschwistern
-und Internertabellen. Allgemeine immutable Integer-/Boolean-Werte und opake
-Ergebnisse werden zu eigenen Singleton-Zeugen geöffnet. Bei Mutable-Initialisierung
-muss der deklarierte Typ erhalten bleiben; bei späteren Lesevorgängen darf kein
-veralteter Zeuge als aktueller Wert gelten. `InferredValue` trennt in der laufenden
-Implementierung deklarierte und geöffnete Ansichten.
+`marker_assumptions` in `:2619` sammelt vorhandene Zeugenbedingungen auch entlang
+ihrer Substitutionssichten. Die ursprünglichen Bindungsidentitäten bleiben dabei
+erhalten. Endliche Mengenbedingungen werden dabei ebenfalls übernommen.
+Alias-Sichten besitzen andere Symboltabellen; Marker werden nur beim
+ursprünglichen Besitzer emittiert, der über die Substitutionen erreichbar
+bleibt. Die Regressionen in `crates/sail-ty/tests/existential_subsumption.rs`
+prüfen gültige Zeugen, falsche Wertebereiche, Abschwächung, verbotene Verstärkung,
+Shadowing und über mehrere Aufrufe weitergegebene Schranken.
 
-Die Prüfung nutzt einen expliziten Taskstapel und pro Körper begrenzte
-Synthese-/Aufrufcaches. AST-Pointer sind nur Identitätsschlüssel und werden darüber
-nicht dereferenziert. Zweig- und Guard-Fakten sind geliehene Boolean-Argumente mit
-optionaler Negation; sie gelten nur im jeweiligen Scope. Foreach-Indizes bekommen
-Bereichsannahmen und sind immutable. While benutzt positive Bedingungsfakten;
-Repeat/until setzt seine spätere Bedingung nicht für den Körper voraus.
-
-### Beweisverlinkung über Symboltabellen (B2–B3)
-
-`Symbol` gilt nur in seinem Interner; frische Tabellen (Mini-Roundtrips,
-`ast_of_mini_typ`) zerreissen rigide Identitäten. Alle Längen- und
-Fakt-Konstruktion folgt darum echten Substitutionsketten statt Rohtypen:
-
-- `vector_len_nexp` (`canonical_body.rs:1182`) mit `ground_scalar`/`ground_nexp`/
-  `find_binding` (`:1202`, `:1212`, `:1271`): Längenargument folgt der Kette
-  (`sail_zeros(8*n)` → `8*'n`), Konstanten werden gegroundet, rigide Reste
-  bleiben für Scope-/Funktionssicht-Linking. Bindungsregel strikt same-table
-  (Fremdtabellen kollidieren per Nummer UND Text); zyklen-/fuel-gesichert.
-- `guard_mini`/`guard_fact` (`:1672`, `:1840`): Vergleichs-Guards über Atomen
-  (`m < 'n` ⇒ `'m < 'n`), `&`/`|`-Kombinationen (Scope-Arc-Konflikte bleiben
-  `None`), `E_constraint` (rigid-geprüft), Literale. `condition` nutzt
-  `guard_fact`, verfeinerte `bool(..)`-Bedingungen passieren direkt.
-- `sizeof_type` (`:1589`) mit `rehome_nexp` (`:1551`): `'n` synthetisiert
-  `atom('n)` (Konvertierung `int(args)`→`atom` beachten), Scope =
-  Funktionsschema; `__size`-Deklarations-Gate wie OCaml.
-- `check_assert` (`:1893`): `assert` prüft cond/msg und fädelt Fakten in den
-  Continuation-Scope (Block-Threading); `E_constraint`-Ausdrücke denotieren
-  `atom_bool`.
-- `append_result` (`:1349`): `@` summiert gegroundete Längen, Variablen
-  verlinkt auf Seiten-Sichten; `append`-Deklarations-Gate.
-- `align_call`/`is_implicit_formal` (`:791`, `:807`): ausgelassene
-  `implicit(..)`-Formale (`extzv([bitzero])`); `select_call` probiert alle
-  Kandidaten; `has_overload` (`program.rs:1392`) prüft nur Deklaration
-  (dangling Members wie `__id` ok).
-- `field_type` (`:2291`): `record.field` via Accessor-Teleskop, in `run`
-  und `infer` (`Synthesis::Field`). Pattern-Seite: Union-Konstruktoren via
-  `instantiate`, `P_vector`/`P_vector_concat` mit Konstantbreiten
-  (ein Wildcard nimmt den Rest).
-
-Der Rückgabewert der committeten kanonischen Prüfung ist eine Anzahl geprüfter
-Ausdrücke. Worktree-Stand (uncommitted, Lane-17): elaborierte Emission als
-`crates/sail-ty/src/typed_def.rs:37-53` (`TypedDefKind`, `TypedDef` mit
-Typ-/Constraint-Payload statt Zählung), verdrahtet in
-`crates/sail-cli/src/typecheck.rs:3-30,229-279`; Downstream fehlt weiter,
-`require_typed_program` bricht explizit mit Exit 1 ab. Vollständige typisierte Definitionen, alle Muster-/Ausdrucksregeln,
-Refinement-/Existential-Elaboration und die Integration in Lean fehlen weiterhin.
-Zum 128-MiB-Befund (Test-Parallelität, kein Leak) gilt der korrigierte Stand in
-[WORK_STATE.md](WORK_STATE.md).
+Numerische Normalisierung in `crates/sail-ty/src/nexp.rs:1445` und `:1632`
+verwendet Arbeitsstapel. Neu aufgebaute Kinder werden konsumiert, statt alle
+Präfixbäume im Zwischencache zu kopieren. Der Test
+`crates/sail-ty/tests/numeric_normalization.rs` prüft 10.000 symbolische Knoten
+auf einem 128-KiB-Stack und gibt die Testbäume iterativ frei. Das ersetzt keinen
+Audit aller rekursiven Clone-/Drop-Pfade des Compilers.
 
 ## Solver und Beweisgrenzen
 
-Der reale kanonische Prover verwendet iterativ erzeugtes und validiertes SMT-LIB
-mit Z3 als persistentem Subprozess. Numerische Strings werden validiert, Namen
-kodiert, Int- und Bool-Sorts getrennt und rigide Scope-Identitäten erhalten.
-Gleichzeitige Substitution vermeidet Variable-Capture. Annahmen stammen aus
-sichtbaren globalen Constraints, der Funktionsquantifizierung und lokalen Fakten.
-Nur UNSAT der negierten Beweisverpflichtung bestätigt eine Implikation.
-SAT, Unknown, Syntaxfehler und Timeouts sind keine gültigen Beweise.
+`crates/sail-solver/src/canonical.rs:49` erzeugt validiertes SMT-LIB für
+Implikationen, `:70` für Typargument-Gleichheiten. Die Skripte enthalten Annahmen
+und die negierte Verpflichtung. Numerische Literale werden validiert, Namen
+kodiert und Int-/Bool-Sorts getrennt. Nur UNSAT bestätigt den Beweis.
 
-Die Solverprozesse werden exklusiv ausgeliehen und vor jeder Anfrage zurückgesetzt.
-Ein begrenzter Memo-Cache hält bis zu 128 Ergebnisse. Anfragen besitzen einen
-3-Sekunden-Timeout; der I/O-Worker deckt auch blockiertes Schreiben/Lesen ab.
-Abbruch/Freigabe beendet Prozesse und wartet auf Prozess und Thread. Z3 erbt die
-cgroup-Grenzen. Worktree-Stand (uncommitted, Lane-15): Zähler an der Quelle
-(`SolverPool::smt_totals`, `MemoCache::smt_totals`) und Profiler-Senke
-(`phase_with_counters`, `add_smt_to_last`) sind getestet; der Call-Site-Patch
-in `sail-cli/src/typecheck.rs`/`main.rs` fehlt noch. Beleg:
-`evidence/2026-10-12/lane-15-profiler.log` §1/§3.
+Potenzen werden konservativ durch die Integerfunktion `sail_pow2` abstrahiert
+(`crates/sail-solver/src/canonical.rs:117`). Jede mathematische Potenzfunktion
+ist eine zulässige Interpretation dieser Funktion. Deshalb bleibt UNSAT ein
+gültiger Beweis, obwohl keine arithmetischen Axiome ergänzt werden. Kongruenz
+und vorhandene Annahmen wie `p = 2^l` können benutzt werden. Beliebige
+Potenzwerte oder Positivität werden ohne Belege nicht bestätigt. Allgemeine
+Potenzarithmetik und weitere numerische Anwendungen bleiben unvollständig.
+`crates/sail-solver/tests/power_congruence.rs` prüft das mit dem echten Solver.
 
-Das optionale native `z3`-Feature und die ältere `sail-nexp`-Algebra sind eigene
-Schnittstellen. Deren vereinfachende Prädikate oder Mini-AST-Tests ersetzen die
-kanonischen Beweise nicht. Allgemeine Numeric-/Constraint-Apps, Potenzen und
-weitere Synonym-/Refinement-Regeln sind im kanonischen Pfad noch unvollständig.
+`crates/sail-solver/src/smtlib_backend.rs:114` hält einen Z3-Prozess pro Solver.
+Anfragen setzen dessen Zustand zurück; Zeitüberschreitungen, Syntax- und
+Prozessfehler beweisen keine Verpflichtung. Z3 erbt die Compiler-cgroup-Grenze.
+Unknown-Ergebnisse werden im kanonischen Programmpfad und in den Memo-/Pool-
+Wrappern nicht gespeichert; spätere Anfragen dürfen erneut versuchen zu lösen.
+OCaml Sail wird ausschließlich für Vergleichstests verwendet.
 
 ## Lean, Speichermodell und Projektlayout
 
-Lean ist die maßgebliche Speichermodell-Semantik (`lean-sail` und ARM-Support).
-Rust-Spiegel müssen durch Differentialtests mit ihr übereinstimmen. Es wird kein
-paralleles unabhängiges Speichermodell eingeführt. Eigenes Rust enthält kein
-Unsafe; der Workspace verbietet es mit `unsafe_code = "forbid"`.
+`crates/sail-ty/src/typed_def.rs:53` trägt derzeit einen deklarierten Scheme-
+Snapshot und Beobachtungszahlen. Eine vollständig elaborierte, serialisierte
+Typ-/Effektannotation jedes Ausdrucks ist damit noch nicht hergestellt.
+Die Rewrite-/Lean-Stufen benötigen weiterhin diese Integration und korrekte
+programmübergreifende Rewrites.
 
+Der Körperdrucker ist in `crates/sail-lean/src/exps.rs:184` und `:199` vorhanden;
+Scheme-/Definition-Emission in `crates/sail-lean/src/emit.rs:147` und `:339`.
+Diese Bausteine sind noch kein vollständiger produktiver ARM-Ausgabepfad.
 `sail-lake` besitzt Projekt-/Registertemplates und Golden-Fixtures unter
-`crates/sail-lake/golden/`. Worktree-Stand (uncommitted, Lane-14): echter
-Funktionskörper-Drucker als `doc_exp`-Port in
-`crates/sail-lean/src/exps.rs:152-199,505`
-(`print_fun_def`, `render_fun_def`, `print_exp_top`, Hauptausdruckdrucker). Defaults im Quellcode: Lean `v4.29.0`, lean-sail `v6`;
-mathlib `v4.29.0` nur bei Opt-in für reelle Zahlen. Interface V1 verwendet
-`ConcurrencyInterfaceV1`/`SpecializationV1`, V2 `ArchSem`/`SpecializationArchSem`.
-Das Layout enthält Toolchain, Lake-Konfiguration, Manifest, `<Camel>/Defs.lean`
-und das Root-Modul. Golden-Stringvergleiche belegen Layout, keine ausgeführten
-ARM-Funktionskörper. Fixtures werden nur bei bewusst geprüften Templateänderungen
-angepasst, nicht zur bloßen Anpassung an einen fehlgeschlagenen Test.
+`crates/sail-lake/golden/`. Lean-Sail und die ARM-Supportdateien bleiben die
+Referenz für Speichermodell und Nebenläufigkeit.
 
-Die tatsächliche Abnahme verlangt frische Compiler-Ausgabe, `lake build` und
-`scripts/CheckLeanNoSorry.lean`. Dieser prüft elaborierte Typen und Werte,
-auch opake Definitionen und transitiv importierte Module. Reiner Quelltext-Grep
-kann durch Makros oder Taktiken erzeugte Proof-Holes nicht ausschließen.
+`scripts/arm-lean-gate.sh` verlangt Compiler-Ausgabe, ein Lake-Projekt,
+`lake build` und die Prüfung elaborierter Konstanten.
+`scripts/CheckLeanNoSorry.lean:6` untersucht Typen und Werte einschließlich
+opaker Definitionen und transitiver Imports auf `hasSorry`. Der aktuelle
+ARM-Typprüfungsfehler verhindert noch das Erreichen dieser Lean-Stufen.

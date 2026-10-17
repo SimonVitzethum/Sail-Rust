@@ -1,0 +1,7 @@
+RAM gate: avail=21254MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p202078-i209649.service
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 67ms
+             CPU time consumed: 118ms
+                   Memory peak: 84.5M (swap: 0B)

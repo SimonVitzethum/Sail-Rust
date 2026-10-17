@@ -1,0 +1,22 @@
+RAM gate: avail=22869MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p216960-i199117.service
+[93mType error[0m:
+[96mevidence/2026-10-17/power-witness-negative.sail[0m:7.25-73:
+7[96m |[0mfunction bounded(v, l) = mod_witness(unsigned_witness(v), pow_witness(l))
+ [91m |[0m                         [91m^----------------------------------------------^[0m
+ [91m |[0m {('ex184# : Int) ('ex185# : Int) ('r : Int), ((('ex185# == 2 ^ 'l & 'ex185# >= 0) & (0 <= 'ex184# & 'ex184# < 2 ^ 'n)) & (0 <= 'r & 'r < 'ex185#)). int('r)} is not a subtype of {('r : Int), (0 <= 'r & 'r < 2 ^ ('l - 1)). int('r)}
+ [91m |[0m as (0 <= 'ex189 & 'ex189 < 2 ^ ('l - 1)) could not be proven
+ [91m |[0m 
+ [91m |[0m type variable 'ex189:
+ [91m |[0m [96mevidence/2026-10-17/power-witness-negative.sail[0m:6.69-113:
+ [91m |[0m 6[96m |[0mval bounded : forall 'n 'l, 'n >= 0 & 'l > 0. (bits('n), int('l)) -> { 'r, 0 <= 'r & 'r < 2 ^ ('l - 1). int('r) }
+ [91m |[0m  [92m |[0m                                                                     [92m^------------------------------------------^[0m [92mderived from here[0m
+ [91m |[0m [96mevidence/2026-10-17/power-witness-negative.sail[0m:7.25-73:
+ [91m |[0m 7[96m |[0mfunction bounded(v, l) = mod_witness(unsigned_witness(v), pow_witness(l))
+ [91m |[0m  [93m |[0m                         [93m^----------------------------------------------^[0m [93mbound here[0m
+ [91m |[0m  [93m |[0m has constraint: ((('ex187# == 2 ^ 'l & 'ex187# >= 0) & (0 <= 'ex186# & 'ex186# < 2 ^ 'n)) & (0 <= 'ex189 & 'ex189 < 'ex187#))
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 106ms
+             CPU time consumed: 171ms
+                   Memory peak: 34.8M (swap: 0B)

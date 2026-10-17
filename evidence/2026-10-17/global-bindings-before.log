@@ -1,0 +1,36 @@
+RAM gate: avail=24029MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p221720-i207314.service; invocation ID: 055a880ba68b4dddb380bea74c99734c
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 0.67s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 705ms
+             CPU time consumed: 1.093s
+                   Memory peak: 85.6M (swap: 0B)
+Running as unit: run-p221775-i207317.service; invocation ID: bee81144feb34bcd98a881e8eafd7ef1
+
+running 3 tests
+test a_global_initializer_cannot_return_from_a_function ... ok
+test annotated_global_initializers_cannot_change_type ... ok
+test annotated_global_literals_check_against_the_annotation ... FAILED
+
+failures:
+
+---- annotated_global_literals_check_against_the_annotation stdout ----
+
+thread 'annotated_global_literals_check_against_the_annotation' (221779) panicked at crates/sail-ty/tests/global_bindings.rs:22:23:
+called `Result::unwrap()` on an `Err` value: TypeError { span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Unsupported("type synonym expansion, refinement subsumption and dependent argument solving") }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    annotated_global_literals_check_against_the_annotation
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 19ms
+             CPU time consumed: 7ms
+                   Memory peak: 2.2M (swap: 0B)
+FAIL: /home/simon/Dokumente/Sail/sail-rs/target/ci/deps/global_bindings-b32a41f702983187 (threads=2; retries exhausted)

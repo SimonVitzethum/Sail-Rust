@@ -1,0 +1,43 @@
+RAM gate: avail=22145MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p200632-i234143.service; invocation ID: 2e81b17900a14c7ab430a4b2ff1612d5
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 8.19s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8.224s
+             CPU time consumed: 14.470s
+                   Memory peak: 304M (swap: 0B)
+Running as unit: run-p200748-i221553.service; invocation ID: bccb2eb695da480a923cd57c023ff103
+
+running 4 tests
+test existential_return_accepts_a_witness_satisfying_its_predicate ... ok
+test existential_return_cannot_strengthen_existing_witness_bounds ... FAILED
+test existential_return_may_weaken_existing_witness_bounds ... ok
+test existential_return_rejects_a_witness_outside_its_predicate ... FAILED
+
+failures:
+
+---- existential_return_cannot_strengthen_existing_witness_bounds stdout ----
+
+thread 'existential_return_cannot_strengthen_existing_witness_bounds' (200751) panicked at crates/sail-ty/tests/existential_subsumption.rs:63:5:
+an unknown witness cannot gain a stronger bound
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- existential_return_rejects_a_witness_outside_its_predicate stdout ----
+
+thread 'existential_return_rejects_a_witness_outside_its_predicate' (200753) panicked at crates/sail-ty/tests/existential_subsumption.rs:41:5:
+the result predicate must be proved, never discarded
+
+
+failures:
+    existential_return_cannot_strengthen_existing_witness_bounds
+    existential_return_rejects_a_witness_outside_its_predicate
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 18ms
+             CPU time consumed: 6ms
+                   Memory peak: 2.5M (swap: 0B)
+FAIL: /home/simon/Dokumente/Sail/sail-rs/target/ci/deps/existential_subsumption-b92840ec8b760484 (threads=2; retries exhausted)

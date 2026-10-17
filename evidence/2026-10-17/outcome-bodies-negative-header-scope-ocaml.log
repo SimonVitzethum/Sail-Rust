@@ -1,0 +1,17 @@
+RAM gate: avail=23683MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p229305-i199735.service
+[93mType error[0m:
+[96mevidence/2026-10-17/outcome-bodies-negative-header-scope.sail[0m:2.17-31:
+2[96m |[0m    val helper : int('n) -> int
+ [91m |[0m                 [91m^------------^[0m
+ [91m |[0m Well-formedness check failed for type
+ [91m |[0m 
+ [91m |[0m [93mCaused by [0m[96mevidence/2026-10-17/outcome-bodies-negative-header-scope.sail[0m:2.21-23:
+ [91m |[0m 2[96m |[0m    val helper : int('n) -> int
+ [91m |[0m  [91m |[0m                     [91m^^[0m
+ [91m |[0m  [91m |[0m No type variable 'n
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 25ms
+             CPU time consumed: 17ms
+                   Memory peak: 11.7M (swap: 0B)

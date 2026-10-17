@@ -1,0 +1,12 @@
+RAM gate: avail=23692MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p229319-i199739.service
+[93mType error[0m:
+[96mevidence/2026-10-17/outcome-bodies-negative-result.sail[0m:1.49-54:
+1[96m |[0moutcome read : int -> int = { impl emulator(x) = false }
+ [91m |[0m                                                 [91m^---^[0m
+ [91m |[0m Type mismatch between int('ex3#) and bool(false)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 27ms
+             CPU time consumed: 18ms
+                   Memory peak: 11.6M (swap: 0B)

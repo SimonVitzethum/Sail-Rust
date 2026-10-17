@@ -9,6 +9,12 @@ bereits das vollständige ARM-Modell auf Platte mit begrenzter Parallelität.
 Die Typprüfung und die ausführbare Lean-Ausgabe sind noch nicht vollständig.
 Ein erfolgreicher ARM-`lake build` ist nicht nachgewiesen.
 
+Frontend, Typprüfung und Rewrites arbeiten mit begrenzten Worker-Fenstern.
+`SAIL_RS_THREADS` steuert die Parallelität (automatisch maximal 16);
+`SAIL_REWRITE_MEMORY` steuert das gemeinsame Rewrite-Eingabebudget.
+ASTs und temporäre Gate-Daten liegen auf der Projektplatte. Der aktuelle
+ARM-Blocker und die gemessenen Speicher-Peaks stehen im Arbeitsstand.
+
 ## Aktuelle Dokumentation
 
 | Datei | Inhalt |
@@ -31,12 +37,13 @@ cgroup-Speicherlimits; Z3 für abhängige Typbeweise, Lean/Lake für die Lean-Ab
 OCaml Sail wird nur als Referenz für Vergleichstests benötigt.
 
 ```bash
-systemd-run --user --wait --pipe --collect \
+mkdir -p target/tmp
+/tmp/opencode/sail-gate/gated-run.sh 4G systemd-run --user --wait --pipe --collect --setenv="TMPDIR=$PWD/target/tmp" \
   -p MemoryMax=4G -p MemorySwapMax=0 -p "WorkingDirectory=$PWD" \
   cargo build --profile ci -j 2 -p sail-cli
 
-scripts/test-memory-limited.sh -p sail-ty -p sail-parse -p sail-grammar -p sail-cli -p sail-solver
-scripts/arm-lean-gate.sh
+/tmp/opencode/sail-gate/gated-run.sh 4G scripts/test-memory-limited.sh -p sail-ty -p sail-parse -p sail-grammar -p sail-cli -p sail-solver
+/tmp/opencode/sail-gate/gated-run.sh 16G env SAIL_RS_THREADS=16 scripts/arm-lean-gate.sh
 ```
 
 Das ARM-Gate ist das Akzeptanzziel; sein aktueller Fehlschlag ist im Arbeitsstand

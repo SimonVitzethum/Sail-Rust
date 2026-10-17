@@ -1,0 +1,42 @@
+RAM gate: avail=23675MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p243729-i270935.service
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 0.68s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 720ms
+             CPU time consumed: 1.176s
+                   Memory peak: 89.1M (swap: 0B)
+Running as unit: run-p243786-i270937.service
+
+running 9 tests
+test header_quantifiers_are_not_in_scope_in_local_specs ... ok
+test implementation_names_do_not_need_global_signatures ... ok
+test implementation_requires_an_enclosing_outcome ... ok
+test implementations_check_result_and_argument_types ... ok
+test local_spec_does_not_override_global_signature_outside_the_block ... ok
+test local_specs_are_visible_only_after_their_declarations ... ok
+test outcome_parameters_and_local_polymorphism_remain_distinct ... ok
+test header_constraints_are_available_in_implementations ... ok
+test outcome_record_constraints_survive_local_calls_and_branch_selection ... FAILED
+
+failures:
+
+---- outcome_record_constraints_survive_local_calls_and_branch_selection stdout ----
+
+thread 'outcome_record_constraints_survive_local_calls_and_branch_selection' (243798) panicked at crates/sail-ty/tests/outcome_bodies.rs:114:48:
+let pa = pa_bits(request.pa); let pa = if check_request(request) then mono(pa) else pa; let tag : bool = if length(pa) == 32 then read_tag(32, pa) else read_tag(64, pa); (): TypeError { span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: ConstraintNotProved("dependent call quantifier constraint") }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    outcome_record_constraints_survive_local_calls_and_branch_selection
+
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 113ms
+             CPU time consumed: 128ms
+                   Memory peak: 38.5M (swap: 0B)
+FAIL: /home/simon/Dokumente/Sail/sail-rs/target/ci/deps/outcome_bodies-5bb8a93b1bae9631 (threads=2; retries exhausted)

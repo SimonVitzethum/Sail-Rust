@@ -1,0 +1,45 @@
+RAM gate: avail=21860MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p210791-i234546.service
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 0.65s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 679ms
+             CPU time consumed: 1.166s
+                   Memory peak: 92.7M (swap: 0B)
+Running as unit: run-p210847-i234548.service
+
+running 12 tests
+test existential_return_accepts_a_witness_satisfying_its_predicate ... ok
+test existential_return_cannot_strengthen_existing_witness_bounds ... ok
+test existential_return_may_weaken_existing_witness_bounds ... ok
+test existential_return_rejects_a_witness_outside_its_predicate ... ok
+test existential_shadowing_does_not_reuse_the_call_argument ... ok
+test nested_existential_shadowing_does_not_merge_witness_predicates ... ok
+test nested_existential_shadowing_retains_the_inner_witness ... FAILED
+test existential_shadowing_retains_its_own_witness_predicate ... ok
+test ordinary_call_does_not_assume_its_desired_result_predicate ... ok
+test ordinary_call_result_can_supply_a_valid_existential_witness ... ok
+test quantified_call_cannot_strengthen_an_existential ... ok
+test quantified_call_can_return_a_weaker_existential ... ok
+
+failures:
+
+---- nested_existential_shadowing_retains_the_inner_witness stdout ----
+
+thread 'nested_existential_shadowing_retains_the_inner_witness' (210875) panicked at crates/sail-ty/tests/existential_subsumption.rs:157:6:
+called `Result::unwrap()` on an `Err` value: TypeError { span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: QuantError("existentials require binders and cannot nest") }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    nested_existential_shadowing_retains_the_inner_witness
+
+test result: FAILED. 11 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 99ms
+             CPU time consumed: 170ms
+                   Memory peak: 40.9M (swap: 0B)
+FAIL: /home/simon/Dokumente/Sail/sail-rs/target/ci/deps/existential_subsumption-b92840ec8b760484 (threads=2; retries exhausted)

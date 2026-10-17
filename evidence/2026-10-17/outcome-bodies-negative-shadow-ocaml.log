@@ -1,0 +1,12 @@
+RAM gate: avail=23691MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p229326-i199740.service
+[93mType error[0m:
+[96mevidence/2026-10-17/outcome-bodies-negative-shadow.sail[0m:3.32-37:
+3[96m |[0m    impl emulator(x) = identity(false)
+ [91m |[0m                                [91m^---^[0m [91mchecking function argument has type 'a[0m
+ [91m |[0m bool(false) is not a subtype of 'a
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 26ms
+             CPU time consumed: 17ms
+                   Memory peak: 11.7M (swap: 0B)

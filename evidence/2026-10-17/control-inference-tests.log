@@ -1,0 +1,43 @@
+RAM gate: avail=23428MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p232510-i258439.service
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 0.76s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 794ms
+             CPU time consumed: 1.409s
+                   Memory peak: 90M (swap: 0B)
+Running as unit: run-p232568-i258442.service
+
+running 4 tests
+test conditionals_and_blocks_infer_binding_types ... FAILED
+test inference_does_not_skip_prefixes_conditions_or_branch_checks ... ok
+test separate_existential_calls_do_not_share_branch_witnesses ... FAILED
+test deep_control_inference_uses_a_small_host_stack ... ok
+
+failures:
+
+---- conditionals_and_blocks_infer_binding_types stdout ----
+
+thread 'conditionals_and_blocks_infer_binding_types' (232570) panicked at crates/sail-ty/tests/control_inference.rs:34:10:
+called `Result::unwrap()` on an `Err` value: TypeError { span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: ConstraintNotProved("dependent type argument equality") }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- separate_existential_calls_do_not_share_branch_witnesses stdout ----
+
+thread 'separate_existential_calls_do_not_share_branch_witnesses' (232580) panicked at crates/sail-ty/tests/control_inference.rs:70:6:
+called `Result::unwrap()` on an `Err` value: TypeError { span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: ConstraintNotProved("dependent type argument equality") }
+
+
+failures:
+    conditionals_and_blocks_infer_binding_types
+    separate_existential_calls_do_not_share_branch_witnesses
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 659ms
+             CPU time consumed: 687ms
+                   Memory peak: 37.5M (swap: 0B)
+FAIL: /home/simon/Dokumente/Sail/sail-rs/target/ci/deps/control_inference-c271e7006433d356 (threads=2; retries exhausted)

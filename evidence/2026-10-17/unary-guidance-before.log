@@ -1,0 +1,43 @@
+RAM gate: avail=22914MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p217618-i238663.service
+   Compiling sail-solver v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-solver)
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 8.69s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8.722s
+             CPU time consumed: 16.555s
+                   Memory peak: 307M (swap: 0B)
+Running as unit: run-p217750-i238675.service
+
+running 9 tests
+test a_guided_nested_call_still_checks_every_argument ... ok
+test explicit_implicit_still_checks ... ok
+test nested_overload_inference_keeps_width_obligations ... ok
+test nested_overloads_propagate_sibling_types_to_omitted_implicits ... ok
+test omitted_implicit_solves_from_expected ... ok
+test sibling_width_guides_an_implicit_call_through_a_unary_function ... FAILED
+test unsolvable_implicit_stays_honest_error ... ok
+test sibling_type_solves_omitted_implicit ... ok
+test wrong_arity_still_fails ... ok
+
+failures:
+
+---- sibling_width_guides_an_implicit_call_through_a_unary_function stdout ----
+
+thread 'sibling_width_guides_an_implicit_call_through_a_unary_function' (217773) panicked at crates/sail-ty/tests/implicit_arity.rs:163:6:
+the sibling width must reach the nested mask argument: TypeError { span: Span { file: FileId(4294967295), start: 4294967295, end: 4294967295 }, kind: Unsupported("cannot infer dependent call parameter (existential opening or arithmetic solving required)") }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    sibling_width_guides_an_implicit_call_through_a_unary_function
+
+test result: FAILED. 8 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=101/n/a
+               Service runtime: 61ms
+             CPU time consumed: 90ms
+                   Memory peak: 38.1M (swap: 0B)
+FAIL: /home/simon/Dokumente/Sail/sail-rs/target/ci/deps/implicit_arity-b065d2cf10c48aa3 (threads=2; retries exhausted)

@@ -559,6 +559,9 @@ pub(crate) fn check(
                 position,
                 def.span,
             )?;
+            // The measure sees the function's type variables (`= 'N`).
+            let function = checker.name(name)?.to_owned();
+            checker.context = program.value(&function, position).cloned();
             checker.measure(pat, exp, &args)?;
         }
         DefKind::LoopMeasures { name, measures } => {
@@ -4229,11 +4232,35 @@ impl Checker<'_> {
                     let mut known: i128 = 0;
                     let mut wildcards = 0u32;
                     let mut pinned = Vec::with_capacity(items.len());
+                    // Binding variables of unclear width (`x @ 0b1`).
+                    let mut unclear: Vec<&Pat> = Vec::new();
                     for sub in items {
                         match &sub.kind {
                             PatKind::Wild => {
                                 wildcards += 1;
                                 pinned.push(None);
+                            }
+                            PatKind::Id(_) | PatKind::As { .. } => {
+                                wildcards += 1;
+                                unclear.push(sub);
+                                pinned.push(None);
+                            }
+                            PatKind::Typ { typ: annotation, .. } => {
+                                let annotated = self.annotation(annotation)?;
+                                let annotated = self.resolve(&annotated)?;
+                                let width = self
+                                    .vector_len_nexp(&annotated, sub.span)
+                                    .ok()
+                                    .as_ref()
+                                    .and_then(crate::nexp::Nexp::as_const);
+                                let Some(width) = width else {
+                                    return Err(unsupported(
+                                        sub.span,
+                                        "non-constant annotated concat subpattern width",
+                                    ));
+                                };
+                                known += width;
+                                pinned.push(Some((sub, width)));
                             }
                             PatKind::Vector(inner) => {
                                 known += inner.len() as i128;
@@ -4276,6 +4303,9 @@ impl Checker<'_> {
                     }
                     if wildcards == 0 && rest != 0 {
                         return Err(arity(pat.span, total as usize, known as usize));
+                    }
+                    for sub in unclear {
+                        work.push((sub, slice(rest)));
                     }
                     // The wildcard (if any) takes the remainder `rest` and
                     // binds nothing; literal/vector slices check against

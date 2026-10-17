@@ -1,0 +1,17 @@
+RAM gate: avail=22031MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p211064-i215183.service; invocation ID: 1a639180e7964180ad5665c03863a8c9
+[93mType error[0m:
+[96mevidence/2026-10-17/existential-nested-positive.sail[0m:3.14-63:
+3[96m |[0mval produce : unit -> { 'n, 'n == 0. { 'n, 'n == 1. int('n) } }
+ [91m |[0m              [91m^-----------------------------------------------^[0m
+ [91m |[0m Well-formedness check failed for type
+ [91m |[0m 
+ [91m |[0m [93mCaused by [0m[96mevidence/2026-10-17/existential-nested-positive.sail[0m:3.37-61:
+ [91m |[0m 3[96m |[0mval produce : unit -> { 'n, 'n == 0. { 'n, 'n == 1. int('n) } }
+ [91m |[0m  [91m |[0m                                     [91m^----------------------^[0m
+ [91m |[0m  [91m |[0m Nested existentials are not allowed
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 34ms
+             CPU time consumed: 23ms
+                   Memory peak: 12.7M (swap: 0B)

@@ -1,0 +1,484 @@
+RAM gate: avail=23616MiB requested=16384MiB reserve=2048MiB
+Running as unit: run-p231742-i235563.service; invocation ID: 074a1da42afa4ce4a58156159a87cf7c
+warning: unused import: `Interner`
+  --> crates/sail-lex/src/token.rs:18:16
+   |
+18 | use sail_ast::{Interner, Symbol};
+   |                ^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-lex` (lib) generated 1 warning
+warning: unused variable: `i`
+   --> crates/sail-ty/src/vector_lexp.rs:135:14
+    |
+135 |         for (i, it) in self.chain.iter().enumerate() {
+    |              ^ help: if this is intentional, prefix it with an underscore: `_i`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `text`
+   --> crates/sail-ty/src/vector_lexp.rs:136:29
+    |
+136 |             if let r @ Some(text) = it.resolve(symbol) {
+    |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_text`
+
+warning: `sail-ty` (lib) generated 2 warnings (run `cargo fix --lib -p sail-ty` to apply 2 suggestions)
+warning: unused import: `sail_ast::Interner`
+  --> crates/sail-rewrite/src/passes/vector_concat_assignments.rs:36:5
+   |
+36 | use sail_ast::Interner;
+   |     ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `sail_ast::Interner`
+  --> crates/sail-rewrite/src/passes/remove_vector_subrange_pats.rs:40:5
+   |
+40 | use sail_ast::Interner;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `sail_ast::Interner`
+  --> crates/sail-rewrite/src/passes/bit_lists_to_lits.rs:29:5
+   |
+29 | use sail_ast::Interner;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unreachable pattern
+   --> crates/sail-rewrite/src/pipeline.rs:364:9
+    |
+359 |         "remove_superfluous_returns" => Some(Arc::new(RemoveSuperfluousReturns)),
+    |         ---------------------------- matches all the relevant values
+...
+364 |         "remove_superfluous_returns" => Some(Arc::new(RemoveSuperfluousReturns)),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable pattern
+   --> crates/sail-rewrite/src/pipeline.rs:365:9
+    |
+360 |         "toplevel_let_patterns" => Some(Arc::new(ToplevelLetPatterns)),
+    |         ----------------------- matches all the relevant values
+...
+365 |         "toplevel_let_patterns" => Some(Arc::new(ToplevelLetPatterns)),
+    |         ^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this
+
+warning: function `mk_pat` is never used
+  --> crates/sail-rewrite/src/passes/remove_superfluous_returns.rs:81:4
+   |
+81 | fn mk_pat(kind: PatKind) -> sail_ast::Pat {
+   |    ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `mk_name` is never used
+  --> crates/sail-rewrite/src/passes/remove_superfluous_returns.rs:86:4
+   |
+86 | fn mk_name(symbol: sail_ast::Symbol) -> sail_ast::Name {
+   |    ^^^^^^^
+
+warning: `sail-rewrite` (lib) generated 7 warnings
+warning: unused import: `std::fmt::Write`
+  --> crates/sail-lake/src/emission.rs:37:5
+   |
+37 | use std::fmt::Write as _;
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `sail-lake` (lib) generated 1 warning
+   Compiling sail-cli v0.0.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-cli)
+warning: unused import: `TypedDefKind`
+  --> crates/sail-cli/src/typecheck.rs:30:25
+   |
+30 | use sail_ty::{TypedDef, TypedDefKind};
+   |                         ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `run_with_ooc` is never used
+   --> crates/sail-cli/src/e2e.rs:264:8
+    |
+264 | pub fn run_with_ooc<H: OocHooks>(args: &E2eArgs, driver: &mut OocDriver<H>) -> Outcome {
+    |        ^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `window_peak_defs`, `window_peak_bytes`, and `warm_live_peak` are never read
+   --> crates/sail-cli/src/frontend.rs:281:9
+    |
+274 | pub struct FrontendSummary {
+    |            --------------- fields in this struct
+...
+281 |     pub window_peak_defs: usize,
+    |         ^^^^^^^^^^^^^^^^
+...
+284 |     pub window_peak_bytes: u64,
+    |         ^^^^^^^^^^^^^^^^^
+...
+287 |     pub warm_live_peak: u64,
+    |         ^^^^^^^^^^^^^^
+    |
+    = note: `FrontendSummary` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: method `profile_fields` is never used
+   --> crates/sail-cli/src/frontend.rs:293:12
+    |
+290 | impl FrontendSummary {
+    | -------------------- method in this implementation
+...
+293 |     pub fn profile_fields(&self) -> String {
+    |            ^^^^^^^^^^^^^^
+
+warning: enum `LeanDefKind` is never used
+  --> crates/sail-cli/src/lean_stage.rs:91:10
+   |
+91 | pub enum LeanDefKind {
+   |          ^^^^^^^^^^^
+
+warning: methods `as_str` and `is_value_like` are never used
+   --> crates/sail-cli/src/lean_stage.rs:105:12
+    |
+102 | impl LeanDefKind {
+    | ---------------- methods in this implementation
+...
+105 |     pub fn as_str(self) -> &'static str {
+    |            ^^^^^^
+...
+120 |     pub fn is_value_like(self) -> bool {
+    |            ^^^^^^^^^^^^^
+
+warning: struct `LeanStageDef` is never constructed
+   --> crates/sail-cli/src/lean_stage.rs:132:12
+    |
+132 | pub struct LeanStageDef {
+    |            ^^^^^^^^^^^^
+
+warning: associated functions `function`, `value`, `register`, and `skipped` are never used
+   --> crates/sail-cli/src/lean_stage.rs:147:12
+    |
+142 | impl LeanStageDef {
+    | ----------------- associated functions in this implementation
+...
+147 |     pub fn function(name: String, position: usize, sig: FunSig, body: Option<String>) -> Self {
+    |            ^^^^^^^^
+...
+161 |     pub fn value(name: String, position: usize, sig: FunSig, body: Option<String>) -> Self {
+    |            ^^^^^
+...
+175 |     pub fn register(name: String, position: usize, span: Span, ty: Typ) -> Self {
+    |            ^^^^^^^^
+...
+189 |     pub fn skipped(name: String, kind: LeanDefKind, position: usize, span: Span) -> Self {
+    |            ^^^^^^^
+
+warning: struct `Skipped` is never constructed
+   --> crates/sail-cli/src/lean_stage.rs:205:12
+    |
+205 | pub struct Skipped {
+    |            ^^^^^^^
+
+warning: struct `LeanOutcome` is never constructed
+   --> crates/sail-cli/src/lean_stage.rs:217:12
+    |
+217 | pub struct LeanOutcome {
+    |            ^^^^^^^^^^^
+
+warning: method `is_empty` is never used
+   --> crates/sail-cli/src/lean_stage.rs:227:12
+    |
+224 | impl LeanOutcome {
+    | ---------------- method in this implementation
+...
+227 |     pub fn is_empty(&self) -> bool {
+    |            ^^^^^^^^
+
+warning: function `error` is never used
+   --> crates/sail-cli/src/lean_stage.rs:232:4
+    |
+232 | fn error(message: impl Into<String>) -> CliError {
+    |    ^^^^^
+
+warning: function `unsupported` is never used
+   --> crates/sail-cli/src/lean_stage.rs:239:4
+    |
+239 | fn unsupported(msg: impl Into<String>, span: Span) -> CliError {
+    |    ^^^^^^^^^^^
+
+warning: function `lean_error` is never used
+   --> crates/sail-cli/src/lean_stage.rs:246:4
+    |
+246 | fn lean_error(err: LeanError) -> CliError {
+    |    ^^^^^^^^^^
+
+warning: function `body_has_hole` is never used
+   --> crates/sail-cli/src/lean_stage.rs:262:8
+    |
+262 | pub fn body_has_hole(text: &str) -> bool {
+    |        ^^^^^^^^^^^^^
+
+warning: function `emit_one` is never used
+   --> crates/sail-cli/src/lean_stage.rs:280:8
+    |
+280 | pub fn emit_one<W: std::fmt::Write>(
+    |        ^^^^^^^^
+
+warning: function `run_into` is never used
+   --> crates/sail-cli/src/lean_stage.rs:370:8
+    |
+370 | pub fn run_into<W: std::fmt::Write>(
+    |        ^^^^^^^^
+
+warning: function `render_all` is never used
+   --> crates/sail-cli/src/lean_stage.rs:383:8
+    |
+383 | pub fn render_all(
+    |        ^^^^^^^^^^
+
+warning: function `render_register_section` is never used
+   --> crates/sail-cli/src/lean_stage.rs:396:8
+    |
+396 | pub fn render_register_section(registers: &[RegisterEntry]) -> String {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `lean_code_tokens` is never used
+   --> crates/sail-cli/src/lean_stage.rs:409:4
+    |
+409 | fn lean_code_tokens(text: &str) -> Vec<&str> {
+    |    ^^^^^^^^^^^^^^^^
+
+warning: function `char_literal_len` is never used
+   --> crates/sail-cli/src/lean_stage.rs:484:4
+    |
+484 | fn char_literal_len(rest: &[u8]) -> Option<usize> {
+    |    ^^^^^^^^^^^^^^^^
+
+warning: constant `MEMO_DOMAIN_SOLVER_Z3` is never used
+  --> crates/sail-cli/src/ooc.rs:57:11
+   |
+57 | pub const MEMO_DOMAIN_SOLVER_Z3: &str = "ooc/memo-v1/solver/z3-v1";
+   |           ^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `WarmBudget`, `ContentMismatch`, and `Io` are never constructed
+  --> crates/sail-cli/src/ooc.rs:75:5
+   |
+62 | pub enum OocError {
+   |          -------- variants in this enum
+...
+75 |     WarmBudget {
+   |     ^^^^^^^^^^
+...
+85 |     ContentMismatch {
+   |     ^^^^^^^^^^^^^^^
+...
+97 |     Io(String),
+   |     ^^
+   |
+   = note: `OocError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: methods `warm_fetch`, `memo_lookup`, `memo_store`, and `summary_remove` are never used
+   --> crates/sail-cli/src/ooc.rs:164:8
+    |
+153 | pub trait OocHooks {
+    |           -------- methods in this trait
+...
+164 |     fn warm_fetch(&mut self, content_key: &str) -> Option<Vec<u8>>;
+    |        ^^^^^^^^^^
+...
+169 |     fn memo_lookup(&self, query_key: &str) -> Option<Vec<u8>>;
+    |        ^^^^^^^^^^^
+170 |     /// Kalter Memo-Store (unveränderliche Werte; Erster gewinnt).
+171 |     fn memo_store(&mut self, query_key: &str, value: &[u8]);
+    |        ^^^^^^^^^^
+...
+181 |     fn summary_remove(&mut self, shard: &str) -> bool;
+    |        ^^^^^^^^^^^^^^
+
+warning: struct `RecordingHooks` is never constructed
+   --> crates/sail-cli/src/ooc.rs:227:12
+    |
+227 | pub struct RecordingHooks {
+    |            ^^^^^^^^^^^^^^
+
+warning: methods `with_max_live_bytes`, `live_bytes`, `summary_count`, and `event` are never used
+   --> crates/sail-cli/src/ooc.rs:259:12
+    |
+256 | impl RecordingHooks {
+    | ------------------- methods in this implementation
+...
+259 |     pub fn with_max_live_bytes(mut self, n: u64) -> Self {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+266 |     pub fn live_bytes(&self) -> u64 {
+    |            ^^^^^^^^^^
+...
+272 |     pub fn summary_count(&self) -> usize {
+    |            ^^^^^^^^^^^^^
+...
+276 |     fn event(&mut self, e: String) {
+    |        ^^^^^
+
+warning: methods `hooks`, `hooks_mut`, `hot`, `into_hooks`, `memo_prove`, and `warm_recall` are never used
+   --> crates/sail-cli/src/ooc.rs:407:12
+    |
+394 | impl<H: OocHooks> OocDriver<H> {
+    | ------------------------------ methods in this implementation
+...
+407 |     pub fn hooks(&self) -> &H {
+    |            ^^^^^
+...
+412 |     pub fn hooks_mut(&mut self) -> &mut H {
+    |            ^^^^^^^^^
+...
+424 |     pub fn hot(&self) -> Option<&str> {
+    |            ^^^
+...
+430 |     pub fn into_hooks(self) -> H {
+    |            ^^^^^^^^^^
+...
+529 |     pub fn memo_prove(
+    |            ^^^^^^^^^^
+...
+546 |     pub fn warm_recall(&mut self, content_key: &str) -> Option<Vec<u8>> {
+    |            ^^^^^^^^^^^
+
+warning: struct `OocWindow` is never constructed
+   --> crates/sail-cli/src/ooc.rs:575:12
+    |
+575 | pub struct OocWindow {
+    |            ^^^^^^^^^
+
+warning: associated items `new`, `acquire`, `release`, `release_all`, `in_flight`, and `live_bytes` are never used
+   --> crates/sail-cli/src/ooc.rs:588:12
+    |
+584 | impl OocWindow {
+    | -------------- associated items in this implementation
+...
+588 |     pub fn new(max_in_flight: usize, max_live_bytes: u64) -> Self {
+    |            ^^^
+...
+599 |     pub fn acquire(&mut self, bytes: u64) -> Result<(), OocError> {
+    |            ^^^^^^^
+...
+621 |     pub fn release(&mut self, bytes: u64) {
+    |            ^^^^^^^
+...
+629 |     pub fn release_all(&mut self) {
+    |            ^^^^^^^^^^^
+...
+636 |     pub fn in_flight(&self) -> usize {
+    |            ^^^^^^^^^
+...
+642 |     pub fn live_bytes(&self) -> u64 {
+    |            ^^^^^^^^^^
+
+warning: struct `ProfileCounters` is never constructed
+   --> crates/sail-cli/src/ooc.rs:652:12
+    |
+652 | pub struct ProfileCounters {
+    |            ^^^^^^^^^^^^^^^
+
+warning: associated items `from_ooc` and `log_fields` are never used
+   --> crates/sail-cli/src/ooc.rs:668:12
+    |
+665 | impl ProfileCounters {
+    | -------------------- associated items in this implementation
+...
+668 |     pub fn from_ooc(stats: &OocStats) -> Self {
+    |            ^^^^^^^^
+...
+680 |     pub fn log_fields(&self) -> String {
+    |            ^^^^^^^^^^
+
+warning: associated functions `new` and `diff` are never used
+  --> crates/sail-cli/src/profile.rs:75:12
+   |
+69 | impl ProverCounters {
+   | ------------------- associated functions in this implementation
+...
+75 |     pub fn new(calls: u64, secs: f64) -> Self {
+   |            ^^^
+...
+80 |     pub fn diff(before: Self, after: Self) -> Self {
+   |            ^^^^
+
+warning: method `add_smt_to_last` is never used
+   --> crates/sail-cli/src/profile.rs:145:12
+    |
+ 95 | impl Profiler {
+    | ------------- method in this implementation
+...
+145 |     pub fn add_smt_to_last(&mut self, phase: &'static str, counters: ProverCounters) {
+    |            ^^^^^^^^^^^^^^^
+
+warning: field `typed` is never read
+  --> crates/sail-cli/src/typecheck.rs:70:9
+   |
+64 | pub struct Checked {
+   |            ------- field in this struct
+...
+70 |     pub typed: TypedProgramStatus,
+   |         ^^^^^
+
+warning: methods `require_typed_program`, `with_scheme`, and `profile_counters` are never used
+   --> crates/sail-cli/src/typecheck.rs:84:12
+    |
+ 79 | impl Checked {
+    | ------------ methods in this implementation
+...
+ 84 |     pub fn require_typed_program(&self) -> Result<(), CliError> {
+    |            ^^^^^^^^^^^^^^^^^^^^^
+...
+106 |     pub fn with_scheme(&self) -> usize {
+    |            ^^^^^^^^^^^
+...
+114 |     pub fn profile_counters(&self) -> ProfileCounters {
+    |            ^^^^^^^^^^^^^^^^
+
+warning: `sail-cli` (bin "sail-rs") generated 35 warnings (run `cargo fix --bin "sail-rs" -p sail-cli` to apply 1 suggestion)
+    Finished `ci` profile [optimized] target(s) in 8.57s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 8.603s
+             CPU time consumed: 16.026s
+                   Memory peak: 261.9M (swap: 0B)
+ARM gate: model=/home/simon/Dokumente/Sail/sail-arm/arm-v9.4-a memory=16G sources=22 output=/home/simon/Dokumente/Sail/sail-rs/target/arm-lean-gate/run.JeMmG2dL
+Running as unit: run-p231845-i235568.service
+sail-rs: [verbose=1] memo-z3=bounded path=sail_smt_cache max_entries=10000 max_bytes=67108864
+sail-rs: [verbose=1] input=src/prelude.sail
+sail-rs: [verbose=1] input=src/decode_start.sail
+sail-rs: [verbose=1] input=src/builtins.sail
+sail-rs: [verbose=1] input=src/v8_base.sail
+sail-rs: [verbose=1] input=src/stubs.sail
+sail-rs: [verbose=1] input=src/interrupts.sail
+sail-rs: [verbose=1] input=src/interface.sail
+sail-rs: [verbose=1] input=src/devices.sail
+sail-rs: [verbose=1] input=src/impdefs.sail
+sail-rs: [verbose=1] input=src/mem.sail
+sail-rs: [verbose=1] input=src/sysregs_autogen.sail
+sail-rs: [verbose=1] input=src/sysregs.sail
+sail-rs: [verbose=1] input=src/reset.sail
+sail-rs: [verbose=1] input=src/instrs32.sail
+sail-rs: [verbose=1] input=src/instrs64.sail
+sail-rs: [verbose=1] input=src/instrs64_sve.sail
+sail-rs: [verbose=1] input=src/instrs64_sme.sail
+sail-rs: [verbose=1] input=src/decode_end.sail
+sail-rs: [verbose=1] input=src/fetch.sail
+sail-rs: [verbose=1] input=src/map_clauses.sail
+sail-rs: [verbose=1] input=src/event_clauses.sail
+sail-rs: [verbose=1] input=src/termination_measures.sail
+sail-rs: warning: duplicate val spec 'max_int' (first at file4:8826-9021, again at file1:4640-4750)
+sail-rs: warning: duplicate val spec 'pow2' (first at file4:5758-5977, again at file1:5559-5628)
+sail-rs: warning: duplicate val spec 'sub_bits_int' (first at file7:9939-10098, again at file1:8375-8509)
+sail-rs: frontend converted 31267 definitions from 45 files using 16 workers; 1018419399 AST bytes spooled
+sail-rs: typecheck byte budget 32 MiB (1018419399 AST bytes spooled, 16 workers)
+[profile] phase="frontend" wall_s=34.531488 rss_peak_mb=202 smt_calls=0 smt_s=0.000000
+[profile] phase="typecheck" wall_s=0.868021 rss_peak_mb=214 smt_calls=0 smt_s=0.000000
+[profile] phase="total" wall_s=35.799642 rss_peak_mb=214 smt_calls=0 smt_s=0.000000
+sail-rs: <sail-lib>/concurrency_interface/read_write_v1.sail: body typecheck: typechecking incomplete at file15:6288-7970: synthesis for this expression requires further elaboration
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 35.849s
+             CPU time consumed: 24.038s
+                   Memory peak: 1.6G (swap: 0B)

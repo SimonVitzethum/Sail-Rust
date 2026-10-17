@@ -1,0 +1,12 @@
+RAM gate: avail=23888MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p222462-i203461.service
+[93mType error[0m:
+[96mevidence/2026-10-17/global-bindings-negative.sail[0m:3.23-24:
+3[96m |[0mlet test_flag : bool = 4
+ [91m |[0m                       [91m^[0m
+ [91m |[0m Type mismatch between bool('ex130#) and int(4)
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 30ms
+             CPU time consumed: 24ms
+                   Memory peak: 12.7M (swap: 0B)

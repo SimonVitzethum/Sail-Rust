@@ -1,0 +1,12 @@
+RAM gate: avail=23391MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p239456-i239503.service; invocation ID: cfa188bd63334a6f992674763cc7d707
+[93mType error[0m:
+[96mevidence/2026-10-17/global-environment-negative-self.sail[0m:1.18-22:
+1[96m |[0mlet flag : bool = flag
+ [91m |[0m                  [91m^--^[0m
+ [91m |[0m Identifier flag is unbound
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 23ms
+             CPU time consumed: 17ms
+                   Memory peak: 11.8M (swap: 0B)

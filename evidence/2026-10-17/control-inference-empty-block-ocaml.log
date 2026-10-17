@@ -1,0 +1,12 @@
+RAM gate: avail=23508MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p233786-i255663.service
+[93mSyntax error[0m:
+[96mevidence/2026-10-17/control-inference-empty-block.sail[0m:2.39-39:
+2[96m |[0mfunction select(left) = let choice = { } in left
+ [91m |[0m                                       [91m^[0m
+ [91m |[0m current token: }
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 22ms
+             CPU time consumed: 17ms
+                   Memory peak: 11.9M (swap: 0B)

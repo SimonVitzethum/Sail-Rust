@@ -1,0 +1,20 @@
+RAM gate: avail=22832MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p196059-i230079.service
+[93mType error[0m:
+[96mtarget/implicit-sibling-reference/negative.sail[0m:12.28-75:
+12[96m |[0mfunction test_is_zero(xs) = (xs & (test_extend([bitzero]) : bits(2))) == xs
+  [91m |[0m                            [91m^---------------------------------------------^[0m [91mchecking function argument has type bitvector('n)[0m
+  [91m |[0m Failed to prove constraint: 2 == 'n
+  [91m |[0m 
+  [91m |[0m constraint from [96mtarget/implicit-sibling-reference/negative.sail[0m:11.44-46:
+  [91m |[0m 11[96m |[0mval test_is_zero : forall 'n, 'n >= 0. bits('n) -> bool
+  [91m |[0m   [91m |[0m                                            [91m^^[0m [91mThis type argument[0m
+  [91m |[0m 
+  [91m |[0m constraint from [96mtarget/implicit-sibling-reference/negative.sail[0m:12.65-66:
+  [91m |[0m 12[96m |[0mfunction test_is_zero(xs) = (xs & (test_extend([bitzero]) : bits(2))) == xs
+  [91m |[0m   [91m |[0m                                                                 [91m^[0m [91mThis type argument[0m
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 86ms
+             CPU time consumed: 99ms
+                   Memory peak: 32.8M (swap: 0B)

@@ -1,0 +1,12 @@
+RAM gate: avail=23871MiB requested=256MiB reserve=2048MiB
+Running as unit: run-p222479-i187931.service
+[93mType error[0m:
+[96mevidence/2026-10-17/global-return-negative.sail[0m:3.23-32:
+3[96m |[0mlet test_count : int = return(4)
+ [91m |[0m                       [91m^-------^[0m
+ [91m |[0m Cannot use return outside a function
+          Finished with result: exit-code
+Main processes terminated with: code=exited, status=1/FAILURE
+               Service runtime: 36ms
+             CPU time consumed: 28ms
+                   Memory peak: 13.1M (swap: 0B)

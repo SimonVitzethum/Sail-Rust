@@ -1,0 +1,27 @@
+RAM gate: avail=22852MiB requested=4096MiB reserve=2048MiB
+Running as unit: run-p196087-i178563.service
+   Compiling sail-ty v0.1.0 (/home/simon/Dokumente/Sail/sail-rs/crates/sail-ty)
+    Finished `ci` profile [optimized] target(s) in 18.46s
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 18.501s
+             CPU time consumed: 31.966s
+                   Memory peak: 304.3M (swap: 0B)
+Running as unit: run-p196191-i226837.service
+
+running 7 tests
+test explicit_implicit_still_checks ... ok
+test nested_overload_inference_keeps_width_obligations ... ok
+test nested_overloads_propagate_sibling_types_to_omitted_implicits ... ok
+test omitted_implicit_solves_from_expected ... ok
+test sibling_type_solves_omitted_implicit ... ok
+test wrong_arity_still_fails ... ok
+test unsolvable_implicit_stays_honest_error ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+          Finished with result: success
+Main processes terminated with: code=exited, status=0/SUCCESS
+               Service runtime: 87ms
+             CPU time consumed: 148ms
+                   Memory peak: 39.2M (swap: 0B)
