@@ -692,9 +692,9 @@ impl Checker<'_> {
         }
         // Existential results open once here (memoized: stable binder
         // identities for every later use of this expression).
-        let declared = self.open_existential(&declared);
+        let opened = self.open_existential(&declared);
+        let typ = self.open_value(&opened);
         let shared: Arc<Type> = Arc::new(declared);
-        let typ = self.open_value(&shared);
         self.inferred.insert(
             exp as *const Exp,
             InferredValue {
@@ -3684,10 +3684,14 @@ impl Checker<'_> {
             StructUpdate(&'a Exp, usize),
             VectorAppend(&'a Exp),
             Field(&'a Exp),
+            IfCondition(&'a Exp),
+            IfBranches(&'a Exp),
+            Forward(&'a Exp),
         }
-        let mut work = vec![Synthesis::Enter(exp)];
+        let mut work = vec![(Synthesis::Enter(exp), Arc::new(scope.clone()))];
         let mut results = Vec::new();
-        while let Some(task) = work.pop() {
+        while let Some((task, scope)) = work.pop() {
+            self.proof_scope = scope.clone();
             match task {
                 Synthesis::Enter(exp) => {
                     if let Some(typ) = self.inferred.get(&(exp as *const Exp)) {
@@ -3696,11 +3700,29 @@ impl Checker<'_> {
                     }
                     let declared = match &exp.kind {
                         ExpKind::Lit(lit) => self.literal(lit)?,
-                        ExpKind::Id(name) => self.id(name, scope)?,
+                        ExpKind::Id(name) => self.id(name, &scope)?,
                         ExpKind::Typ { typ, .. } => self.annotation(typ)?,
+                        ExpKind::Block(items) => {
+                            if let Some(last) = items.last() {
+                                work.push((Synthesis::Forward(exp), scope.clone()));
+                                work.push((Synthesis::Enter(last), scope.clone()));
+                                continue;
+                            }
+                            self.builtin("unit")
+                        }
+                        ExpKind::If { cond, .. } => {
+                            work.push((Synthesis::IfCondition(exp), scope.clone()));
+                            work.push((Synthesis::Enter(cond), scope.clone()));
+                            continue;
+                        }
                         ExpKind::Tuple(items) => {
-                            work.push(Synthesis::Tuple(exp, items.len()));
-                            work.extend(items.iter().rev().map(Synthesis::Enter));
+                            work.push((Synthesis::Tuple(exp, items.len()), scope.clone()));
+                            work.extend(
+                                items
+                                    .iter()
+                                    .rev()
+                                    .map(|item| (Synthesis::Enter(item), scope.clone())),
+                            );
                             continue;
                         }
                         ExpKind::Vector(items) => {
@@ -3710,23 +3732,23 @@ impl Checker<'_> {
                                     "cannot infer the element type of an empty vector",
                                 ));
                             };
-                            work.push(Synthesis::Vector(exp, items.len()));
-                            work.push(Synthesis::Enter(first));
+                            work.push((Synthesis::Vector(exp, items.len()), scope.clone()));
+                            work.push((Synthesis::Enter(first), scope.clone()));
                             continue;
                         }
                         ExpKind::VectorAppend(left, right) => {
-                            work.push(Synthesis::VectorAppend(exp));
-                            work.push(Synthesis::Enter(right.as_ref()));
-                            work.push(Synthesis::Enter(left.as_ref()));
+                            work.push((Synthesis::VectorAppend(exp), scope.clone()));
+                            work.push((Synthesis::Enter(right.as_ref()), scope.clone()));
+                            work.push((Synthesis::Enter(left.as_ref()), scope.clone()));
                             continue;
                         }
                         ExpKind::Field { record, .. } => {
-                            work.push(Synthesis::Field(exp));
-                            work.push(Synthesis::Enter(record.as_ref()));
+                            work.push((Synthesis::Field(exp), scope.clone()));
+                            work.push((Synthesis::Enter(record.as_ref()), scope.clone()));
                             continue;
                         }
                         ExpKind::Constraint(_) => {
-                            let Some(fact) = self.guard_fact(exp, scope, exp.span)? else {
+                            let Some(fact) = self.guard_fact(exp, &scope, exp.span)? else {
                                 return Err(unsupported(
                                     exp.span,
                                     "constraint expression needs elaboration",
@@ -3793,31 +3815,43 @@ impl Checker<'_> {
                                     ));
                                 }
                             }
-                            work.push(Synthesis::Struct(exp, fields.len()));
-                            work.extend(fields.iter().rev().map(|f| Synthesis::Enter(&f.value)));
+                            work.push((Synthesis::Struct(exp, fields.len()), scope.clone()));
+                            work.extend(
+                                fields
+                                    .iter()
+                                    .rev()
+                                    .map(|f| (Synthesis::Enter(&f.value), scope.clone())),
+                            );
                             continue;
                         }
                         // LANE-45 infer `E_struct_update` ~L3823: infer the
                         // base; fields are checked in
                         // `Synthesis::StructUpdate`.
                         ExpKind::StructUpdate { record, fields } => {
-                            work.push(Synthesis::StructUpdate(exp, fields.len()));
-                            work.push(Synthesis::Enter(record.as_ref()));
+                            work.push((Synthesis::StructUpdate(exp, fields.len()), scope.clone()));
+                            work.push((Synthesis::Enter(record.as_ref()), scope.clone()));
                             continue;
                         }
                         ExpKind::App { func, args } => {
-                            let candidates = self.call_candidates(func, scope, args.len())?;
+                            let candidates = self.call_candidates(func, &scope, args.len())?;
                             // Shallow calls share sibling-guided inference
                             // for both single callees and overload sets.
                             // Deep chains use the iterative worklist to
                             // keep the host stack bounded.
                             if self.synth_depth >= SYNTH_DIRECT_LIMIT {
-                                work.push(Synthesis::Call(exp, candidates, args.len()));
-                                work.extend(args.iter().rev().map(Synthesis::Enter));
+                                work.push((
+                                    Synthesis::Call(exp, candidates, args.len()),
+                                    scope.clone(),
+                                ));
+                                work.extend(
+                                    args.iter()
+                                        .rev()
+                                        .map(|arg| (Synthesis::Enter(arg), scope.clone())),
+                                );
                                 continue;
                             }
                             self.synth_depth += 1;
-                            let actual = self.infer_app_actuals(args, scope, exp.span);
+                            let actual = self.infer_app_actuals(args, &scope, exp.span);
                             self.synth_depth -= 1;
                             let actual = actual?;
                             let callee = self.select_call(candidates, &actual, None, exp.span)?;
@@ -3834,6 +3868,71 @@ impl Checker<'_> {
                         }
                     };
                     let declared = self.resolve(&declared)?;
+                    results.push(self.value_type(exp, declared));
+                }
+                Synthesis::IfCondition(exp) => {
+                    let condition_type = results.pop().expect("inferred condition");
+                    let boolean = self.builtin("bool");
+                    self.compatible(&boolean, &condition_type, exp.span)?;
+                    let ExpKind::If {
+                        cond,
+                        then_branch,
+                        else_branch,
+                    } = &exp.kind
+                    else {
+                        unreachable!("if synthesis shape")
+                    };
+                    let condition = self.condition(cond, &scope)?;
+                    work.push((Synthesis::IfBranches(exp), scope.clone()));
+                    work.push((
+                        Synthesis::Enter(else_branch),
+                        scope.branch(condition.as_ref(), true),
+                    ));
+                    work.push((
+                        Synthesis::Enter(then_branch),
+                        scope.branch(condition.as_ref(), false),
+                    ));
+                }
+                Synthesis::IfBranches(exp) => {
+                    let right = results.pop().expect("inferred else branch");
+                    let left = results.pop().expect("inferred then branch");
+                    let ExpKind::If { then_branch, .. } = &exp.kind else {
+                        unreachable!("if synthesis shape")
+                    };
+                    let declared = (*self
+                        .inferred
+                        .get(&(then_branch.as_ref() as *const Exp))
+                        .expect("inferred then branch")
+                        .declared)
+                        .clone();
+                    let declared = if matches!(left.name(), Some("bool" | "atom_bool")) {
+                        self.builtin("bool")
+                    } else if matches!(left.name(), Some("int" | "atom"))
+                        && matches!(right.name(), Some("int" | "atom"))
+                        && self.compatible(&declared, &right, exp.span).is_err()
+                    {
+                        // Forget unequal singleton identities rather than
+                        // identifying unrelated runtime integers. Numeric
+                        // union refinements require a separate join rule.
+                        self.builtin("int")
+                    } else {
+                        declared
+                    };
+                    self.compatible(&declared, &right, exp.span)?;
+                    results.push(self.value_type(exp, declared));
+                }
+                Synthesis::Forward(exp) => {
+                    results.pop().expect("inferred block result");
+                    let ExpKind::Block(items) = &exp.kind else {
+                        unreachable!("block synthesis shape")
+                    };
+                    let last = items.last().expect("nonempty block");
+                    let declared = (*self
+                        .inferred
+                        .get(&(last as *const Exp))
+                        .expect("inferred block result")
+                        .declared)
+                        .clone();
                     results.push(self.value_type(exp, declared));
                 }
                 Synthesis::Call(exp, candidates, count) => {
@@ -3860,7 +3959,7 @@ impl Checker<'_> {
                     let ExpKind::Field { record, field } = &exp.kind else {
                         unreachable!("field synthesis shape")
                     };
-                    let declared = self.field_type(record, field, scope, exp.span)?;
+                    let declared = self.field_type(record, field, &scope, exp.span)?;
                     let declared = self.resolve(&declared)?;
                     results.push(self.value_type(exp, declared));
                 }
@@ -4219,7 +4318,7 @@ impl Checker<'_> {
                         let field_name = self.name(&fexp.field)?;
                         let field_typ =
                             self.struct_field_type(&record_name, field_name, &base, fexp.span)?;
-                        let inferred = self.infer(&fexp.value, scope)?;
+                        let inferred = self.infer(&fexp.value, &scope)?;
                         self.compatible(&field_typ, &inferred, fexp.span)?;
                     }
                     results.push(self.value_type(exp, base));
@@ -4507,7 +4606,16 @@ impl Checker<'_> {
         {
             self.proof_scope = scope.clone();
             self.expressions += 1;
-            let expected = self.resolve(&expected)?;
+            let mut expected = self.resolve(&expected)?;
+            // Synthesis opens one witness for the result of the whole
+            // control expression. Its children check against the declared
+            // result type, not against that fresh result's singleton identity.
+            if matches!(exp.kind, ExpKind::If { .. } | ExpKind::Block(_)) {
+                if let Some(inferred) = self.inferred.get(&(exp as *const Exp)) {
+                    self.compatible(&expected, &inferred.value, exp.span)?;
+                    expected = self.resolve(&inferred.declared)?;
+                }
+            }
             match &exp.kind {
                 ExpKind::Lit(lit) => {
                     let actual = self.literal(lit)?;
