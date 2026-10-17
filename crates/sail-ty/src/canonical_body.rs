@@ -365,6 +365,11 @@ struct Checker<'a> {
     /// one. They are not rigid function quantifiers: proofs substitute the
     /// witness of the bound value.
     tyvars: Vec<(Symbol, Scalar)>,
+    /// Set while a condition is used only positively (assertions).
+    weak_facts: std::cell::Cell<bool>,
+    /// Name of the call being resolved, for diagnostics only (expression
+    /// spans are definition-wide).
+    call_hint: std::cell::RefCell<String>,
     /// Direct-synthesis nesting depth (see `SYNTH_DIRECT_LIMIT`).
     synth_depth: u32,
 }
@@ -441,6 +446,8 @@ pub(crate) fn check(
         calls: HashMap::new(),
         proof_scope: Arc::default(),
         tyvars: Vec::new(),
+        weak_facts: std::cell::Cell::new(false),
+        call_hint: std::cell::RefCell::new(String::new()),
         synth_depth: 0,
     };
     match &def.kind {
@@ -805,6 +812,73 @@ impl Checker<'_> {
         }
         Ok(())
     }
+    /// `{'j, 'j == a | 'j == b. atom('j)}` for two numeric singleton views.
+    fn join_atoms(&self, left: &Type, right: &Type) -> Option<Type> {
+        let numeric = |typ: &Type| {
+            typ.name() == Some("atom")
+                && matches!(
+                    &typ.node().kind,
+                    TypKind::App { args, .. }
+                        if args.len() == 1 && matches!(args[0].kind, TypArgKind::NExp(_))
+                )
+        };
+        if !numeric(left) || !numeric(right) {
+            return None;
+        }
+        let mut it = SimpleInterner::new();
+        let (a, b, joined) = (it.intern("__a"), it.intern("__b"), it.intern("__join"));
+        let atom = Name::dummy(it.intern("atom"));
+        let var = |symbol| Node::dummy(TypArgKind::NExp(Node::dummy(NExpKind::Var(symbol))));
+        let equal = |other| {
+            Node::dummy(ConstraintKind::Equal(
+                Box::new(var(joined)),
+                Box::new(var(other)),
+            ))
+        };
+        let typ = Node::dummy(TypKind::Exist {
+            binders: vec![KOpt {
+                kind: Kind::Int,
+                kid: joined,
+            }],
+            constraint: Box::new(Node::dummy(ConstraintKind::Or(
+                Box::new(equal(a)),
+                Box::new(equal(b)),
+            ))),
+            typ: Box::new(Node::dummy(TypKind::App {
+                name: atom,
+                args: vec![var(joined)],
+            })),
+        });
+        let mut joined_type = Type::root(Arc::new(Scheme {
+            typschm: TypSchm {
+                quant: Vec::new(),
+                typ,
+            },
+            interner: Arc::new(it),
+        }));
+        joined_type.substitutions = Arc::new(Substitutions {
+            types: Vec::new(),
+            scalars: vec![
+                (
+                    a,
+                    Scalar {
+                        owner: left.clone(),
+                        index: 0,
+                    }
+                    .resolved(),
+                ),
+                (
+                    b,
+                    Scalar {
+                        owner: right.clone(),
+                        index: 0,
+                    }
+                    .resolved(),
+                ),
+            ],
+        });
+        Some(joined_type)
+    }
     /// `int`/`bool` when `typ` is a fresh witness made by `open_value`.
     fn opened_value_base(&self, typ: &Type) -> Option<&'static str> {
         if !typ.path.is_empty() || typ.root.typschm.quant.len() != 1 {
@@ -883,6 +957,17 @@ impl Checker<'_> {
         }
         assumptions
     }
+    /// Types owning the facts of the current proof scope; their opened
+    /// existential bounds (markers) are evidence for every later proof.
+    fn fact_owners(&self) -> Vec<&Type> {
+        let mut owners = Vec::new();
+        let mut scope = Some(&*self.proof_scope);
+        while let Some(current) = scope {
+            owners.extend(current.facts.iter().map(|(fact, _)| &fact.owner));
+            scope = current.parent.as_deref();
+        }
+        owners
+    }
     fn scalar_equal(&self, left: &Scalar, right: &Scalar, span: Span) -> TypeResult<()> {
         let left = left.resolved();
         let right = right.resolved();
@@ -909,6 +994,7 @@ impl Checker<'_> {
         let scope = self.context.as_ref().map(|s| Type::root(s.clone()));
         let mut assumptions = self.proof_assumptions(&scope);
         assumptions.extend(self.marker_assumptions(&[&left.owner, &right.owner]));
+        assumptions.extend(self.marker_assumptions(&self.fact_owners()));
         let query = CanonicalQuery::equality(&assumptions, left.view(), right.view())
             .map_err(|e| unsupported(span, e))?;
         if !self.program.prove(query).is_valid() {
@@ -964,7 +1050,8 @@ impl Checker<'_> {
             self.program
                 .check_annotation(typ, &self.it, self.position, Some(&extended))?;
         }
-        let mut typ = Type::owned(typ.clone(), self.it.clone());
+        let (expanded, interner) = self.program.expanded_typ(typ, &self.it, self.position);
+        let mut typ = Type::owned(expanded, interner);
         if let Some(scope) = &self.context {
             typ.scope = scope.clone();
         }
@@ -1002,6 +1089,11 @@ impl Checker<'_> {
             .cloned()
             .map(Type::root)
             .ok_or_else(|| TypeError::unbound_var(name.span, name_text.to_owned()))
+    }
+    fn set_call_hint(&self, name: &Name) {
+        if let Ok(text) = self.name(name) {
+            *self.call_hint.borrow_mut() = text.to_owned();
+        }
     }
     fn call_candidates(
         &self,
@@ -1237,6 +1329,9 @@ impl Checker<'_> {
                 for (actual_index, typ) in actual.iter().enumerate() {
                     // Actual values may be opened, but a formal existential
                     // is an obligation whose predicate must remain intact.
+                    if matches!(typ.node().kind, TypKind::Unknown) {
+                        continue;
+                    }
                     let formal = callee.child(Step::Argument(explicit[actual_index]));
                     let found = self.open_existential(typ);
                     self.compatible(&formal, &found, span)?;
@@ -1261,7 +1356,8 @@ impl Checker<'_> {
         Err(TypeError {
             span,
             kind: TypeErrorKind::QuantError(format!(
-                "no matching overload{}",
+                "no matching overload for `{}`{}",
+                self.call_hint.borrow(),
                 last.map(|e| format!(": {e}")).unwrap_or_default()
             )),
         })
@@ -1361,6 +1457,18 @@ impl Checker<'_> {
     /// OCaml `bind_assignment` in `check_block`: an assignment whose target
     /// names no local or register declares a mutable variable for the rest
     /// of the block. Returns the declared type and the extended scope.
+    /// OCaml `exp_unconditionally_returns` / if-throw: the branch never
+    /// continues, so the rest of the block assumes the negated condition.
+    fn branch_escapes(exp: &Exp) -> bool {
+        match &exp.kind {
+            ExpKind::Return(_) | ExpKind::Throw(_) => true,
+            ExpKind::Block(items) => items.last().is_some_and(|last| {
+                matches!(last.kind, ExpKind::Return(_))
+                    || (items.len() == 1 && matches!(last.kind, ExpKind::Throw(_)))
+            }),
+            _ => false,
+        }
+    }
     fn declaring_assignment(
         &mut self,
         lexp: &LExp,
@@ -1396,6 +1504,62 @@ impl Checker<'_> {
         };
         let child = self.mutable_scope(lexp, bound.clone(), scope)?;
         Ok(Some((bound, Arc::new(child))))
+    }
+    /// Getter/updater of a bitfield accessor (`_get_T_f`, `_update_T_f`) for a
+    /// value of record-like type `base`, if one is declared.
+    fn bitfield_accessor(&self, prefix: &str, base: &Type, field: &str) -> TypeResult<Option<Type>> {
+        let Some(typ_name) = base.name() else {
+            return Ok(None);
+        };
+        if !matches!(base.node().kind, TypKind::Id(_)) {
+            return Ok(None);
+        }
+        let id = format!("{prefix}_{typ_name}_{field}");
+        match self.program.value(&id, self.position) {
+            Some(scheme) => Ok(Some(self.resolve(&Type::root(scheme.clone()))?)),
+            None => Ok(None),
+        }
+    }
+    /// OCaml `infer_exp` fallback for `v[FIELD]` / `[v with FIELD = e]` on a
+    /// bitfield: a call of the generated accessor. Returns the selected callee
+    /// and the indices of the source arguments it consumes.
+    fn bitfield_call(
+        &mut self,
+        exp: &Exp,
+        scope: &Scope,
+        expected: Option<&Type>,
+    ) -> TypeResult<Option<(Type, Vec<usize>)>> {
+        let ExpKind::App { func, args } = &exp.kind else {
+            return Ok(None);
+        };
+        let (prefix, arity) = match self.name(func)? {
+            "vector_access#" => ("_get", 2),
+            "vector_update#" => ("_update", 3),
+            _ => return Ok(None),
+        };
+        if args.len() != arity {
+            return Ok(None);
+        }
+        let ExpKind::Id(field) = &args[1].kind else {
+            return Ok(None);
+        };
+        let field_text = self.name(field)?.to_owned();
+        let Ok(base) = self.infer(&args[0], scope) else {
+            return Ok(None);
+        };
+        let base = self.resolve(&base)?;
+        let Some(accessor) = self.bitfield_accessor(prefix, &base, &field_text)? else {
+            return Ok(None);
+        };
+        let mut actual = vec![base];
+        let mut kept = vec![0];
+        if arity == 3 {
+            actual.push(self.infer(&args[2], scope)?);
+            kept.push(2);
+        }
+        let callee = self.select_call(vec![accessor], &actual, expected, exp.span)?;
+        self.calls.insert(exp as *const Exp, callee.clone());
+        Ok(Some((callee, kept)))
     }
     fn mutable_scope(&self, lexp: &LExp, typ: Type, parent: &Arc<Scope>) -> TypeResult<Scope> {
         let mut child = Scope {
@@ -1583,6 +1747,7 @@ impl Checker<'_> {
             .collect();
         let mut assumptions = self.proof_assumptions(&scope);
         assumptions.extend(self.marker_assumptions(&local_types));
+        assumptions.extend(self.marker_assumptions(&self.fact_owners()));
         let query = CanonicalQuery::implication(&assumptions, view, None)
             .map_err(|e| unsupported(span, format!("{what} [{obligation}]: {e}")))?;
         if !self.program.prove(query).is_valid() {
@@ -1948,11 +2113,21 @@ impl Checker<'_> {
                 ));
             }
         };
-        let sum = crate::nexp::Nexp::Add(Box::new(len_left.clone()), Box::new(len_right.clone()));
-        let sum = match sum.as_const() {
-            Some(constant) => crate::nexp::Nexp::Const(constant),
-            None => sum,
+        // Lengths link as whole scalars (`__l`, `__r`): grounding a compound
+        // length to its variables and linking each variable to the entire
+        // side would substitute the compound expression twice.
+        let constant_sum = match (len_left.as_const(), len_right.as_const()) {
+            (Some(left), Some(right)) => Some(left + right),
+            _ => None,
         };
+        let sum = match constant_sum {
+            Some(constant) => crate::nexp::Nexp::Const(constant),
+            None => crate::nexp::Nexp::Add(
+                Box::new(crate::nexp::Nexp::Var("__l".to_owned())),
+                Box::new(crate::nexp::Nexp::Var("__r".to_owned())),
+            ),
+        };
+        let left_len_marker = len_left.as_const().is_none();
         let mut git = SimpleInterner::new();
         fn mini_typ_vars(mini: &crate::nexp::MiniTyp, out: &mut Vec<String>) {
             use crate::nexp::MiniTyp as Mini;
@@ -1983,10 +2158,9 @@ impl Checker<'_> {
                 }
             }
         }
-        let mut left_texts = Vec::new();
-        len_left.free_vars(&mut left_texts);
-        let mut right_texts = Vec::new();
-        len_right.free_vars(&mut right_texts);
+        let _ = left_len_marker;
+        let left_texts = vec!["__l".to_owned()];
+        let right_texts = vec!["__r".to_owned()];
         // Element-Variablen (Vektor-Flavor) verlinken auf die
         // Element-Sicht (Argument 1) der Seite, die sie traegt.
         let mut left_elem_texts = Vec::new();
@@ -2023,7 +2197,8 @@ impl Checker<'_> {
                 Scalar {
                     owner: owner.clone(),
                     index,
-                },
+                }
+                .resolved(),
             ));
         }
         let len_node = crate::conv::nexp_to_ast(&sum, &mut git);
@@ -2330,6 +2505,14 @@ impl Checker<'_> {
                                 Some((combined, links))
                             }
                         }
+                        // A true conjunction implies each known conjunct: an
+                        // unknown side may be dropped, but only where the fact is
+                        // used positively (assert), never when negated.
+                        (Some(Some(known)), Some(None) | None) | (Some(None) | None, Some(Some(known)))
+                            if and && self.weak_facts.get() =>
+                        {
+                            Some(known)
+                        }
                         _ => None,
                     };
                     done.insert(self_ptr, outcome);
@@ -2439,7 +2622,12 @@ impl Checker<'_> {
             ExpKind::Constraint(node) => {
                 // Source constraint over rigid scope variables (like
                 // `sizeof`); anything else stays `Unsupported`-free `None`.
-                let Some(obligation) = crate::conv::constraint_from_ast(node, &*self.it) else {
+                let mut expanded_it = (*self.it).clone();
+                let expanded = self
+                    .program
+                    .expanded_constraint(node, &mut expanded_it, self.position);
+                let Some(obligation) = crate::conv::constraint_from_ast(&expanded, &expanded_it)
+                else {
                     return Ok(None);
                 };
                 let Some(context) = self.context.clone() else {
@@ -2448,15 +2636,21 @@ impl Checker<'_> {
                 let view = Type::root(context);
                 let mut texts = Vec::new();
                 obligation.free_vars(&mut texts);
-                for text in &texts {
-                    if (&view as &dyn Bindings).rigid(text).is_none() {
+                let mut links = Vec::with_capacity(texts.len());
+                for text in texts {
+                    // Local type variables link to their value's witness.
+                    let local = self.tyvars.iter().rev().find_map(|(symbol, scalar)| {
+                        (self.it.resolve(*symbol) == Some(text.as_str())).then(|| scalar.clone())
+                    });
+                    if let Some(scalar) = local {
+                        links.push((text, Some(scalar)));
+                    } else if (&view as &dyn Bindings).rigid(&text).is_some() {
+                        links.push((text, None));
+                    } else {
                         return Ok(None);
                     }
                 }
-                Ok(Some((
-                    obligation,
-                    texts.into_iter().map(|text| (text, None)).collect(),
-                )))
+                Ok(Some((obligation, links)))
             }
             ExpKind::Lit(lit) => match &lit.kind {
                 LitKind::True => Ok(Some((MiniCons::True, Vec::new()))),
@@ -2522,7 +2716,10 @@ impl Checker<'_> {
         msg: &Exp,
         scope: &Arc<Scope>,
     ) -> TypeResult<Arc<Scope>> {
-        let fact = self.condition(cond, scope)?;
+        self.weak_facts.set(true);
+        let fact = self.condition(cond, scope);
+        self.weak_facts.set(false);
+        let fact = fact?;
         let message = self.infer(msg, scope)?;
         let string = self.builtin("string");
         self.compatible(&string, &message, msg.span)?;
@@ -3067,6 +3264,13 @@ impl Checker<'_> {
         if let Some((base, index)) = as_vector(lexp) {
             let base_typ = self.assignment_type(base, scope)?;
             let root = self.resolve(&base_typ)?;
+            // `r[FIELD] = e` on a bitfield assigns the field's slice.
+            if let ExpKind::Id(field) = &index.kind {
+                let field_text = self.name(field)?.to_owned();
+                if let Some(getter) = self.bitfield_accessor("_get", &root, &field_text)? {
+                    return self.resolve(&getter.child(Step::Result));
+                }
+            }
             let mut union = crate::vector_lexp::Union::over(vec![
                 &*root.root.interner as &dyn sail_ast::Interner,
                 &*root.scope.interner as &dyn sail_ast::Interner,
@@ -3095,7 +3299,23 @@ impl Checker<'_> {
             // Syntactic indices map directly; any other expression is bound
             // through the numeric witness of its inferred type.
             let witness_scope;
-            let (index_nexp, bound_scope) = match bridge::index_nexp_from_exp(index, &mut union2) {
+            let context_view = self.context.as_ref().map(|s| Type::root(s.clone()));
+            let mapped = bridge::index_nexp_from_exp(index, &mut union2).and_then(|nexp| {
+                let mut names = Vec::new();
+                nexp.free_vars(&mut names);
+                let linkable = names.iter().all(|name| {
+                    scope.get(name).is_some()
+                        || context_view
+                            .as_ref()
+                            .is_some_and(|view| (view as &dyn Bindings).rigid(name).is_some())
+                });
+                if linkable {
+                    Ok(nexp)
+                } else {
+                    Err(unsupported(index.span, "vector index names a global value"))
+                }
+            });
+            let (index_nexp, bound_scope) = match mapped {
                 Ok(nexp) => (nexp, scope),
                 Err(error) if matches!(error.kind, TypeErrorKind::Unsupported(_)) => {
                     witness_scope = Scope {
@@ -3278,6 +3498,69 @@ impl Checker<'_> {
                             };
                             results.push(declared);
                         }
+                        LExpKind::Field { lexp: base, field } => {
+                            // OCaml `infer_lexp` LE_field: the base must be a
+                            // writable record; the target has the field type.
+                            let base_typ = self.assignment_type(base, scope)?;
+                            let base_typ = self.resolve(&base_typ)?;
+                            let record_name = base_typ
+                                .name()
+                                .map(str::to_owned)
+                                .filter(|name| self.program.record(name, self.position).is_some());
+                            let Some(record_name) = record_name else {
+                                return Err(TypeError {
+                                    span: lexp.span,
+                                    kind: TypeErrorKind::QuantError(format!(
+                                        "The type {} is not a record",
+                                        base_typ.label()
+                                    )),
+                                });
+                            };
+                            let field_name = self.name(field)?.to_owned();
+                            let typ = self.struct_field_type(
+                                &record_name,
+                                &field_name,
+                                &base_typ,
+                                field.span,
+                            )?;
+                            results.push(self.resolve(&typ)?);
+                        }
+                        LExpKind::VectorConcat(parts) => {
+                            // OCaml `infer_lexp` LE_vector_concat: every part is
+                            // a bitvector target; the target is as wide as all
+                            // parts together (constant widths only here).
+                            let mut total = 0i128;
+                            for part in parts {
+                                let typ = self.assignment_type(part, scope)?;
+                                let typ = self.resolve(&typ)?;
+                                let width = self
+                                    .vector_len_nexp(&typ, part.span)
+                                    .ok()
+                                    .as_ref()
+                                    .and_then(crate::nexp::Nexp::as_const)
+                                    .ok_or_else(|| {
+                                        unsupported(part.span, "non-constant vector concat target width")
+                                    })?;
+                                total += width;
+                            }
+                            let joined = self.refined(
+                                "bitvector",
+                                TypArgKind::NExp(Node::dummy(NExpKind::Constant(total.to_string()))),
+                            );
+                            results.push(joined);
+                        }
+                        LExpKind::Deref(inner) => {
+                            let reference = self.infer(inner, scope)?;
+                            let reference = self.resolve(&reference)?;
+                            if reference.name() != Some("register") {
+                                return Err(TypeError::mismatch(
+                                    lexp.span,
+                                    "register".to_owned(),
+                                    reference.label(),
+                                ));
+                            }
+                            results.push(self.resolve(&reference.child(Step::TypeArgument(0)))?);
+                        }
                         LExpKind::Tuple(items) => {
                             work.push(Target::Tuple(items.len()));
                             work.extend(items.iter().rev().map(Target::Enter));
@@ -3317,6 +3600,18 @@ impl Checker<'_> {
         }
         let integer = self.builtin("int");
         let index = self.open_value(&integer);
+        // OCaml `E_for` binds the loop variable's witness as `'loop_<var>`.
+        let loop_name = format!("'loop_{}", self.name(var)?);
+        if let Some(symbol) = self.it.lookup(&loop_name) {
+            self.tyvars.retain(|(bound, _)| *bound != symbol);
+            self.tyvars.push((
+                symbol,
+                Scalar {
+                    owner: index.clone(),
+                    index: 0,
+                },
+            ));
+        }
         // Share one condition shape per checker: the bound/index symbols and
         // the constraint AST are identical for every loop, only the owners
         // bound in substitutions differ per level.
@@ -4015,6 +4310,12 @@ impl Checker<'_> {
                                                 current = extended;
                                             }
                                         }
+                                        ExpKind::If { cond, then_branch, .. }
+                                            if Self::branch_escapes(then_branch) =>
+                                        {
+                                            let fact = self.condition(cond, &current)?;
+                                            current = current.branch(fact.as_ref(), true);
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -4147,6 +4448,11 @@ impl Checker<'_> {
                             continue;
                         }
                         ExpKind::App { func, args } => {
+                            if let Some((callee, _)) = self.bitfield_call(exp, &scope, None)? {
+                                let result = self.resolve(&callee.child(Step::Result))?;
+                                results.push(self.value_type(exp, result));
+                                continue;
+                            }
                             let candidates = self.call_candidates(func, &scope, args.len())?;
                             // Shallow calls share sibling-guided inference
                             // for both single callees and overload sets.
@@ -4168,6 +4474,7 @@ impl Checker<'_> {
                             let actual = self.infer_app_actuals(args, &scope, exp.span);
                             self.synth_depth -= 1;
                             let actual = actual?;
+                            self.set_call_hint(func);
                             let callee = self.select_call(candidates, &actual, None, exp.span)?;
                             self.calls.insert(exp as *const Exp, callee.clone());
                             let result = self.resolve(&callee.child(Step::Result))?;
@@ -4225,10 +4532,13 @@ impl Checker<'_> {
                         && matches!(right.name(), Some("int" | "atom"))
                         && self.compatible(&declared, &right, exp.span).is_err()
                     {
-                        // Forget unequal singleton identities rather than
-                        // identifying unrelated runtime integers. Numeric
-                        // union refinements require a separate join rule.
-                        self.builtin("int")
+                        // Distinct singleton witnesses join into the OCaml
+                        // `union_typ` existential `{'j, 'j == a | 'j == b}`;
+                        // plain `int` operands just forget the refinement.
+                        match self.join_atoms(&left, &right) {
+                            Some(joined) => joined,
+                            None => self.builtin("int"),
+                        }
                     } else {
                         declared
                     };
@@ -4262,6 +4572,9 @@ impl Checker<'_> {
                 }
                 Synthesis::Call(exp, candidates, count) => {
                     let actual = results.split_off(results.len() - count);
+                    if let ExpKind::App { func, .. } = &exp.kind {
+                        self.set_call_hint(func);
+                    }
                     let callee = self.select_call(candidates, &actual, None, exp.span)?;
                     let result = self.resolve(&callee.child(Step::Result))?;
                     // value_type inserts the shared declared/value pair; no
@@ -4731,6 +5044,10 @@ impl Checker<'_> {
             pairs.push((callee.child(Step::Result), expected.clone(), true));
         }
         while let Some((formal, actual, result_context)) = pairs.pop() {
+            // Deferred argument: checked against the instantiated formal later.
+            if matches!(actual.node().kind, TypKind::Unknown) {
+                continue;
+            }
             let formal = self.resolve(&formal)?;
             let actual = self.resolve(&actual)?;
             if result_context
@@ -4899,6 +5216,7 @@ impl Checker<'_> {
             actual_refs.extend(expected);
         }
         assumptions.extend(self.marker_assumptions(&actual_refs));
+        assumptions.extend(self.marker_assumptions(&self.fact_owners()));
         for q in &callee.root.typschm.quant {
             if let QuantItem::Constraint(c) = q {
                 let query = CanonicalQuery::implication(
@@ -4997,6 +5315,14 @@ impl Checker<'_> {
                             let unit = self.builtin("unit");
                             self.compatible(&expected, &unit, item.span)?;
                             current = self.check_assert(cond, msg, &current)?;
+                        } else if let ExpKind::If { cond, then_branch, .. } = &item.kind {
+                            if index + 1 < items.len() && Self::branch_escapes(then_branch) {
+                                let fact = self.condition(cond, &current)?;
+                                pending.push((item, expected, current.clone()));
+                                current = current.branch(fact.as_ref(), true);
+                            } else {
+                                pending.push((item, expected, current.clone()));
+                            }
                         } else if let ExpKind::Assign { lexp, value } = &item.kind {
                             if let Some((bound, extended)) =
                                 self.declaring_assignment(lexp, value, &current)?
@@ -5038,12 +5364,46 @@ impl Checker<'_> {
                     });
                 }
                 ExpKind::App { func, args } => {
+                    if let Some((callee, kept)) = self.bitfield_call(exp, &scope, Some(&expected))? {
+                        let result = self.resolve(&callee.child(Step::Result))?;
+                        let result = self.value_type(exp, result);
+                        self.compatible(&expected, &result, exp.span)?;
+                        for (formal, source) in kept.iter().enumerate().rev() {
+                            tasks.push(Task {
+                                exp: &args[*source],
+                                expected: callee.child(Step::Argument(formal)),
+                                scope: scope.clone(),
+                                returning: returning.clone(),
+                            });
+                        }
+                        continue;
+                    }
                     let mut candidates = self.call_candidates(func, &scope, args.len())?;
                     let callee = if let Some(callee) = self.calls.get(&(exp as *const Exp)) {
                         callee.clone()
                     } else if candidates.len() != 1 || !candidates[0].root.typschm.quant.is_empty()
                     {
-                        let actual = self.infer_app_actuals(args, &scope, exp.span)?;
+                        let single = candidates.len() == 1;
+                        let actual = match self.infer_app_actuals(args, &scope, exp.span) {
+                            Ok(actual) => actual,
+                            // A single callee can still be instantiated from
+                            // the arguments that synthesize and the expected
+                            // result; the others are checked afterwards
+                            // against their instantiated formals.
+                            Err(error) if single && matches!(error.kind, TypeErrorKind::Unsupported(_)) => {
+                                let deferred = Type::owned(
+                                    Node::dummy(TypKind::Unknown),
+                                    self.it.clone(),
+                                );
+                                args.iter()
+                                    .map(|arg| {
+                                        self.infer(arg, &scope).unwrap_or_else(|_| deferred.clone())
+                                    })
+                                    .collect()
+                            }
+                            Err(error) => return Err(error),
+                        };
+                        self.set_call_hint(func);
                         self.select_call(candidates, &actual, Some(&expected), exp.span)?
                     } else {
                         candidates.pop().unwrap()

@@ -78,6 +78,12 @@ impl SimpleInterner {
             vec: Vec::new(),
         }
     }
+
+    /// Symbol of `text` if it was interned already (no mutation).
+    #[must_use]
+    pub fn lookup(&self, text: &str) -> Option<Symbol> {
+        self.map.get(text).copied()
+    }
 }
 
 impl Interner for SimpleInterner {

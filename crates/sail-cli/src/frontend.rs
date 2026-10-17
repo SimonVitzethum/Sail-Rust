@@ -371,6 +371,7 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
     let no_core = opts.no_core;
     let inputs = opts.inputs.clone();
     let mut declared_vals: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut default_inc = false;
     let mut emit = |path: &str, source: &str, def: sail_parse::SpannedDef| -> Result<(), String> {
         let id = FileId(u32::try_from(files.len()).map_err(|_| "too many input files")?);
         let id = *files.entry(path.to_owned()).or_insert(id);
@@ -423,6 +424,22 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
                         serde_json::to_writer(&mut manifest, &synthetic).map_err(|e| e.to_string())?;
                         manifest.write_all(b"\n").map_err(|e| e.to_string())?;
                     }
+                }
+            }
+            SurfaceDef::Default { kind, value } if kind == "Order" => {
+                default_inc = value == "inc";
+            }
+            SurfaceDef::Type { name, keyword, head_src, body_src } if keyword == "bitfield" => {
+                for text in bitfield_accessors(name, head_src, body_src, default_inc)? {
+                    let synthetic = Record {
+                        path: record.path.clone(),
+                        span: record.span,
+                        pragma: None,
+                        declaration: false,
+                        source: text,
+                    };
+                    serde_json::to_writer(&mut manifest, &synthetic).map_err(|e| e.to_string())?;
+                    manifest.write_all(b"\n").map_err(|e| e.to_string())?;
                 }
             }
             _ => {}
@@ -563,9 +580,8 @@ pub fn run(opts: &mut Options) -> Result<FrontendProgram, CliError> {
     Ok(FrontendProgram { summary, warm, manifest: scratch.0.join("ast.jsonl"), source_paths, _scratch: scratch })
 }
 
-/// Member names of an enum body (`{A, B}`, `A | B`, `{A -> 1, B -> 2}`),
-/// ignoring comments and attributes.
-fn enum_members(body: &str) -> Vec<String> {
+/// Remove comments and `$[..]` attributes from raw definition text.
+fn strip_noise(body: &str) -> String {
     let mut text = String::with_capacity(body.len());
     let mut chars = body.chars().peekable();
     while let Some(c) = chars.next() {
@@ -608,6 +624,13 @@ fn enum_members(body: &str) -> Vec<String> {
             _ => text.push(c),
         }
     }
+    text
+}
+
+/// Member names of an enum body (`{A, B}`, `A | B`, `{A -> 1, B -> 2}`),
+/// ignoring comments and attributes.
+fn enum_members(body: &str) -> Vec<String> {
+    let text = strip_noise(body);
     let text = text.trim();
     let text = text.strip_prefix('{').and_then(|t| t.rsplit_once('}').map(|(inner, _)| inner)).unwrap_or(text);
     text.split([',', '|'])
@@ -620,6 +643,141 @@ fn enum_members(body: &str) -> Vec<String> {
             (!ident.is_empty()).then_some(ident)
         })
         .collect()
+}
+
+/// A bitfield index range part: `hi .. lo` or a single index.
+fn bit_range(text: &str) -> Option<(String, String)> {
+    match text.split_once("..") {
+        Some((hi, lo)) => Some((hi.trim().to_owned(), lo.trim().to_owned())),
+        None => {
+            let index = text.trim();
+            (!index.is_empty()).then(|| (index.to_owned(), index.to_owned()))
+        }
+    }
+}
+
+fn slice_width(hi: &str, lo: &str) -> String {
+    match (hi.parse::<i64>(), lo.parse::<i64>()) {
+        (Ok(hi), Ok(lo)) => (hi - lo + 1).to_string(),
+        _ => format!("(({hi}) - ({lo}) + 1)"),
+    }
+}
+
+/// Source text of the definitions OCaml's `Bitfield.macro` generates for a
+/// `bitfield T : bits(N) = { f : hi..lo, .. }`: constructor, and per field a
+/// getter, updater, register setter and the `_mod_`/`update_` overloads.
+fn bitfield_accessors(name: &str, head: &str, body: &str, inc: bool) -> Result<Vec<String>, String> {
+    let typ = head.split_once(':').map(|(_, typ)| typ.trim()).ok_or("bitfield without type")?;
+    let size = typ
+        .strip_prefix("bits(")
+        .or_else(|| typ.strip_prefix("bitvector("))
+        .and_then(|rest| rest.strip_suffix(')'))
+        .ok_or_else(|| format!("bitfield type {typ} is not a constant-width bitvector"))?
+        .trim()
+        .to_owned();
+    let text = strip_noise(body);
+    let inner = text
+        .trim()
+        .strip_prefix('{')
+        .and_then(|t| t.rsplit_once('}').map(|(inner, _)| inner))
+        .ok_or("bitfield body without braces")?;
+    let mut fields: Vec<(String, Vec<(String, String)>)> = vec![(
+        "bits".to_owned(),
+        vec![(format!("(({size}) - 1)"), "0".to_owned())],
+    )];
+    if let Ok(size) = size.parse::<i64>() {
+        fields[0].1[0].0 = (size - 1).to_string();
+    }
+    let mut parts = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    for c in inner.chars() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            _ => {}
+        }
+        if c == ',' && depth == 0 {
+            parts.push(std::mem::take(&mut current));
+        } else {
+            current.push(c);
+        }
+    }
+    parts.push(current);
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (field, ranges) = part.split_once(':').ok_or_else(|| format!("bitfield field {part}"))?;
+        let ranges = ranges.trim();
+        let ungrouped = ranges.replace(['(', ')'], "");
+        let ranges = if ungrouped
+            .split(['@', '.'])
+            .filter(|piece| !piece.trim().is_empty())
+            .all(|piece| piece.trim().parse::<i64>().is_ok())
+        {
+            ungrouped.as_str()
+        } else {
+            ranges
+        };
+        let ranges: Vec<(String, String)> = ranges
+            .split('@')
+            .map(bit_range)
+            .collect::<Option<_>>()
+            .ok_or_else(|| format!("bitfield range {part}"))?;
+        fields.push((field.trim().to_owned(), ranges));
+    }
+    let mut out = vec![
+        format!("val Mk_{name} : bits({size}) -> {name}"),
+        format!("function Mk_{name} v = struct {{ bits = v }}"),
+    ];
+    for (field, ranges) in fields {
+        let widths: Vec<String> = ranges.iter().map(|(hi, lo)| slice_width(hi, lo)).collect();
+        let width = if widths.iter().all(|w| w.parse::<i64>().is_ok()) {
+            widths.iter().map(|w| w.parse::<i64>().unwrap()).sum::<i64>().to_string()
+        } else {
+            format!("({})", widths.join(" + "))
+        };
+        let get_id = format!("_get_{name}_{field}");
+        let update_id = format!("_update_{name}_{field}");
+        let set_id = format!("_set_{name}_{field}");
+        let get_body = ranges
+            .iter()
+            .map(|(hi, lo)| format!("v.bits[{hi} .. {lo}]"))
+            .collect::<Vec<_>>()
+            .join(" @ ");
+        let mut update = "v.bits".to_owned();
+        if ranges.len() == 1 {
+            let (hi, lo) = &ranges[0];
+            update = format!("[{update} with {hi} .. {lo} = x]");
+        } else {
+            let total: i64 = widths
+                .iter()
+                .map(|w| w.parse::<i64>())
+                .sum::<Result<i64, _>>()
+                .map_err(|_| format!("bitfield concat field {field} needs constant widths"))?;
+            let mut at = if inc { 0 } else { total - 1 };
+            for ((hi, lo), width) in ranges.iter().zip(&widths) {
+                let width: i64 = width.parse().unwrap();
+                let next = if inc { at + width } else { at - width };
+                let (first, last) = if inc { (at, next - 1) } else { (at, next + 1) };
+                update = format!("[{update} with {hi} .. {lo} = x[{first} .. {last}]]");
+                at = next;
+            }
+        }
+        out.push(format!("val {get_id} : {name} -> bits({width})"));
+        out.push(format!("function {get_id} v = {get_body}"));
+        out.push(format!("val {update_id} : ({name}, bits({width})) -> {name}"));
+        out.push(format!("function {update_id} (v, x) = {{ v with bits = {update} }}"));
+        out.push(format!("overload update_{field} = {{{update_id}}}"));
+        out.push(format!("val {set_id} : (register({name}), bits({width})) -> unit"));
+        out.push(format!(
+            "function {set_id} (r_ref, v) = {{ let r = __deref(r_ref); (*r_ref) = {update_id}(r, v) }}"
+        ));
+        out.push(format!("overload _mod_{field} = {{{get_id}, {set_id}}}"));
+    }
+    Ok(out)
 }
 
 /// Source text of the generated enum/number conversion definitions.

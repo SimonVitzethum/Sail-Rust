@@ -121,6 +121,32 @@ impl Emitter {
             // is an interpretation of this UF. UNSAT therefore remains sound.
             // No positivity or arithmetic axiom is invented by the emitter.
             script.push_str("(declare-fun sail_pow2 (Int) Int)\n");
+            // Sound facts about 2^x: it is positive, and it has its value on
+            // every numeral argument that occurs in the query.
+            script.push_str(
+                "(assert (forall ((x Int)) (! (=> (>= x 0) (> (sail_pow2 x) 0)) :pattern ((sail_pow2 x)))))\n",
+            );
+            let mut seen = std::collections::BTreeSet::new();
+            let mut rest = self.output.as_str();
+            while let Some(at) = rest.find("(sail_pow2 ") {
+                rest = &rest[at + "(sail_pow2 ".len()..];
+                let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                if !digits.is_empty() && rest[digits.len()..].starts_with(')') {
+                    if let Ok(exponent) = digits.parse::<usize>() {
+                        if exponent <= 4096 {
+                            seen.insert(exponent);
+                        }
+                    }
+                }
+            }
+            for exponent in seen {
+                writeln!(
+                    script,
+                    "(assert (= (sail_pow2 {exponent}) {}))",
+                    pow2_decimal(exponent)
+                )
+                .unwrap();
+            }
         }
         for (name, sort) in self.declarations {
             writeln!(script, "(declare-const {name} {sort})").unwrap();
@@ -494,4 +520,21 @@ mod tests {
         )
         .is_err());
     }
+}
+
+/// Decimal digits of `2^exponent`.
+fn pow2_decimal(exponent: usize) -> String {
+    let mut digits = vec![1u8];
+    for _ in 0..exponent {
+        let mut carry = 0;
+        for digit in digits.iter_mut() {
+            let doubled = *digit * 2 + carry;
+            *digit = doubled % 10;
+            carry = doubled / 10;
+        }
+        if carry > 0 {
+            digits.push(carry);
+        }
+    }
+    digits.iter().rev().map(|d| char::from(b'0' + d)).collect()
 }

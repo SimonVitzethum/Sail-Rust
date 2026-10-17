@@ -3,6 +3,7 @@
 //! source-position views without copying the whole environment per worker.
 //! Function bodies stay in the driver's out-of-core store.
 
+use crate::constraint_synonym::{self, ConstraintSynonym, NexpSynonym, Synonym};
 use crate::error::{TypeError, TypeErrorKind, TypeResult};
 use sail_ast::*;
 use sail_solver::{
@@ -274,6 +275,7 @@ pub struct Program {
     loop_measures: BTreeMap<String, Vec<Binding<Span>>>,
     instantiations: Vec<Binding<(String, Span)>>,
     constraints: Vec<Binding<(Arc<Constraint>, Arc<SimpleInterner>)>>,
+    constraint_synonyms: BTreeMap<String, Vec<Binding<Synonym>>>,
     solvers: SolverPool<SmtLibSolver>,
     default_order: Option<(Order, usize)>,
 }
@@ -298,6 +300,7 @@ impl Default for Program {
             loop_measures: BTreeMap::new(),
             instantiations: Vec::new(),
             constraints: Vec::new(),
+            constraint_synonyms: BTreeMap::new(),
             solvers: SolverPool::with_default_cache(SmtLibSolver::new),
             default_order: None,
         }
@@ -370,6 +373,15 @@ impl Program {
         Self::default()
     }
     pub(crate) fn prove(&self, query: CanonicalQuery) -> sail_solver::SolverVerdict {
+        let dump = std::env::var_os("SAIL_RS_DUMP_SMT").is_some();
+        let script = dump.then(|| format!("{query:?}"));
+        let verdict = self.prove_query(query);
+        if let Some(script) = script {
+            eprintln!("SMT {verdict:?}: {script}");
+        }
+        verdict
+    }
+    fn prove_query(&self, query: CanonicalQuery) -> sail_solver::SolverVerdict {
         let query = SolverQuery::new(sail_solver::Constraint::SmtLib(query)).with_timeout(3000);
         let cache = self.solvers.cache();
         cache.lookup(&query).unwrap_or_else(|| {
@@ -413,6 +425,12 @@ impl Program {
     ) -> TypeResult<()> {
         match &def.kind {
             DefKind::Type(typ) => {
+                let lookup = |name: &str| self.synonym(name, position);
+                let (typ, it) = match constraint_synonym::expand_type_def(typ, &it, &lookup) {
+                    Some((expanded, interner)) => (std::borrow::Cow::Owned(expanded), interner),
+                    None => (std::borrow::Cow::Borrowed(typ), it),
+                };
+                let typ: &TypeDef = &typ;
                 let (name, quant, result) = match &typ.kind {
                     TypeDefKind::Abbrev { name, quant, arg } => {
                         (name, quant.as_slice(), arg_kind(arg))
@@ -438,10 +456,49 @@ impl Program {
                     result,
                     proof: quant.iter().any(|item| matches!(item, QuantItem::Constraint(c) if !matches!(c.kind, ConstraintKind::True))).then(|| Arc::new(ConstructorProof {quant:quant.to_vec(),interner:it.clone()})),
                     synonym:match &typ.kind {
-                        TypeDefKind::Abbrev {arg:Node {kind:TypArgKind::Typ(typ),..},..}=>Some(Arc::new(Scheme {typschm:TypSchm {quant:quant.to_vec(),typ:typ.clone()},interner:it.clone()})),
+                        TypeDefKind::Abbrev {arg:Node {kind:TypArgKind::Typ(typ),..},..}=>{
+                            let (typschm, interner) = self.expanded_scheme(&TypSchm {quant:quant.to_vec(),typ:typ.clone()}, &it, position);
+                            Some(Arc::new(Scheme {typschm,interner}))
+                        }
                         _=>None,
                     },
                 };
+                if let TypeDefKind::Abbrev { arg, .. } = &typ.kind {
+                    let binders: Vec<KOpt> = quant
+                        .iter()
+                        .filter_map(|item| match item {
+                            QuantItem::Id(binder) => Some(*binder),
+                            QuantItem::Constraint(_) => None,
+                        })
+                        .collect();
+                    let mut interner = (*it).clone();
+                    let lookup = |n: &str| self.synonym(n, position);
+                    let synonym = match &arg.kind {
+                        TypArgKind::Bool(body) => Some(Synonym::Constraint(Arc::new(ConstraintSynonym {
+                            binders,
+                            body: constraint_synonym::expand_constraint(body, &mut interner, &lookup),
+                            interner: Arc::new(SimpleInterner::new()),
+                        }))),
+                        TypArgKind::NExp(body) => Some(Synonym::NExp(Arc::new(NexpSynonym {
+                            binders,
+                            body: constraint_synonym::expand_nexp(body, &mut interner, &lookup),
+                            interner: Arc::new(SimpleInterner::new()),
+                        }))),
+                        TypArgKind::Typ(_) => None,
+                    };
+                    if let Some(mut synonym) = synonym {
+                        let interner = Arc::new(interner);
+                        match &mut synonym {
+                            Synonym::Constraint(syn) => {
+                                if let Some(syn) = Arc::get_mut(syn) { syn.interner = interner; }
+                            }
+                            Synonym::NExp(syn) => {
+                                if let Some(syn) = Arc::get_mut(syn) { syn.interner = interner; }
+                            }
+                        }
+                        self.constraint_synonyms.entry(name.clone()).or_default().push(Binding { position, value: synonym });
+                    }
+                }
                 // OCaml's forbid_recursive_types checks record/union payloads
                 // before inserting their constructor into the environment.
                 let mut checker = WellFormed::new(self, &it, position);
@@ -582,6 +639,16 @@ impl Program {
                             fields: kept,
                         })
                     }
+                    // OCaml expands a bitfield to `struct T = { bits : typ }`.
+                    TypeDefKind::Bitfield { typ: bits_typ, .. } => Some(RecordDef {
+                        quant: Vec::new(),
+                        interner: it.clone(),
+                        fields: vec![RecordField {
+                            name: "bits".to_owned(),
+                            typ: bits_typ.clone(),
+                            span: typ.span,
+                        }],
+                    }),
                     _ => None,
                 };
                 let union_payload = match &typ.kind {
@@ -651,6 +718,21 @@ impl Program {
                                 )
                             })
                             .collect::<Vec<_>>()
+                    }
+                    (TypeDefKind::Bitfield { name: rec_name, typ: bits_typ, .. }, Some(_)) => {
+                        vec![(
+                            "bits".to_owned(),
+                            Arc::new(Scheme {
+                                typschm: TypSchm {
+                                    quant: Vec::new(),
+                                    typ: Node::dummy(TypKind::Fn {
+                                        args: vec![Node::dummy(TypKind::Id(rec_name.clone()))],
+                                        ret: Box::new(bits_typ.clone()),
+                                    }),
+                                },
+                                interner: it.clone(),
+                            }),
+                        )]
                     }
                     _ => Vec::new(),
                 };
@@ -775,15 +857,13 @@ impl Program {
                     });
                 }
                 let name = text(it.as_ref(), val.name.symbol, val.span)?.to_owned();
+                let (typschm, interner) = self.expanded_scheme(&val.typschm, &it, position);
                 self.values.entry(name).or_default().push(Binding {
                     position,
                     value: Value {
                         inline: false,
                         enumeration_member: false,
-                        scheme: Arc::new(Scheme {
-                            typschm: val.typschm.clone(),
-                            interner: it,
-                        }),
+                        scheme: Arc::new(Scheme { typschm, interner }),
                     },
                 });
                 Ok(())
@@ -843,14 +923,15 @@ impl Program {
                     position,
                 )?;
                 let name = text(it.as_ref(), reg.name.symbol, reg.span)?.to_owned();
+                let (typ, interner) = self.expanded_typ(&reg.typ, &it, position);
                 self.registers.entry(name).or_default().push(Binding {
                     position,
                     value: Arc::new(Scheme {
                         typschm: TypSchm {
                             quant: vec![],
-                            typ: reg.typ.clone(),
+                            typ,
                         },
-                        interner: it,
+                        interner,
                     }),
                 });
                 Ok(())
@@ -1455,6 +1536,50 @@ impl Program {
             .get(name)
             .and_then(|history| at(history, position))
             .map(|value| &value.scheme)
+    }
+    pub(crate) fn synonym(&self, name: &str, position: usize) -> Option<Synonym> {
+        self.constraint_synonyms
+            .get(name)
+            .and_then(|history| at(history, position))
+            .cloned()
+    }
+    pub(crate) fn expanded_typ(
+        &self,
+        typ: &Typ,
+        interner: &Arc<SimpleInterner>,
+        position: usize,
+    ) -> (Typ, Arc<SimpleInterner>) {
+        let lookup = |name: &str| self.synonym(name, position);
+        if self.constraint_synonyms.is_empty()
+            || !constraint_synonym::typ_applies_synonym(typ, interner, &lookup)
+        {
+            return (typ.clone(), interner.clone());
+        }
+        constraint_synonym::expand_typ(typ, interner, &lookup)
+    }
+    pub(crate) fn expanded_constraint(
+        &self,
+        constraint: &Constraint,
+        interner: &mut SimpleInterner,
+        position: usize,
+    ) -> Constraint {
+        let lookup = |name: &str| self.synonym(name, position);
+        constraint_synonym::expand_constraint(constraint, interner, &lookup)
+    }
+    /// Scheme with constraint synonyms expanded (unchanged when none occur).
+    pub(crate) fn expanded_scheme(
+        &self,
+        typschm: &TypSchm,
+        interner: &Arc<SimpleInterner>,
+        position: usize,
+    ) -> (TypSchm, Arc<SimpleInterner>) {
+        let lookup = |name: &str| self.synonym(name, position);
+        if self.constraint_synonyms.is_empty()
+            || !constraint_synonym::scheme_applies_synonym(typschm, interner, &lookup)
+        {
+            return (typschm.clone(), interner.clone());
+        }
+        constraint_synonym::expand_scheme(typschm, interner, &lookup)
     }
     pub(crate) fn type_synonym(&self, name: &str, position: usize) -> Option<&Arc<Scheme>> {
         match self.constructors.get(name) {

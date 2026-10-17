@@ -282,6 +282,12 @@ pub fn constraint_from_ast(c: &Constraint, it: &impl Interner) -> Option<NConstr
         }
         ConstraintKind::App { func, args } => {
             let name = resolve_name(func, it)?;
+            // `not(c)` is the prelude's Boolean negation of a constraint.
+            if name == "not" && args.len() == 1 {
+                if let TypArgKind::Bool(inner) = &args[0].kind {
+                    return Some(NConstraint::Not(Box::new(constraint_from_ast(inner, it)?)));
+                }
+            }
             let mut nexps = Vec::with_capacity(args.len());
             for a in args {
                 // Only `A_nexp` arguments are modelled; `Typ`/`Bool`
