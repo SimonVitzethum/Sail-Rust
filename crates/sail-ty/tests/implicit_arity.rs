@@ -149,3 +149,33 @@ fn nested_overload_inference_keeps_width_obligations() {
         "{error:?}"
     );
 }
+
+#[test]
+fn sibling_width_guides_an_implicit_call_through_a_unary_function() {
+    check_with(&[
+        "val bits_and : forall 'n. (bits('n), bits('n)) -> bits('n)",
+        "overload operator & = {bits_and}",
+        "val not_bits : forall 'n. bits('n) -> bits('n)",
+        "val mask : forall 'n, 'n >= 0. (implicit('n), int, int) -> bits('n)",
+        "val masked : forall 'n, 'n >= 0. (bits('n), int, int) -> bits('n)",
+        "function masked(xs, i, j) = xs & not_bits(mask(i, j))",
+    ])
+    .expect("the sibling width must reach the nested mask argument");
+}
+
+#[test]
+fn a_guided_nested_call_still_checks_every_argument() {
+    let error = check_with(&[
+        "val bits_and : forall 'n. (bits('n), bits('n)) -> bits('n)",
+        "overload operator & = {bits_and}",
+        "val not_bits : forall 'n. bits('n) -> bits('n)",
+        "val mask : forall 'n, 'n >= 0. (implicit('n), int, int) -> bits('n)",
+        "val masked : forall 'n, 'n >= 0. (bits('n), int, int) -> bits('n)",
+        "function masked(xs, i, j) = xs & not_bits(mask(false, j))",
+    ])
+    .expect_err("a width hint cannot turn a Boolean mask argument into an integer");
+    assert!(
+        !matches!(error.kind, TypeErrorKind::Unsupported(_)),
+        "{error:?}"
+    );
+}

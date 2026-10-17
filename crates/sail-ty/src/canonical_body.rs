@@ -248,7 +248,7 @@ impl Type {
             })
     }
 }
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Scope {
     /// Per-scope locals as a compact vector (same rationale as
     /// Substitutions): scopes hold zero to a handful of entries.
@@ -853,9 +853,10 @@ impl Checker<'_> {
     /// siblings. An operand whose result variables nothing pins
     /// (omitted implicits, e.g. `extzv(..)` as an `==` operand) retries
     /// as a call against each inferred sibling type; the first success
-    /// wins and checks downstream like any annotation. Non-recursive:
-    /// inner failures propagate unchanged. Anything else returns the
-    /// first inference error.
+    /// wins and checks downstream like any annotation. An unambiguous
+    /// result signature also guides unresolved inner arguments, which are
+    /// checked before their inferred types are used. Direct nesting stays
+    /// within the shared synthesis budget.
     fn infer_app_actuals(
         &mut self,
         args: &[Exp],
@@ -892,12 +893,67 @@ impl Checker<'_> {
             else {
                 return Err(first_error);
             };
-            let inner_actual = inner_args
-                .iter()
-                .map(|arg| self.infer(arg, scope))
-                .collect::<TypeResult<Vec<_>>>()?;
             let inner_candidates = self.call_candidates(inner, scope, inner_args.len())?;
             let siblings: Vec<Type> = actual.iter().filter_map(|typ| typ.clone()).collect();
+            let inferred = inner_args
+                .iter()
+                .map(|arg| self.infer(arg, scope))
+                .collect::<TypeResult<Vec<_>>>();
+            let inner_actual = match inferred {
+                Ok(actual) => actual,
+                Err(error) => {
+                    // A unique signature plus a unique result hint determines
+                    // the formal argument types without guessing an overload.
+                    if inner_candidates.len() != 1
+                        || siblings.len() != 1
+                        || self.synth_depth >= SYNTH_DIRECT_LIMIT
+                    {
+                        return Err(error);
+                    }
+                    let callee = self.instantiate_relaxed(
+                        inner_candidates[0].clone(),
+                        &[],
+                        Some(&siblings[0]),
+                        span,
+                    )?;
+                    let TypKind::Fn { args: formal, .. } = &callee.node().kind else {
+                        return Err(unsupported(span, "application of non-function"));
+                    };
+                    let alignment = Self::align_call(&callee, formal, inner_args.len(), span)?;
+                    let Some(context) = self.context.clone() else {
+                        return Err(error);
+                    };
+                    let returning = Type::root(context);
+                    if !matches!(returning.node().kind, TypKind::Fn { .. }) {
+                        return Err(error);
+                    }
+                    let returning = returning.child(Step::Result);
+                    let scoped = Arc::new(scope.clone());
+                    let tasks = alignment
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .filter_map(|(index, slot)| {
+                            slot.map(|actual| Task {
+                                exp: &inner_args[actual],
+                                expected: callee.child(Step::Argument(index)),
+                                scope: scoped.clone(),
+                                returning: returning.clone(),
+                            })
+                        })
+                        .collect();
+                    let previous_scope = self.proof_scope.clone();
+                    self.synth_depth += 1;
+                    let checked = self.run(tasks);
+                    self.synth_depth -= 1;
+                    self.proof_scope = previous_scope;
+                    checked?;
+                    inner_args
+                        .iter()
+                        .map(|arg| self.infer(arg, scope))
+                        .collect::<TypeResult<Vec<_>>>()?
+                }
+            };
             let mut recovered = None;
             for sibling in &siblings {
                 match self.select_call(inner_candidates.clone(), &inner_actual, Some(sibling), span)
